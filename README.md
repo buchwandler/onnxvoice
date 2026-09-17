@@ -4,7 +4,7 @@
 
 The project deliberately sits below text processing. PyKokoro, PiperSynth, UtterRender or another frontend can turn text into tokens. `onnxvoice` resolves the requested model/voice, manages the shared cache, creates the ONNX Runtime session, maps system-specific inputs and returns NumPy audio.
 
-> Status: MVP / API exploration. Expect breaking changes before 0.1.
+> Status: early release. The Milestone A low-level contract is covered by tests; downstream bridge work remains separate.
 
 ## Why
 
@@ -25,6 +25,20 @@ The cache is content-addressed:
 
 Installations hard-link to immutable blobs when the filesystem supports it. The same bytes therefore do not need to be stored twice by different model installations.
 
+
+## Stable low-level contract
+
+Milestone A defines the dependency boundary used by downstream frontends:
+
+- Installation manifests use schema 2 and preserve artifact component, format, quality, and metadata fields. Schema 1 manifests remain readable.
+- System, item, and artifact paths are validated before filesystem access.
+- Installations, catalog writes, blob publication, and garbage collection use process locks. Interrupted staging is removed.
+- Asset operations accept progress callbacks receiving `AssetProgress` events.
+- The canonical inference result is float32, one-dimensional NumPy audio with a positive sample rate. Kokoro timing and named auxiliary outputs are available on the result.
+- Provider names support aliases such as `cpu`, `cuda`, `gpu`, `directml`, and `openvino`. Use `auto` for deterministic priority selection, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an environment policy. Explicit unavailable providers fail instead of silently falling back.
+- `load_local()` constructs an unmanaged runtime from local files and does not register or copy them into the shared cache.
+
+The shared cache is never required for importing the package. Offline mode reads existing catalog and blob data only and does not make network requests.
 ## Install
 
 Base package, without an ONNX runtime:
@@ -170,6 +184,21 @@ ov.import_model(
 )
 ```
 
+
+Local files can be loaded without cache registration:
+
+```python
+from onnxvoice import load_local
+
+runtime = load_local(
+    system="piper",
+    model="voice.onnx",
+    config="voice.onnx.json",
+    provider="cpu",
+)
+```
+
+The unmanaged runtime keeps the original file paths. Use `import_model()` when a durable managed installation and manifest are required.
 ## System adapters
 
 A TTS system adapter owns only the model-specific ONNX contract. It does not own text normalization, G2P, sentence splitting or document planning.
@@ -224,10 +253,9 @@ UtterRender should normally consume PyKokoro/PiperSynth and let those packages u
 
 The project uses `setuptools_scm`. There is no hard-coded project version and no `src/` layout. Tagged Git commits produce package versions dynamically. A source tree without SCM metadata falls back to `0.1.0`.
 
-## MVP limitations
+## Current limitations
 
-The first cut intentionally does not yet include cross-process install locks, resumable downloads, progress callbacks, model-license presentation, release-grade waveform parity gates, or a stable third-party catalog schema. The current Piper and Kokoro catalog readers are adapters around the repositories that already exist.
-
+The current release supports the built-in Piper and Kokoro catalog formats and deterministic rejection of split or multi-component Kokoro layouts that the adapter cannot execute. Resumable downloads, general third-party catalog schemas, release-grade waveform parity gates, and downstream package bridge migrations remain separate work.
 ## License
 
 The `onnxvoice` source code is Apache-2.0. Downloaded models, voice packs and model cards retain their own licenses and terms; installing them through `onnxvoice` does not relicense those artifacts.

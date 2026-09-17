@@ -1,10 +1,36 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+MANIFEST_SCHEMA_VERSION = 2
+
+
+def validate_safe_component(value: str, *, field_name: str) -> str:
+    """Validate a single filesystem path component."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    if value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(f"Unsafe {field_name}: {value!r}")
+    if Path(value).is_absolute() or Path(value).name != value:
+        raise ValueError(f"Unsafe {field_name}: {value!r}")
+    return value
+
+
+def validate_relative_path(value: str, *, field_name: str) -> str:
+    """Validate an artifact path relative to an installation root."""
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+        raise ValueError(f"Unsafe {field_name}: {value!r}")
+    path = Path(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"Unsafe {field_name}: {value!r}")
+    for part in path.parts:
+        validate_safe_component(part, field_name=field_name)
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +42,8 @@ class Artifact:
     sha256: str | None = None
     md5: str | None = None
     quality: str | None = None
+    component: str | None = None
+    format: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -44,6 +72,9 @@ class InstalledArtifact:
     sha256: str
     size: int
     quality: str | None = None
+    component: str | None = None
+    format: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,3 +108,52 @@ class AudioResult:
     audio: np.ndarray
     sample_rate: int
     metadata: dict[str, Any] = field(default_factory=dict)
+    timings: np.ndarray | None = None
+    outputs: Mapping[str, np.ndarray] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        audio = np.asarray(self.audio, dtype=np.float32)
+        if audio.ndim != 1:
+            raise ValueError("audio must be a one-dimensional array")
+        if self.sample_rate <= 0:
+            raise ValueError("sample_rate must be positive")
+        object.__setattr__(self, "audio", audio)
+        if self.timings is not None:
+            object.__setattr__(self, "timings", np.asarray(self.timings))
+
+
+
+@dataclass(frozen=True, slots=True)
+class TensorSpec:
+    name: str
+    ort_type: str
+    shape: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceResult:
+    audio: np.ndarray
+    sample_rate: int
+    timings: np.ndarray | None = None
+    outputs: Mapping[str, np.ndarray] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        audio = np.asarray(self.audio, dtype=np.float32)
+        if audio.ndim != 1:
+            raise ValueError("audio must be a one-dimensional array")
+        if self.sample_rate <= 0:
+            raise ValueError("sample_rate must be positive")
+        object.__setattr__(self, "audio", audio)
+        if self.timings is not None:
+            object.__setattr__(self, "timings", np.asarray(self.timings))
+
+
+@dataclass(frozen=True, slots=True)
+class AssetProgress:
+    phase: str
+    ref: str | None = None
+    artifact: str | None = None
+    completed: int | None = None
+    total: int | None = None
+    message: str | None = None

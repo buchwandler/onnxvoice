@@ -12,7 +12,8 @@ from typing import Any
 from platformdirs import user_cache_path
 
 from .errors import AssetNotFoundError, CatalogError, OfflineError
-from .types import Artifact, CatalogItem
+from .store import FileLock, ProgressCallback
+from .types import Artifact, AssetProgress, CatalogItem
 
 DEFAULT_SOURCES = {
     "piper": "https://raw.githubusercontent.com/buchwandler/piper-onnx-voices/main/catalog/voices.json",
@@ -45,6 +46,9 @@ class CatalogClient:
     def _cache_path(self, system: str) -> Path:
         return self.cache_dir / f"{system}.json"
 
+    def _catalog_lock_path(self, system: str) -> Path:
+        return self.cache_dir.parent / "locks" / "catalog" / f"{system}.lock"
+
     def _read_source(self, source: str) -> bytes:
         if source.startswith(("http://", "https://")):
             if self.offline:
@@ -54,29 +58,46 @@ class CatalogClient:
                 return response.read()
         return Path(source).expanduser().read_bytes()
 
-    def load_raw(self, system: str, *, refresh: bool = False) -> dict[str, Any]:
+    def load_raw(
+        self,
+        system: str,
+        *,
+        refresh: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         system = system.lower()
         if not self.sources or system not in self.sources:
             raise CatalogError(f"No catalog source configured for system {system!r}")
+        self._emit(progress, AssetProgress("catalog_started", ref=system))
         cache_path = self._cache_path(system)
         fresh = (
             cache_path.exists() and (time.time() - cache_path.stat().st_mtime) < self.ttl_seconds
         )
         if cache_path.exists() and (fresh or self.offline) and not refresh:
-            return json.loads(cache_path.read_text(encoding="utf-8"))
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            self._emit(progress, AssetProgress("catalog_cached", ref=system))
+            return data
         payload = self._read_source(self.sources[system])
         try:
             data = json.loads(payload)
         except json.JSONDecodeError as exc:
             raise CatalogError(f"Invalid JSON in {system} catalog") from exc
-        tmp = cache_path.with_suffix(".json.tmp")
-        tmp.write_bytes(payload)
-        os.replace(tmp, cache_path)
+        with FileLock(self._catalog_lock_path(system)):
+            tmp = cache_path.with_suffix(".json.tmp")
+            tmp.write_bytes(payload)
+            os.replace(tmp, cache_path)
+        self._emit(progress, AssetProgress("catalog_completed", ref=system))
         return data
 
-    def list(self, system: str, *, refresh: bool = False) -> list[CatalogItem]:
+    def list(
+        self,
+        system: str,
+        *,
+        refresh: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> list[CatalogItem]:
         system = system.lower()
-        raw = self.load_raw(system, refresh=refresh)
+        raw = self.load_raw(system, refresh=refresh, progress=progress)
         if system == "piper":
             return _parse_piper(raw)
         if system == "kokoro":
@@ -84,10 +105,15 @@ class CatalogClient:
         raise CatalogError(f"No parser for system {system!r}")
 
     def resolve(
-        self, ref: str, *, refresh: bool = False, quality: str | None = None
+        self,
+        ref: str,
+        *,
+        refresh: bool = False,
+        quality: str | None = None,
+        progress: ProgressCallback | None = None,
     ) -> CatalogItem:
         system, item_id = parse_ref(ref)
-        items = self.list(system, refresh=refresh)
+        items = self.list(system, refresh=refresh, progress=progress)
         for item in items:
             if item.id == item_id or item_id in item.aliases:
                 selected_quality = quality
@@ -122,6 +148,11 @@ class CatalogClient:
                 )
         raise AssetNotFoundError(f"Unknown catalog item: {ref}")
 
+    @staticmethod
+    def _emit(progress: ProgressCallback | None, event: AssetProgress) -> None:
+        if progress is not None:
+            progress(event)
+
 
 def parse_ref(ref: str) -> tuple[str, str]:
     if ":" not in ref:
@@ -149,7 +180,10 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
                     url=raw.get("url"),
                     size=raw.get("size"),
                     md5=raw.get("md5"),
-                    metadata={"path": raw.get("path")},
+                    quality=raw.get("quality"),
+                    component=raw.get("component"),
+                    format=raw.get("format"),
+                    metadata={"path": raw.get("path"), **(raw.get("metadata") or {})},
                 )
             )
         language = entry.get("language") or {}
@@ -192,10 +226,12 @@ def _parse_kokoro(data: dict[str, Any]) -> list[CatalogItem]:
                     size=raw.get("size"),
                     sha256=raw.get("sha256"),
                     quality=raw.get("quality"),
+                    component=raw.get("component"),
+                    format=raw.get("format"),
                     metadata={
                         "id": raw.get("id"),
-                        "format": raw.get("format"),
                         "handling": raw.get("handling"),
+                        **(raw.get("metadata") or {}),
                     },
                 )
             )
