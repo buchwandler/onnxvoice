@@ -1,0 +1,25 @@
+[codecrate]
+output = "context_onnxvoice.md"
+keep_docstrings = true
+dedupe = true
+metadata = false
+respect_gitignore = true
+exclude = ["*/.venv/*", "context_onnxvoice.*"]
+gitignore_allow = ["onnxvoice/_version.py"]
+include = [
+  "**/*.py",
+  "**/*.toml",
+  "**/*.md",
+  "**/*.json",
+  "**/*.txt",
+  "**/*.csv",
+  "**/*.tsv",
+  "**/*.yaml",
+  "**/*.yml",
+  "**/*.ssmd",
+  "LICENSE",
+]
+split_max_chars = 0
+layout = "full"
+profile = "portable-agent"
+emit_standalone_unpacker = true

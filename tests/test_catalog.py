@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import json
+
+from onnxvoice.catalog import CatalogClient
+
+
+def test_piper_catalog_is_normalized(tmp_path):
+    raw = {
+        "voices": {
+            "en_US-test-medium": {
+                "id": "en_US-test-medium",
+                "aliases": ["en-us-test-medium"],
+                "quality": "medium",
+                "language": {"code": "en_US"},
+                "artifacts": {
+                    "config": {
+                        "role": "config",
+                        "filename": "voice.onnx.json",
+                        "url": "https://example.invalid/voice.onnx.json",
+                        "size": 10,
+                        "md5": "a" * 32,
+                    },
+                    "model": {
+                        "role": "model",
+                        "filename": "voice.onnx",
+                        "url": "https://example.invalid/voice.onnx",
+                        "size": 20,
+                        "md5": "b" * 32,
+                    },
+                },
+            }
+        }
+    }
+    catalog = tmp_path / "piper.json"
+    catalog.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"piper": str(catalog)})
+    item = client.resolve("piper:en-us-test-medium")
+    assert item.id == "en_US-test-medium"
+    assert item.metadata["quality"] == "medium"
+    assert {artifact.role for artifact in item.artifacts} == {"config", "model"}
+
+
+def test_kokoro_default_selects_one_model_quality(tmp_path):
+    raw = {
+        "models": {
+            "v1.0": {
+                "sample_rate": 24000,
+                "runtime": {"default_voice": "af_heart", "voices": ["af_heart"]},
+                "distributions": [
+                    {
+                        "id": "dist",
+                        "runtime_ready": True,
+                        "artifacts": [
+                            {
+                                "id": "m1",
+                                "role": "model",
+                                "local_name": "m.onnx",
+                                "url": "x",
+                                "sha256": "1" * 64,
+                                "quality": "fp32",
+                            },
+                            {
+                                "id": "m2",
+                                "role": "model",
+                                "local_name": "m.fp16.onnx",
+                                "url": "x",
+                                "sha256": "2" * 64,
+                                "quality": "fp16",
+                            },
+                            {
+                                "id": "v",
+                                "role": "voices",
+                                "local_name": "voices.npz",
+                                "url": "x",
+                                "sha256": "3" * 64,
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+    }
+    catalog = tmp_path / "kokoro.json"
+    catalog.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(catalog)})
+    default = client.resolve("kokoro:v1.0")
+    assert [a.quality for a in default.artifacts if a.role == "model"] == ["fp32"]
+    fp16 = client.resolve("kokoro:v1.0", quality="fp16")
+    assert [a.quality for a in fp16.artifacts if a.role == "model"] == ["fp16"]
