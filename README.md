@@ -1,3 +1,8 @@
+[![PyPI - Version](https://img.shields.io/pypi/v/onnxvoice)](https://pypi.org/project/onnxvoice/)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/onnxvoice)
+![PyPI - Downloads](https://img.shields.io/pypi/dm/onnxvoice)
+[![codecov](https://codecov.io/gh/buchwandler/onnxvoice/graph/badge.svg?token=qKZyL4Zidh)](https://codecov.io/gh/buchwandler/onnxvoice)
+
 # onnxvoice
 
 `onnxvoice` is the published Python infrastructure package for shared ONNX voice-model catalogs, asset installation, integrity verification, ONNX Runtime sessions, and model tensor-contract execution.

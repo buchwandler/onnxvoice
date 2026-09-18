@@ -54,5 +54,8 @@ jobs:
           /tmp/onnxvoice-release-venv/bin/python -m pip install dist/*.whl
           /tmp/onnxvoice-release-venv/bin/python -c "import onnxvoice; print(onnxvoice.__version__)"
           /tmp/onnxvoice-release-venv/bin/onnxvoice --help
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish package to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          attestations: false
