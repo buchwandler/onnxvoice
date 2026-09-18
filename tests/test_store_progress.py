@@ -68,7 +68,7 @@ def test_fresh_install_events(tmp_path):
     install_started = next(e for e in events if e.phase == "install_started")
     assert install_started.ref == item.ref
     assert install_started.target is not None
-    assert install_started.target.endswith("/test/one")
+    assert Path(install_started.target) == store.install_path("test", "one")
 
     # Verify download_started
     download_started = next(e for e in events if e.phase == "download_started")
@@ -77,7 +77,7 @@ def test_fresh_install_events(tmp_path):
     assert download_started.role == "model"
     assert download_started.total == len(b"model-bytes")
     assert download_started.target is not None
-    assert download_started.target.endswith("/test/one/model.onnx")
+    assert Path(download_started.target) == store.install_path("test", "one") / "model.onnx"
 
     # Verify verify_started
     verify_started = next(e for e in events if e.phase == "verify_started")
@@ -108,13 +108,13 @@ def test_fresh_install_events(tmp_path):
     assert artifact_installed.artifact == "model.onnx"
     assert artifact_installed.role == "model"
     assert artifact_installed.target is not None
-    assert artifact_installed.target.endswith("/test/one/model.onnx")
+    assert Path(artifact_installed.target) == store.install_path("test", "one") / "model.onnx"
 
     # Verify install_completed
     install_completed = next(e for e in events if e.phase == "install_completed")
     assert install_completed.ref == item.ref
     assert install_completed.target is not None
-    assert install_completed.target.endswith("/test/one")
+    assert Path(install_completed.target) == store.install_path("test", "one")
 
     # Verify the installation exists
     assert Path(install_completed.target).exists()
@@ -156,7 +156,7 @@ def test_already_installed_no_download_events(tmp_path):
     assert install_completed.message == "already installed"
     assert install_completed.ref == item.ref
     assert install_completed.target is not None
-    assert install_completed.target.endswith("/test/one")
+    assert Path(install_completed.target) == store.install_path("test", "one")
 
 
 def test_blob_cache_hit(tmp_path):
@@ -221,7 +221,7 @@ def test_blob_cache_hit(tmp_path):
     assert cached.artifact == "model2.onnx"
     assert cached.role == "model"
     assert cached.target is not None
-    assert cached.target.endswith("/test/two/model2.onnx")
+    assert Path(cached.target) == store.install_path("test", "two") / "model2.onnx"
     assert cached.total == len(payload)
 
     # Verify no download events for the cached artifact
