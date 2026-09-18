@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
+
+import pytest
 
 from onnxvoice.store import AssetStore
 from onnxvoice.types import Artifact, CatalogItem
@@ -52,3 +55,59 @@ def test_remove_then_gc(tmp_path):
     store.install(item)
     store.remove("test", "one")
     assert store.gc() == 1
+
+
+def test_install_falls_back_to_copy_when_os_link_is_unavailable(tmp_path, monkeypatch):
+    payload = b"model"
+    source = tmp_path / "voice.onnx"
+    source.write_bytes(payload)
+    sha = hashlib.sha256(payload).hexdigest()
+    item = CatalogItem(
+        system="test",
+        id="copy-fallback",
+        kind="model",
+        artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
+    )
+    store = AssetStore(tmp_path / "cache")
+
+    monkeypatch.delattr(os, "link", raising=False)
+
+    installation = store.install(item)
+
+    assert installation.artifact("model").path.read_bytes() == payload
+    store.verify(installation)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("hard links unavailable"),
+        NotImplementedError("hard links unavailable"),
+    ],
+)
+def test_install_falls_back_when_hard_link_operation_is_unsupported(
+    tmp_path,
+    monkeypatch,
+    error,
+):
+    payload = b"model"
+    source = tmp_path / "voice.onnx"
+    source.write_bytes(payload)
+    sha = hashlib.sha256(payload).hexdigest()
+    item = CatalogItem(
+        system="test",
+        id="copy-fallback-error",
+        kind="model",
+        artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
+    )
+    store = AssetStore(tmp_path / "cache")
+
+    def fail_link(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(os, "link", fail_link, raising=False)
+
+    installation = store.install(item)
+
+    assert installation.artifact("model").path.read_bytes() == payload
+    store.verify(installation)

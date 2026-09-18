@@ -544,10 +544,14 @@ class AssetStore:
 
     @staticmethod
     def _link_or_copy(source: Path, destination: Path) -> None:
-        try:
-            os.link(source, destination)
-        except OSError:
-            shutil.copy2(source, destination)
+        hardlink = getattr(os, "link", None)
+        if hardlink is not None:
+            try:
+                hardlink(source, destination)
+                return
+            except (OSError, NotImplementedError):
+                pass
+        shutil.copy2(source, destination)
 
     @staticmethod
     def _emit(progress: ProgressCallback | None, event: AssetProgress) -> None:

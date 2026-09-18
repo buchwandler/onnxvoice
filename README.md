@@ -36,7 +36,7 @@ The cache is content-addressed:
     └── piper/en_US-lessac-medium/manifest.json
 ```
 
-Installations hard-link to immutable blobs when the filesystem supports it. The same bytes therefore do not need to be stored twice by different model installations.
+Installations hard-link to immutable blobs when the platform and filesystem support hard links. Otherwise `onnxvoice` falls back to copying the verified blob into the installation directory. The blob cache remains content-addressed; copy-mode installations may use additional disk space. The same bytes therefore do not need to be stored twice by different model installations.
 
 ## Stable low-level contract
 
