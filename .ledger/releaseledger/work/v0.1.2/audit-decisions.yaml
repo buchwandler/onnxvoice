@@ -1,0 +1,19 @@
+rows:
+  - sha: 116e46084531c73b057218ccd30fcbb8b610cf6a
+    inspected: true
+    inspected_paths:
+      - README.md
+      - onnxvoice/store.py
+      - tests/test_store.py
+    observed_behavior: >-
+      AssetStore._link_or_copy now checks for os.link availability before attempting
+      a hard link and catches NotImplementedError alongside OSError, falling back to
+      shutil.copy2 when the platform or filesystem does not support hard links. README
+      updated to document the copy fallback. Tests added for missing os.link and
+      unsupported hard link operation scenarios.
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

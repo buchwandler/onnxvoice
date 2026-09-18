@@ -1,0 +1,115 @@
+ README.md           |  2 +-
+ onnxvoice/store.py  | 12 +++++++----
+ tests/test_store.py | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 68 insertions(+), 5 deletions(-)
+
+diff --git a/README.md b/README.md
+index 76d8d3a..ca827b3 100644
+--- a/README.md
++++ b/README.md
+@@ -36,7 +36,7 @@ The cache is content-addressed:
+     └── piper/en_US-lessac-medium/manifest.json
+ ```
+
+-Installations hard-link to immutable blobs when the filesystem supports it. The same bytes therefore do not need to be stored twice by different model installations.
++Installations hard-link to immutable blobs when the platform and filesystem support hard links. Otherwise `onnxvoice` falls back to copying the verified blob into the installation directory. The blob cache remains content-addressed; copy-mode installations may use additional disk space. The same bytes therefore do not need to be stored twice by different model installations.
+
+ ## Stable low-level contract
+
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index c7b2891..6ac6757 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -544,10 +544,14 @@ class AssetStore:
+
+     @staticmethod
+     def _link_or_copy(source: Path, destination: Path) -> None:
+-        try:
+-            os.link(source, destination)
+-        except OSError:
+-            shutil.copy2(source, destination)
++        hardlink = getattr(os, "link", None)
++        if hardlink is not None:
++            try:
++                hardlink(source, destination)
++                return
++            except (OSError, NotImplementedError):
++                pass
++        shutil.copy2(source, destination)
+
+     @staticmethod
+     def _emit(progress: ProgressCallback | None, event: AssetProgress) -> None:
+diff --git a/tests/test_store.py b/tests/test_store.py
+index 6bfa71b..cb65218 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -1,6 +1,9 @@
+ from __future__ import annotations
+
+ import hashlib
++import os
++
++import pytest
+
+ from onnxvoice.store import AssetStore
+ from onnxvoice.types import Artifact, CatalogItem
+@@ -52,3 +55,59 @@ def test_remove_then_gc(tmp_path):
+     store.install(item)
+     store.remove("test", "one")
+     assert store.gc() == 1
++
++
++def test_install_falls_back_to_copy_when_os_link_is_unavailable(tmp_path, monkeypatch):
++    payload = b"model"
++    source = tmp_path / "voice.onnx"
++    source.write_bytes(payload)
++    sha = hashlib.sha256(payload).hexdigest()
++    item = CatalogItem(
++        system="test",
++        id="copy-fallback",
++        kind="model",
++        artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++    )
++    store = AssetStore(tmp_path / "cache")
++
++    monkeypatch.delattr(os, "link", raising=False)
++
++    installation = store.install(item)
++
++    assert installation.artifact("model").path.read_bytes() == payload
++    store.verify(installation)
++
++
++@pytest.mark.parametrize(
++    "error",
++    [
++        OSError("hard links unavailable"),
++        NotImplementedError("hard links unavailable"),
++    ],
++)
++def test_install_falls_back_when_hard_link_operation_is_unsupported(
++    tmp_path,
++    monkeypatch,
++    error,
++):
++    payload = b"model"
++    source = tmp_path / "voice.onnx"
++    source.write_bytes(payload)
++    sha = hashlib.sha256(payload).hexdigest()
++    item = CatalogItem(
++        system="test",
++        id="copy-fallback-error",
++        kind="model",
++        artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++    )
++    store = AssetStore(tmp_path / "cache")
++
++    def fail_link(*_args, **_kwargs):
++        raise error
++
++    monkeypatch.setattr(os, "link", fail_link, raising=False)
++
++    installation = store.install(item)
++
++    assert installation.artifact("model").path.read_bytes() == payload
++    store.verify(installation)

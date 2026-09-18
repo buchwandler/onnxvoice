@@ -1,0 +1,41 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 3
+release_version: v0.1.2
+git_base_ref: v0.1.1
+git_base_sha: 345b152e1d4d577ef1901dfdf70a8235778e4afc
+git_head_ref: HEAD
+git_head_sha: 116e46084531c73b057218ccd30fcbb8b610cf6a
+git_range: 345b152e1d4d577ef1901dfdf70a8235778e4afc..116e46084531c73b057218ccd30fcbb8b610cf6a
+commit_count: 1
+rows:
+  - sha: 116e46084531c73b057218ccd30fcbb8b610cf6a
+    source_ref: git:116e46084531c73b057218ccd30fcbb8b610cf6a
+    short_sha: 116e460
+    changed_paths:
+      - README.md
+      - onnxvoice/store.py
+      - tests/test_store.py
+    stats:
+      files_changed: 3
+      insertions: 68
+      deletions: 5
+    inspected: true
+    inspected_paths:
+      - README.md
+      - onnxvoice/store.py
+      - tests/test_store.py
+    observed_behavior:
+      AssetStore._link_or_copy now checks for os.link availability
+      before attempting a hard link and catches NotImplementedError alongside OSError,
+      falling back to shutil.copy2 when the platform or filesystem does not support
+      hard links. README updated to document the copy fallback. Tests added for missing
+      os.link and unsupported hard link operation scenarios.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: store on termux fixed"
+    target_entry_id: entry-0001
+    notes: ""

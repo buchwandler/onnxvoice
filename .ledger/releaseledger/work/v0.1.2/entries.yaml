@@ -1,0 +1,26 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.1.2
+git_base_ref: 345b152e1d4d577ef1901dfdf70a8235778e4afc
+git_base_sha: 345b152e1d4d577ef1901dfdf70a8235778e4afc
+git_head_ref: 116e46084531c73b057218ccd30fcbb8b610cf6a
+git_head_sha: 116e46084531c73b057218ccd30fcbb8b610cf6a
+include_merges: nontrivial
+entries:
+  - kind: fixed
+    summary: Fixed voice store installation on platforms without hard link support
+    status: accepted
+    source_refs:
+      - git:116e46084531c73b057218ccd30fcbb8b610cf6a
+    paths:
+      - README.md
+      - onnxvoice/store.py
+      - tests/test_store.py
+    sources:
+      - git:116e46084531c73b057218ccd30fcbb8b610cf6a
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
