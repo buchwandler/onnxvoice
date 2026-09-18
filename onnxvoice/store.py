@@ -201,24 +201,33 @@ class AssetStore:
                 raise UnsafePathError(str(exc)) from exc
         if self.is_installed(item.system, storage_id) and not force:
             installation = self.get(item.system, storage_id)
+            target = self.install_path(item.system, storage_id)
             self.verify(installation)
             self._emit(
                 progress,
-                AssetProgress("install_completed", item.ref, message="already installed"),
+                AssetProgress("install_started", item.ref, target=str(target)),
+            )
+            self._emit(
+                progress,
+                AssetProgress(
+                    "install_completed", item.ref, message="already installed", target=str(target)
+                ),
             )
             return installation
         target = self.install_path(item.system, storage_id)
         target.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
-        self._emit(progress, AssetProgress("install_started", item.ref))
+        self._emit(progress, AssetProgress("install_started", item.ref, target=str(target)))
         try:
             installed: list[InstalledArtifact] = []
             with FileLock(self._gc_lock_path()):
                 for artifact in item.artifacts:
+                    artifact_target = str(target / artifact.filename)
                     blob, sha256 = self._materialize_artifact(
                         artifact,
                         ref=item.ref,
                         progress=progress,
+                        target=artifact_target,
                     )
                     destination = staging / artifact.filename
                     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -244,6 +253,8 @@ class AssetStore:
                             artifact.filename,
                             completed=len(installed),
                             total=len(item.artifacts),
+                            role=artifact.role,
+                            target=str(target / artifact.filename),
                         ),
                     )
                 manifest_data = {
@@ -276,11 +287,11 @@ class AssetStore:
                     shutil.rmtree(target)
                 os.replace(staging, target)
             installation = self.get(item.system, item.id)
-            self._emit(progress, AssetProgress("install_completed", item.ref))
+            self._emit(progress, AssetProgress("install_completed", item.ref, target=str(target)))
             return installation
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
-            self._emit(progress, AssetProgress("install_failed", item.ref))
+            self._emit(progress, AssetProgress("install_failed", item.ref, target=str(target)))
             raise
 
     def import_files(
@@ -354,12 +365,19 @@ class AssetStore:
         *,
         ref: str,
         progress: ProgressCallback | None,
+        target: str,
     ) -> tuple[Path, str]:
         if not artifact.url:
             raise AssetNotFoundError(f"Artifact {artifact.filename!r} has no URL")
         if artifact.sha256:
             known_blob = self._blob_path(artifact.sha256)
             if known_blob.is_file():
+                self._emit(
+                    progress,
+                    AssetProgress(
+                        "verify_started", ref, artifact.filename, role=artifact.role, target=target
+                    ),
+                )
                 verify_file(
                     known_blob,
                     expected_size=artifact.size,
@@ -368,23 +386,66 @@ class AssetStore:
                 )
                 self._emit(
                     progress,
-                    AssetProgress("artifact_cached", ref, artifact.filename, message="blob reused"),
+                    AssetProgress(
+                        "verify_completed",
+                        ref,
+                        artifact.filename,
+                        role=artifact.role,
+                        target=target,
+                    ),
+                )
+                self._emit(
+                    progress,
+                    AssetProgress(
+                        "artifact_cached",
+                        ref,
+                        artifact.filename,
+                        role=artifact.role,
+                        target=target,
+                        total=artifact.size,
+                    ),
                 )
                 return known_blob, artifact.sha256
 
         self._emit(
-            progress, AssetProgress("download_started", ref, artifact.filename, total=artifact.size)
+            progress,
+            AssetProgress(
+                "download_started",
+                ref,
+                artifact.filename,
+                role=artifact.role,
+                target=target,
+                total=artifact.size,
+            ),
         )
         with tempfile.TemporaryDirectory(prefix="onnxvoice-download-") as temp_dir:
             temp = Path(temp_dir) / Path(artifact.filename).name
             self._download(
-                artifact.url, temp, ref=ref, artifact=artifact.filename, progress=progress
+                artifact.url,
+                temp,
+                ref=ref,
+                artifact=artifact.filename,
+                role=artifact.role,
+                target=target,
+                progress=progress,
+            )
+            self._emit(
+                progress,
+                AssetProgress(
+                    "verify_started", ref, artifact.filename, role=artifact.role, target=target
+                ),
             )
             verify_file(
                 temp,
                 expected_size=artifact.size,
                 sha256=artifact.sha256,
                 md5=artifact.md5,
+            )
+            self._emit(
+                progress,
+                AssetProgress(
+                    "verify_completed", ref, artifact.filename, role=artifact.role, target=target
+                ),
             )
             sha256 = digest_file(temp)
             blob = self._blob_path(sha256)
@@ -403,6 +464,8 @@ class AssetStore:
                     artifact.filename,
                     completed=artifact.size,
                     total=artifact.size,
+                    role=artifact.role,
+                    target=target,
                 ),
             )
             return blob, sha256
@@ -414,6 +477,8 @@ class AssetStore:
         *,
         ref: str,
         artifact: str,
+        role: str,
+        target: str,
         progress: ProgressCallback | None,
     ) -> None:
         if source.startswith("file://"):
@@ -424,7 +489,12 @@ class AssetStore:
             self._emit(
                 progress,
                 AssetProgress(
-                    "download_progress", ref, artifact, completed=destination.stat().st_size
+                    "download_progress",
+                    ref,
+                    artifact,
+                    completed=destination.stat().st_size,
+                    role=role,
+                    target=target,
                 ),
             )
             return
@@ -444,7 +514,15 @@ class AssetStore:
                     completed += len(chunk)
                     self._emit(
                         progress,
-                        AssetProgress("download_progress", ref, artifact, completed, total_bytes),
+                        AssetProgress(
+                            "download_progress",
+                            ref,
+                            artifact,
+                            completed,
+                            total_bytes,
+                            role=role,
+                            target=target,
+                        ),
                     )
         except Exception as exc:
             raise AssetNotFoundError(f"Could not download {source}: {exc}") from exc

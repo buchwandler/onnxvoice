@@ -179,3 +179,5 @@ class AssetProgress:
     completed: int | None = None
     total: int | None = None
     message: str | None = None
+    role: str | None = None
+    target: str | None = None

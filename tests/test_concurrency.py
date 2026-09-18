@@ -74,6 +74,7 @@ def test_progress_events_are_ordered_and_failure_cleans_staging(tmp_path):
         "install_started",
         "download_started",
         "download_progress",
+        "verify_started",
         "install_failed",
     ]
     assert list((tmp_path / "cache" / "installs" / "test").glob(".broken-*")) == []
