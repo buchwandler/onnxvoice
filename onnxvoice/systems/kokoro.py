@@ -174,7 +174,6 @@ class KokoroAdapter(SystemAdapter):
                     return auxiliary[name]
         return None
 
-
     @staticmethod
     def _canonical_audio(value: np.ndarray) -> np.ndarray:
         audio = np.asarray(value)

@@ -281,7 +281,9 @@ UtterRender should normally consume PyKokoro/PiperSynth and let those packages u
 The project uses `setuptools_scm`. There is no hard-coded project version and no `src/` layout. Tagged Git commits produce package versions dynamically. A source tree without SCM metadata falls back to `0.1.0`.
 
 ## Current limitations
+
 The current release supports the built-in Piper and Kokoro catalog formats, single-file Kokoro, and the first-class `split-onnx-v1` multi-component Kokoro layout. Catalog distributions are selectable by identifier and cached with distinct identities. Resumable downloads, general third-party catalog schemas, and release-grade waveform parity gates remain separate work.
+
 ## License
 
 The `onnxvoice` source code is Apache-2.0. Downloaded models, voice packs and model cards retain their own licenses and terms; installing them through `onnxvoice` does not relicense those artifacts.

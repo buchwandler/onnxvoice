@@ -108,7 +108,10 @@ def test_kokoro_distribution_selection_is_explicit(tmp_path):
                 "runtime": {"layout": "single"},
                 "distributions": [
                     {"id": "cpu", "artifacts": [{"role": "model", "id": "cpu.onnx", "url": "x"}]},
-                    {"id": "mobile", "artifacts": [{"role": "model", "id": "mobile.onnx", "url": "x"}]},
+                    {
+                        "id": "mobile",
+                        "artifacts": [{"role": "model", "id": "mobile.onnx", "url": "x"}],
+                    },
                 ],
             }
         }

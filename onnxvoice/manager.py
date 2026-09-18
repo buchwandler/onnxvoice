@@ -204,7 +204,10 @@ class OnnxVoice:
             raise NotInstalledError(
                 f"Not installed: {ref} with quality={quality!r}. Run onnxvoice.install(...) first."
             )
-        if distribution is not None and installation.metadata.get("selected_distribution") != distribution:
+        if (
+            distribution is not None
+            and installation.metadata.get("selected_distribution") != distribution
+        ):
             raise NotInstalledError(
                 f"Not installed: {ref} with distribution={distribution!r}. Run onnxvoice.install(...) first."
             )

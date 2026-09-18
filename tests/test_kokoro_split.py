@@ -119,6 +119,4 @@ def test_split_runtime_executes_graph_and_is_seeded(tmp_path) -> None:
 
 def test_split_runtime_requires_source_parameters(tmp_path) -> None:
     with pytest.raises(CapabilityError, match="source parameters"):
-        KokoroAdapter(_installation(tmp_path, include_source=False)).infer(
-            [1], style=np.zeros(4)
-        )
+        KokoroAdapter(_installation(tmp_path, include_source=False)).infer([1], style=np.zeros(4))

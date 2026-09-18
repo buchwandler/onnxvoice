@@ -71,11 +71,15 @@ class SplitKokoroRuntime(SystemAdapter):
             try:
                 config_path = self._artifact("manifest")
             except CapabilityError as exc:
-                raise CapabilityError("Kokoro split runtime is missing its config/manifest") from exc
+                raise CapabilityError(
+                    "Kokoro split runtime is missing its config/manifest"
+                ) from exc
         try:
             manifest = json.loads(config_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeContractError(f"Could not read Kokoro split manifest {config_path}: {exc}") from exc
+            raise RuntimeContractError(
+                f"Could not read Kokoro split manifest {config_path}: {exc}"
+            ) from exc
         if not isinstance(manifest, dict):
             raise RuntimeContractError("Kokoro split manifest must contain an object")
         runtime = self.installation.metadata.get("runtime") or {}
@@ -92,7 +96,9 @@ class SplitKokoroRuntime(SystemAdapter):
                 self._source_bias = self._array_from_npz(source, ("bias", "source_bias"))
                 self._window = self._array_from_npz(source, ("window",))
         except (OSError, ValueError, KeyError) as exc:
-            raise RuntimeContractError(f"Invalid Kokoro split source parameters {source_path}: {exc}") from exc
+            raise RuntimeContractError(
+                f"Invalid Kokoro split source parameters {source_path}: {exc}"
+            ) from exc
         if self._source_weight.ndim != 2 or self._source_bias.ndim != 1:
             raise RuntimeContractError("Kokoro split source parameters have invalid shapes")
         if self._source_weight.shape[0] != self._source_bias.shape[0]:
@@ -174,11 +180,11 @@ class SplitKokoroRuntime(SystemAdapter):
         if index >= len(values):
             raise RuntimeContractError(f"Kokoro split graph is missing output {names[0]!r}")
         return values[index]
+
     def diagnostics(self) -> Any:
         for component in self.COMPONENTS:
             self._get_session(component)
         return super().diagnostics()
-
 
     def infer(
         self,
@@ -198,7 +204,11 @@ class SplitKokoroRuntime(SystemAdapter):
         token_values = list(token_ids)
         if not token_values:
             raise RuntimeContractError("Kokoro split inference requires at least one token")
-        if isinstance(self.max_tokens, int) and self.max_tokens > 0 and len(token_values) > self.max_tokens:
+        if (
+            isinstance(self.max_tokens, int)
+            and self.max_tokens > 0
+            and len(token_values) > self.max_tokens
+        ):
             raise RuntimeContractError(
                 f"Kokoro token sequence has {len(token_values)} tokens, maximum is {self.max_tokens}"
             )
@@ -233,12 +243,18 @@ class SplitKokoroRuntime(SystemAdapter):
             )
         prosody_values = self._run(
             prosody,
-            {"input_ids": np.asarray([[0, *token_values, 0]], dtype=np.int64), "style_dur": style_dur, "speed": np.asarray([speed], dtype=np.float32)},
+            {
+                "input_ids": np.asarray([[0, *token_values, 0]], dtype=np.int64),
+                "style_dur": style_dur,
+                "speed": np.asarray([speed], dtype=np.float32),
+            },
         )
         prosody_named = self._named_outputs(prosody, prosody_values)
         pred_dur = np.asarray(self._output(prosody_named, ("pred_dur", "duration"), 0)).reshape(-1)
         if np.any(pred_dur < 0) or not np.all(np.isfinite(pred_dur)):
-            raise RuntimeContractError("Kokoro split duration output must be finite and non-negative")
+            raise RuntimeContractError(
+                "Kokoro split duration output must be finite and non-negative"
+            )
         pred_dur_int = pred_dur.astype(np.int64)
         d = self._output(prosody_named, ("d", "duration_embedding"), 1)
         t_en = self._output(prosody_named, ("t_en", "asr"), 2)
@@ -256,7 +272,9 @@ class SplitKokoroRuntime(SystemAdapter):
         curves = self._get_session("curves")
         curve_names = self._session_names(curves)
         if curve_names and not {"en", "style_dur"} <= curve_names:
-            raise RuntimeContractError("Kokoro split curves graph has an incompatible input contract")
+            raise RuntimeContractError(
+                "Kokoro split curves graph has an incompatible input contract"
+            )
         curve_values = self._run(curves, {"en": en, "style_dur": style_dur})
         curve_named = self._named_outputs(curves, curve_values)
         f0_curve = self._output(curve_named, ("f0_curve", "f0"), 0)
@@ -273,15 +291,27 @@ class SplitKokoroRuntime(SystemAdapter):
             )
         decoder_values = self._run(
             decoder,
-            {"asr": asr, "f0_curve": f0_curve, "n_curve": n_curve, "style_acou": style_acou, "har": har},
+            {
+                "asr": asr,
+                "f0_curve": f0_curve,
+                "n_curve": n_curve,
+                "style_acou": style_acou,
+                "har": har,
+            },
         )
         decoder_named = self._named_outputs(decoder, decoder_values)
         audio = self._output(decoder_named, ("audio", "output"), 0)
         audio = self._canonical_audio(audio)
-        outputs = {"pred_dur": pred_dur, "f0_curve": np.asarray(f0_curve), "n_curve": np.asarray(n_curve)}
+        outputs = {
+            "pred_dur": pred_dur,
+            "f0_curve": np.asarray(f0_curve),
+            "n_curve": np.asarray(n_curve),
+        }
         return InferenceResult(
             audio=audio,
-            sample_rate=int(self.installation.sample_rate or self._runtime_value("sample_rate", SAMPLE_RATE)),
+            sample_rate=int(
+                self.installation.sample_rate or self._runtime_value("sample_rate", SAMPLE_RATE)
+            ),
             timings=pred_dur,
             outputs=outputs,
             metadata={"system": "kokoro", "layout": "split-onnx-v1", "speed": speed, "seed": seed},
@@ -307,7 +337,9 @@ class SplitKokoroRuntime(SystemAdapter):
         noise = rng.standard_normal((f0.shape[0], f0.shape[1], HARMONICS))
         waves = np.sin(phase) * SINE_AMP * voiced + amplitude * noise
         if waves.shape[-1] != self._source_weight.shape[1]:
-            raise RuntimeContractError("Kokoro split source parameter width does not match harmonics")
+            raise RuntimeContractError(
+                "Kokoro split source parameter width does not match harmonics"
+            )
         merged = np.tanh(waves @ self._source_weight.T + self._source_bias)
         return self._stft(merged[0, :, 0].astype(np.float32))
 
