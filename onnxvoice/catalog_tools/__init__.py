@@ -1,5 +1,6 @@
 """Catalog generation and verification helpers."""
 
+from . import pocket as pocket_tools
 from .piper import (
     DEFAULT_REPOSITORY,
     DEFAULT_REVISION,
@@ -26,4 +27,5 @@ __all__ = [
     "load_catalog",
     "resolve_revision",
     "verify_catalog",
+    "pocket_tools",
 ]

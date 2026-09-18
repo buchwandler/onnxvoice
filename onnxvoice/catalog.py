@@ -15,9 +15,33 @@ from .errors import AssetNotFoundError, CatalogError, OfflineError
 from .store import FileLock, ProgressCallback
 from .types import Artifact, AssetProgress, CatalogItem
 
+POCKET_ARTIFACT_ROLES = frozenset(
+    {
+        "bundle_metadata",
+        "tokenizer",
+        "bos_conditioning",
+        "flow_lm_main",
+        "flow_lm_flow",
+        "mimi_decoder",
+        "mimi_encoder",
+        "text_conditioner",
+    }
+)
+
+POCKET_QUALIFIED_ROLES = frozenset(
+    {
+        "flow_lm_main",
+        "flow_lm_flow",
+        "mimi_decoder",
+        "mimi_encoder",
+        "text_conditioner",
+    }
+)
+
 DEFAULT_SOURCES = {
     "piper": "https://raw.githubusercontent.com/buchwandler/piper-onnx-voices/main/catalog/voices.json",
     "kokoro": "https://raw.githubusercontent.com/buchwandler/kokoro-onnx-models/main/catalog/models.json",
+    "pocket": "https://raw.githubusercontent.com/buchwandler/pocket-onnx-bundles/main/catalog/bundles.json",
 }
 
 
@@ -105,6 +129,8 @@ class CatalogClient:
             return _parse_piper(raw)
         if system == "kokoro":
             return _parse_kokoro(raw)
+        if system == "pocket":
+            return _parse_pocket(raw)
         raise CatalogError(f"No parser for system {system!r}")
 
     def resolve(
@@ -125,6 +151,8 @@ class CatalogClient:
         for item in items:
             if item.id != item_id and item_id not in item.aliases:
                 continue
+            if item.system == "pocket":
+                return _select_pocket_profile(item, quality)
             selected_quality = quality
             model_artifacts = [a for a in item.artifacts if a.role == "model"]
             if selected_quality is None and len(model_artifacts) > 1:
@@ -290,6 +318,111 @@ def _parse_kokoro(
             )
         )
     return result
+
+
+def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+    bundles = data.get("bundles")
+    if not isinstance(bundles, list):
+        raise CatalogError("Pocket catalog is missing the 'bundles' list")
+    source = data.get("source") or {}
+    if not isinstance(source, dict):
+        raise CatalogError("Pocket catalog source metadata must be an object")
+    result: list[CatalogItem] = []
+    for entry in bundles:
+        if not isinstance(entry, dict):
+            continue
+        bundle_id = entry.get("id")
+        if not bundle_id:
+            raise CatalogError("Pocket bundle entry is missing 'id'")
+        artifacts: list[Artifact] = []
+        for raw in entry.get("artifacts", ()):
+            if not isinstance(raw, dict):
+                continue
+            role = str(raw.get("role") or "")
+            if role not in POCKET_ARTIFACT_ROLES:
+                raise CatalogError(f"Unknown Pocket artifact role: {role!r}")
+            artifacts.append(
+                Artifact(
+                    role=role,
+                    filename=str(raw.get("filename") or Path(str(raw.get("url", ""))).name),
+                    url=raw.get("url"),
+                    size=raw.get("size"),
+                    sha256=raw.get("sha256"),
+                    quality=raw.get("quality"),
+                    component=raw.get("component"),
+                    format=raw.get("format"),
+                    metadata=raw.get("metadata") or {},
+                )
+            )
+        metadata = {
+            "language": entry.get("language"),
+            "layers": entry.get("layers"),
+            "bundle_schema": entry.get("bundle_schema"),
+            "profiles": entry.get("profiles") or {},
+            "source_revision": source.get("revision"),
+            "source_repository": source.get("repository"),
+            "requested_revision": source.get("requested_revision"),
+            "max_token_per_chunk": entry.get("max_token_per_chunk"),
+            "model_recommended_frames_after_eos": entry.get("model_recommended_frames_after_eos"),
+            "remove_semicolons": entry.get("remove_semicolons"),
+            "pad_with_spaces_for_short_inputs": entry.get("pad_with_spaces_for_short_inputs"),
+            **(entry.get("metadata") or {}),
+        }
+        result.append(
+            CatalogItem(
+                system="pocket",
+                id=str(bundle_id),
+                kind="bundle",
+                artifacts=tuple(artifacts),
+                aliases=tuple(entry.get("aliases") or ()),
+                sample_rate=entry.get("sample_rate"),
+                metadata=metadata,
+            )
+        )
+    return result
+
+
+def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
+    """Select Pocket artifacts based on quality profile."""
+    profiles = item.metadata.get("profiles") or {}
+    selected_quality = quality or "int8"
+    if selected_quality not in profiles and selected_quality != "int8":
+        available = ", ".join(sorted(profiles.keys())) if profiles else "none"
+        raise CatalogError(
+            f"Unknown Pocket profile {selected_quality!r} for {item.id!r}; "
+            f"available profiles: {available}"
+        )
+    profile = profiles.get(selected_quality) or {}
+    result_artifacts: list[Artifact] = []
+    for artifact in item.artifacts:
+        if artifact.role not in POCKET_QUALIFIED_ROLES:
+            result_artifacts.append(artifact)
+            continue
+        target_quality = profile.get(artifact.role)
+        if target_quality is None:
+            raise CatalogError(
+                f"Profile {selected_quality!r} does not specify quality for role {artifact.role!r}"
+            )
+        matching = [
+            a for a in item.artifacts if a.role == artifact.role and a.quality == target_quality
+        ]
+        if not matching:
+            raise AssetNotFoundError(
+                f"{item.ref} has no {artifact.role} artifact with quality={target_quality!r}"
+            )
+        if not any(a.role == artifact.role for a in result_artifacts):
+            result_artifacts.append(matching[0])
+    return CatalogItem(
+        system=item.system,
+        id=item.id,
+        kind=item.kind,
+        artifacts=tuple(result_artifacts),
+        aliases=item.aliases,
+        sample_rate=item.sample_rate,
+        voices=item.voices,
+        default_voice=item.default_voice,
+        metadata={**item.metadata, "selected_quality": selected_quality},
+    )
 
 
 def filter_items(

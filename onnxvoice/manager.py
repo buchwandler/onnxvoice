@@ -116,6 +116,9 @@ class OnnxVoice:
         artifacts: Mapping[str, str | Path] | None = None,
         config: str | Path | None = None,
         voices: str | Path | None = None,
+        files: Mapping[str, str | Path] | None = None,
+        artifact_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+        metadata: Mapping[str, Any] | None = None,
         runtime: Mapping[str, Any] | None = None,
         sample_rate: int | None = None,
         providers: str | Sequence[str] | None = None,
@@ -130,28 +133,59 @@ class OnnxVoice:
             providers = provider
         if artifacts is not None and model is not None:
             raise ValueError("Use model or artifacts, not both")
-        if artifacts is None:
-            if model is None:
-                raise ValueError("model or artifacts is required")
-            artifacts = {"model": model}
+        if files is not None and model is not None:
+            raise ValueError("Use model or files, not both")
+        if files is not None and artifacts is not None:
+            raise ValueError("Use artifacts or files, not both")
+        if files is not None:
             if config is not None:
-                artifacts["config"] = config
+                raise ValueError("config must be included in files")
             if voices is not None:
-                artifacts["voices"] = voices
-        elif config is not None or voices is not None:
-            raise ValueError("config and voices must be included in artifacts")
+                raise ValueError("voices must be included in files")
+            merged_files: dict[str, str | Path] = dict(files)
+        elif artifacts is not None:
+            if config is not None or voices is not None:
+                raise ValueError("config and voices must be included in artifacts")
+            merged_files = dict(artifacts)
+        else:
+            if model is None:
+                raise ValueError("model, artifacts, or files is required")
+            merged_files = {"model": model}
+            if config is not None:
+                merged_files["config"] = config
+            if voices is not None:
+                merged_files["voices"] = voices
 
         local_artifacts: list[InstalledArtifact] = []
-        for key, raw_path in artifacts.items():
+        for key, raw_path in merged_files.items():
             if key in {"prosody", "curves", "decoder"}:
-                local_artifacts.append(OnnxVoice._local_artifact("model", raw_path, component=key))
+                local_artifacts.append(
+                    OnnxVoice._local_artifact(
+                        "model",
+                        raw_path,
+                        component=key,
+                        extra_metadata=(artifact_metadata or {}).get(key),
+                    )
+                )
             else:
-                local_artifacts.append(OnnxVoice._local_artifact(key, raw_path))
+                local_artifacts.append(
+                    OnnxVoice._local_artifact(
+                        key,
+                        raw_path,
+                        extra_metadata=(artifact_metadata or {}).get(key),
+                    )
+                )
         model_artifact = next(
             (artifact for artifact in local_artifacts if artifact.role == "model"), None
         )
         if model_artifact is None:
             model_artifact = local_artifacts[0]
+        merged_metadata: dict[str, Any] = {
+            "external": True,
+            "managed": False,
+            "runtime": dict(runtime or {}),
+            **(metadata or {}),
+        }
         installation = Installation(
             system=system,
             id=f"local-{Path(model_artifact.filename).stem}",
@@ -159,11 +193,7 @@ class OnnxVoice:
             path=model_artifact.path.parent,
             artifacts=tuple(local_artifacts),
             sample_rate=sample_rate,
-            metadata={
-                "external": True,
-                "managed": False,
-                "runtime": dict(runtime or {}),
-            },
+            metadata=merged_metadata,
         )
         adapter = get_adapter(system)
         return adapter(
@@ -286,11 +316,18 @@ class OnnxVoice:
 
     @staticmethod
     def _local_artifact(
-        role: str, raw_path: str | Path, *, component: str | None = None
+        role: str,
+        raw_path: str | Path,
+        *,
+        component: str | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> InstalledArtifact:
         path = Path(raw_path).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(path)
+        metadata: dict[str, Any] = {}
+        if extra_metadata:
+            metadata.update(extra_metadata)
         return InstalledArtifact(
             role=role,
             filename=path.name,
@@ -298,6 +335,7 @@ class OnnxVoice:
             sha256=digest_file(path),
             size=path.stat().st_size,
             component=component,
+            metadata=metadata,
         )
 
     @staticmethod
