@@ -180,7 +180,8 @@ class AssetStore:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Installation:
-        with FileLock(self._install_lock_path(item.system, item.id)):
+        storage_id = self._storage_item_id(item)
+        with FileLock(self._install_lock_path(item.system, storage_id)):
             return self._install_unlocked(item, force=force, progress=progress)
 
     def _install_unlocked(
@@ -190,26 +191,25 @@ class AssetStore:
         force: bool,
         progress: ProgressCallback | None,
     ) -> Installation:
+        storage_id = self._storage_item_id(item)
         self._safe_component(item.system, "system")
-        self._safe_component(item.id, "item id")
+        self._safe_component(storage_id, "item id")
         for artifact in item.artifacts:
             try:
                 validate_relative_path(artifact.filename, field_name="artifact filename")
             except ValueError as exc:
                 raise UnsafePathError(str(exc)) from exc
-
-        if self.is_installed(item.system, item.id) and not force:
-            installation = self.get(item.system, item.id)
+        if self.is_installed(item.system, storage_id) and not force:
+            installation = self.get(item.system, storage_id)
             self.verify(installation)
             self._emit(
                 progress,
                 AssetProgress("install_completed", item.ref, message="already installed"),
             )
             return installation
-
-        target = self.install_path(item.system, item.id)
+        target = self.install_path(item.system, storage_id)
         target.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=f".{item.id}-", dir=target.parent))
+        staging = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
         self._emit(progress, AssetProgress("install_started", item.ref))
         try:
             installed: list[InstalledArtifact] = []
@@ -249,7 +249,7 @@ class AssetStore:
                 manifest_data = {
                     "schema": MANIFEST_SCHEMA_VERSION,
                     "system": item.system,
-                    "id": item.id,
+                    "id": storage_id,
                     "kind": item.kind,
                     "sample_rate": item.sample_rate,
                     "voices": list(item.voices),
@@ -546,6 +546,11 @@ class AssetStore:
             default_voice=data.get("default_voice"),
             metadata=metadata,
         )
+
+    @staticmethod
+    def _storage_item_id(item: CatalogItem) -> str:
+        value = item.metadata.get("cache_id")
+        return value if isinstance(value, str) and value else item.id
 
     @staticmethod
     def _safe_component(value: str, field_name: str) -> str:

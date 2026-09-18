@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..errors import UnsupportedSystemError
 from .base import SystemAdapter
 from .kokoro import KokoroAdapter
+from .kokoro_split import SplitKokoroRuntime
 from .piper import PiperAdapter
 
 _ADAPTERS: dict[str, type[SystemAdapter]] = {
@@ -30,6 +31,7 @@ __all__ = [
     "SystemAdapter",
     "PiperAdapter",
     "KokoroAdapter",
+    "SplitKokoroRuntime",
     "register_adapter",
     "get_adapter",
     "registered_systems",

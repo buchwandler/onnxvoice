@@ -113,42 +113,48 @@ class CatalogClient:
         *,
         refresh: bool = False,
         quality: str | None = None,
+        distribution: str | None = None,
         progress: ProgressCallback | None = None,
     ) -> CatalogItem:
         system, item_id = parse_ref(ref)
-        items = self.list(system, refresh=refresh, progress=progress)
+        if system == "kokoro":
+            raw = self.load_raw(system, refresh=refresh, progress=progress)
+            items = _parse_kokoro(raw, distribution=distribution)
+        else:
+            items = self.list(system, refresh=refresh, progress=progress)
         for item in items:
-            if item.id == item_id or item_id in item.aliases:
-                selected_quality = quality
-                model_artifacts = [a for a in item.artifacts if a.role == "model"]
-                if selected_quality is None and len(model_artifacts) > 1:
-                    selected_quality = (
-                        "fp32"
-                        if any(a.quality == "fp32" for a in model_artifacts)
-                        else model_artifacts[0].quality
-                    )
-                if selected_quality is None:
-                    return item
-                artifacts = tuple(
-                    artifact
-                    for artifact in item.artifacts
-                    if artifact.role != "model" or artifact.quality in {None, selected_quality}
+            if item.id != item_id and item_id not in item.aliases:
+                continue
+            selected_quality = quality
+            model_artifacts = [a for a in item.artifacts if a.role == "model"]
+            if selected_quality is None and len(model_artifacts) > 1:
+                selected_quality = (
+                    "fp32"
+                    if any(a.quality == "fp32" for a in model_artifacts)
+                    else model_artifacts[0].quality
                 )
-                if not any(a.role == "model" for a in artifacts):
-                    raise AssetNotFoundError(
-                        f"{ref} has no model artifact with quality={selected_quality!r}"
-                    )
-                return CatalogItem(
-                    system=item.system,
-                    id=item.id,
-                    kind=item.kind,
-                    artifacts=artifacts,
-                    aliases=item.aliases,
-                    sample_rate=item.sample_rate,
-                    voices=item.voices,
-                    default_voice=item.default_voice,
-                    metadata={**item.metadata, "selected_quality": selected_quality},
+            if selected_quality is None:
+                return item
+            artifacts = tuple(
+                artifact
+                for artifact in item.artifacts
+                if artifact.role != "model" or artifact.quality in {None, selected_quality}
+            )
+            if not any(a.role == "model" for a in artifacts):
+                raise AssetNotFoundError(
+                    f"{ref} has no model artifact with quality={selected_quality!r}"
                 )
+            return CatalogItem(
+                system=item.system,
+                id=item.id,
+                kind=item.kind,
+                artifacts=artifacts,
+                aliases=item.aliases,
+                sample_rate=item.sample_rate,
+                voices=item.voices,
+                default_voice=item.default_voice,
+                metadata={**item.metadata, "selected_quality": selected_quality},
+            )
         raise AssetNotFoundError(f"Unknown catalog item: {ref}")
 
     @staticmethod
@@ -215,18 +221,35 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
     return result
 
 
-def _parse_kokoro(data: dict[str, Any]) -> list[CatalogItem]:
+def _parse_kokoro(
+    data: dict[str, Any],
+    *,
+    distribution: str | None = None,
+) -> list[CatalogItem]:
     models = data.get("models")
     if not isinstance(models, dict):
         raise CatalogError("Kokoro catalog is missing the 'models' mapping")
     result: list[CatalogItem] = []
     for model_id, entry in models.items():
-        distributions = [d for d in entry.get("distributions", ()) if d.get("runtime_ready", True)]
+        raw_distributions = entry.get("distributions", ())
+        distributions = [value for value in raw_distributions if value.get("runtime_ready", True)]
         if not distributions:
             continue
-        distribution = distributions[0]
+        choices = tuple(str(value.get("id")) for value in distributions if value.get("id"))
+        if distribution is None:
+            selected = distributions[0]
+        else:
+            selected = next(
+                (value for value in distributions if str(value.get("id")) == distribution),
+                None,
+            )
+            if selected is None:
+                raise CatalogError(
+                    f"Unknown Kokoro distribution {distribution!r} for {model_id!r}; "
+                    f"valid choices: {', '.join(choices)}"
+                )
         artifacts: list[Artifact] = []
-        for raw in distribution.get("artifacts", ()):
+        for raw in selected.get("artifacts", ()):
             artifacts.append(
                 Artifact(
                     role=str(raw.get("role") or raw.get("id") or "artifact"),
@@ -245,6 +268,15 @@ def _parse_kokoro(data: dict[str, Any]) -> list[CatalogItem]:
                 )
             )
         runtime = entry.get("runtime") or {}
+        metadata = {
+            "model_version": entry.get("model_version"),
+            "frontend": entry.get("frontend"),
+            "language_codes": entry.get("language_codes") or [],
+            "runtime": runtime,
+            "distribution_id": selected.get("id"),
+            "distribution_choices": choices,
+            "release_tag": selected.get("release_tag"),
+        }
         result.append(
             CatalogItem(
                 system="kokoro",
@@ -254,14 +286,7 @@ def _parse_kokoro(data: dict[str, Any]) -> list[CatalogItem]:
                 sample_rate=entry.get("sample_rate"),
                 voices=tuple(runtime.get("voices") or ()),
                 default_voice=runtime.get("default_voice"),
-                metadata={
-                    "model_version": entry.get("model_version"),
-                    "frontend": entry.get("frontend"),
-                    "language_codes": entry.get("language_codes") or [],
-                    "runtime": runtime,
-                    "distribution_id": distribution.get("id"),
-                    "release_tag": distribution.get("release_tag"),
-                },
+                metadata=metadata,
             )
         )
     return result

@@ -49,7 +49,7 @@ Milestone A defines the dependency boundary used by downstream frontends:
 - The canonical inference result is float32, one-dimensional NumPy audio with a positive sample rate. Kokoro timing and named auxiliary outputs are available on the result.
 - `open()` resolves and verifies an existing installation only. `open_local()` uses explicit local files without copying them into the shared cache. Call `install()` explicitly for catalog access and downloads.
 - Provider names support aliases such as `cpu`, `cuda`, `gpu`, `directml`, and `openvino`. Use `auto` for deterministic priority selection, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an environment policy.
-- `load_local()` constructs an unmanaged runtime from local files and does not register or copy them into the shared cache.
+- Provider names support aliases `cpu`, `cuda`, `gpu`, `directml`, `dml`, `openvino`, `coreml`, `nnapi`, and `xnnpack`, plus canonical ONNX Runtime names. Use `auto` for the documented deterministic priority policy, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an explicit environment policy. The `coreml`, `nnapi`, `xnnpack`, and `mobile` extras are markers because compatible platform ONNX Runtime builds supply those providers.
 
 The shared cache is never required for importing the package. Offline mode reads existing catalog and blob data only and does not make network requests.
 
@@ -159,6 +159,30 @@ print(result.audio.shape, result.sample_rate)
 runtime.close()
 ```
 
+The same call works for the catalog's `split-onnx-v1` layout. The frontend still supplies token IDs and a complete style row; OnnxVoice does not select voices or phonemize text.
+
+### Local split Kokoro
+
+```python
+runtime = open_local(
+    system="kokoro",
+    artifacts={
+        "prosody": "prosody.onnx",
+        "curves": "curves.onnx",
+        "decoder": "decoder.onnx",
+        "voices": "voices.npz",
+        "config": "manifest.json",
+        "source_params": "source-params.npz",
+    },
+    runtime={"layout": "split-onnx-v1"},
+    sample_rate=24000,
+    provider="cpu",
+)
+result = runtime.infer(token_ids, style=style, speed=1.0, seed=1234)
+```
+
+Runtime diagnostics are available through `runtime.diagnostics()` for both single and multi-session layouts.
+
 ### External/local models
 
 External files can be imported into the same store:
@@ -241,7 +265,8 @@ PyKokoro / PiperSynth / another frontend
         ├── AssetStore
         ├── SystemAdapter
         │   ├── PiperAdapter
-        │   └── KokoroAdapter
+        │   ├── KokoroAdapter
+        │   └── SplitKokoroRuntime (prosody / curves / decoder)
         ├── OnnxSession
         └── validation
              │
@@ -256,9 +281,7 @@ UtterRender should normally consume PyKokoro/PiperSynth and let those packages u
 The project uses `setuptools_scm`. There is no hard-coded project version and no `src/` layout. Tagged Git commits produce package versions dynamically. A source tree without SCM metadata falls back to `0.1.0`.
 
 ## Current limitations
-
-The current release supports the built-in Piper and Kokoro catalog formats and deterministic rejection of split or multi-component Kokoro layouts that the adapter cannot execute. Resumable downloads, general third-party catalog schemas, release-grade waveform parity gates, and downstream package bridge migrations remain separate work.
-
+The current release supports the built-in Piper and Kokoro catalog formats, single-file Kokoro, and the first-class `split-onnx-v1` multi-component Kokoro layout. Catalog distributions are selectable by identifier and cached with distinct identities. Resumable downloads, general third-party catalog schemas, and release-grade waveform parity gates remain separate work.
 ## License
 
 The `onnxvoice` source code is Apache-2.0. Downloaded models, voice packs and model cards retain their own licenses and terms; installing them through `onnxvoice` does not relicense those artifacts.

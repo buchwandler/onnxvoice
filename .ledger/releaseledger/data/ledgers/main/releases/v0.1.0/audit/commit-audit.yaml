@@ -1,0 +1,156 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 2
+release_version: v0.1.0
+git_base_ref: 8a3b9f0
+git_base_sha: 8a3b9f0add7860547f861f0a4b766f58f5e9f08e
+git_head_ref: bb42fb1
+git_head_sha: bb42fb109589cde17d4f9d1faccae4c9a0863b4d
+git_range: 8a3b9f0add7860547f861f0a4b766f58f5e9f08e..bb42fb109589cde17d4f9d1faccae4c9a0863b4d
+commit_count: 4
+rows:
+  - sha: c70a2b39bfb41f2b382380cba599d435aeaaf9de
+    source_ref: git:c70a2b39bfb41f2b382380cba599d435aeaaf9de
+    short_sha: c70a2b3
+    changed_paths:
+      - .codecrate.toml
+      - .github/workflows/test.yml
+      - .gitignore
+      - .ledger/ledger.toml
+      - .ledger/releaseledger/.ledger-project.toml
+      - .ledger/releaseledger/config.toml
+      - .ledger/releaseledger/data/.ledger-project.toml
+      - .ledger/taskledger/.ledger-project.toml
+      - .ledger/taskledger/config.toml
+      - .pre-commit-config.yaml
+      - MANIFEST.in
+      - README.md
+      - onnxvoice/__init__.py
+      - onnxvoice/__main__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/checksums.py
+      - onnxvoice/cli.py
+      - onnxvoice/errors.py
+      - onnxvoice/manager.py
+      - onnxvoice/py.typed
+      - onnxvoice/runtime.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/base.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/systems/piper.py
+      - onnxvoice/types.py
+      - onnxvoice/validation.py
+      - pyproject.toml
+      - tests/test_adapters.py
+      - tests/test_catalog.py
+      - tests/test_store.py
+      - tests/test_validation.py
+    stats:
+      files_changed: 33
+      insertions: 2155
+      deletions: 3
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: initial version"
+    target_entry_id: entry-0001
+  - sha: 01a01b04a231071382fc42985b97c1f9c97563b4
+    source_ref: git:01a01b04a231071382fc42985b97c1f9c97563b4
+    short_sha: 01a01b0
+    changed_paths:
+      - .github/workflows/test.yml
+      - README.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/errors.py
+      - onnxvoice/manager.py
+      - onnxvoice/runtime.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/systems/piper.py
+      - onnxvoice/types.py
+      - tests/test_concurrency.py
+      - tests/test_kokoro_contract.py
+      - tests/test_local_runtime.py
+      - tests/test_manifest.py
+      - tests/test_ort_smoke.py
+      - tests/test_piper_contract.py
+      - tests/test_runtime.py
+    stats:
+      files_changed: 18
+      insertions: 1414
+      deletions: 175
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: early release version"
+    target_entry_id: entry-0004
+  - sha: 024729a302438a7788e513d771aaf138de94e6fa
+    source_ref: git:024729a302438a7788e513d771aaf138de94e6fa
+    short_sha: 024729a
+    changed_paths:
+      - .github/workflows/release.yml
+      - README.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/__init__.py
+      - onnxvoice/catalog_tools/piper.py
+      - onnxvoice/cli.py
+      - onnxvoice/errors.py
+      - onnxvoice/manager.py
+      - onnxvoice/runtime.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/base.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/systems/piper.py
+      - onnxvoice/types.py
+      - onnxvoice/validation.py
+      - pyproject.toml
+      - tests/test_adapters.py
+      - tests/test_catalog.py
+      - tests/test_catalog_tools.py
+      - tests/test_kokoro_contract.py
+      - tests/test_manifest.py
+      - tests/test_network_boundaries.py
+      - tests/test_piper_contract.py
+      - tests/test_runtime.py
+      - tests/test_validation.py
+    stats:
+      files_changed: 26
+      insertions: 1189
+      deletions: 299
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: prepare for first release"
+    target_entry_id: entry-0006
+  - sha: bb42fb109589cde17d4f9d1faccae4c9a0863b4d
+    source_ref: git:bb42fb109589cde17d4f9d1faccae4c9a0863b4d
+    short_sha: bb42fb1
+    changed_paths:
+      - .github/workflows/release.yml
+      - README.md
+    stats:
+      files_changed: 2
+      insertions: 10
+      deletions: 2
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "doc: batches"
+    target_entry_id: entry-0008

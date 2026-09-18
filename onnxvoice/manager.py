@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -58,11 +59,23 @@ class OnnxVoice:
         ref: str,
         *,
         quality: str | None = None,
+        distribution: str | None = None,
         refresh: bool = False,
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Installation:
-        item = self.catalog.resolve(ref, refresh=refresh, quality=quality, progress=progress)
+        item = self.catalog.resolve(
+            ref,
+            refresh=refresh,
+            quality=quality,
+            distribution=distribution,
+            progress=progress,
+        )
+        selected_distribution = distribution or item.metadata.get("distribution_id")
+        if isinstance(selected_distribution, str):
+            item = self._with_distribution_identity(
+                item, selected_distribution, cache=distribution is not None
+            )
         return self.store.install(item, force=force, progress=progress)
 
     def open(
@@ -70,13 +83,18 @@ class OnnxVoice:
         ref: str | Installation,
         *,
         quality: str | None = None,
+        distribution: str | None = None,
         providers: str | Sequence[str] | None = None,
         provider: str | None = None,
         provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
         session_options: Any | None = None,
     ):
         """Open an existing local installation without catalog or network access."""
-        installation = ref if isinstance(ref, Installation) else self.resolve(ref, quality=quality)
+        installation = (
+            ref
+            if isinstance(ref, Installation)
+            else self.resolve(ref, quality=quality, distribution=distribution)
+        )
         self.store.verify(installation)
         if provider is not None:
             if providers is not None:
@@ -94,9 +112,11 @@ class OnnxVoice:
     def open_local(
         *,
         system: str,
-        model: str | Path,
+        model: str | Path | None = None,
+        artifacts: Mapping[str, str | Path] | None = None,
         config: str | Path | None = None,
         voices: str | Path | None = None,
+        runtime: Mapping[str, Any] | None = None,
         sample_rate: int | None = None,
         providers: str | Sequence[str] | None = None,
         provider: str | None = None,
@@ -108,20 +128,42 @@ class OnnxVoice:
             if providers is not None:
                 raise ValueError("Use provider or providers, not both")
             providers = provider
-        artifacts = [OnnxVoice._local_artifact("model", model)]
-        if config is not None:
-            artifacts.append(OnnxVoice._local_artifact("config", config))
-        if voices is not None:
-            artifacts.append(OnnxVoice._local_artifact("voices", voices))
-        model_path = Path(model).expanduser().resolve()
+        if artifacts is not None and model is not None:
+            raise ValueError("Use model or artifacts, not both")
+        if artifacts is None:
+            if model is None:
+                raise ValueError("model or artifacts is required")
+            artifacts = {"model": model}
+            if config is not None:
+                artifacts["config"] = config
+            if voices is not None:
+                artifacts["voices"] = voices
+        elif config is not None or voices is not None:
+            raise ValueError("config and voices must be included in artifacts")
+
+        local_artifacts: list[InstalledArtifact] = []
+        for key, raw_path in artifacts.items():
+            if key in {"prosody", "curves", "decoder"}:
+                local_artifacts.append(OnnxVoice._local_artifact("model", raw_path, component=key))
+            else:
+                local_artifacts.append(OnnxVoice._local_artifact(key, raw_path))
+        model_artifact = next(
+            (artifact for artifact in local_artifacts if artifact.role == "model"), None
+        )
+        if model_artifact is None:
+            model_artifact = local_artifacts[0]
         installation = Installation(
             system=system,
-            id=f"local-{model_path.stem}",
+            id=f"local-{Path(model_artifact.filename).stem}",
             kind="external",
-            path=model_path.parent,
-            artifacts=tuple(artifacts),
+            path=model_artifact.path.parent,
+            artifacts=tuple(local_artifacts),
             sample_rate=sample_rate,
-            metadata={"external": True, "managed": False},
+            metadata={
+                "external": True,
+                "managed": False,
+                "runtime": dict(runtime or {}),
+            },
         )
         adapter = get_adapter(system)
         return adapter(
@@ -136,15 +178,12 @@ class OnnxVoice:
         ref: str,
         *,
         quality: str | None = None,
+        distribution: str | None = None,
         download: bool | None = None,
         refresh: bool | None = None,
         progress: ProgressCallback | None = None,
     ) -> Installation:
-        """Resolve and verify an existing installation only.
-
-        The legacy download, refresh, and progress arguments are rejected when
-        they request acquisition because resolution is now strictly local.
-        """
+        """Resolve and verify an existing installation only."""
         if download:
             raise ValueError("resolve() is local-only; call install() before open()")
         if refresh:
@@ -152,16 +191,22 @@ class OnnxVoice:
         if progress is not None:
             raise ValueError("resolve() is local-only and does not accept progress callbacks")
         system, item_id = parse_ref(ref)
+        storage_id = self._distribution_cache_id(item_id, distribution)
         try:
-            installation = self.store.get(system, item_id)
+            installation = self.store.get(system, storage_id)
         except AssetNotFoundError as exc:
+            detail = f" with distribution={distribution!r}" if distribution else ""
             raise NotInstalledError(
-                f"Not installed: {ref}. Run onnxvoice.install(...) first."
+                f"Not installed: {ref}{detail}. Run onnxvoice.install(...) first."
             ) from exc
         self.store.verify(installation)
         if quality is not None and installation.metadata.get("selected_quality") != quality:
             raise NotInstalledError(
                 f"Not installed: {ref} with quality={quality!r}. Run onnxvoice.install(...) first."
+            )
+        if distribution is not None and installation.metadata.get("selected_distribution") != distribution:
+            raise NotInstalledError(
+                f"Not installed: {ref} with distribution={distribution!r}. Run onnxvoice.install(...) first."
             )
         return installation
 
@@ -207,6 +252,7 @@ class OnnxVoice:
         ref: str | Installation,
         *,
         quality: str | None = None,
+        distribution: str | None = None,
         download: bool | None = None,
         providers: str | Sequence[str] | None = None,
         provider: str | None = None,
@@ -220,6 +266,7 @@ class OnnxVoice:
         return self.open(
             ref,
             quality=quality,
+            distribution=distribution,
             providers=providers,
             provider=provider,
             provider_options=provider_options,
@@ -235,7 +282,9 @@ class OnnxVoice:
         return OnnxVoice.open_local(**kwargs)
 
     @staticmethod
-    def _local_artifact(role: str, raw_path: str | Path) -> InstalledArtifact:
+    def _local_artifact(
+        role: str, raw_path: str | Path, *, component: str | None = None
+    ) -> InstalledArtifact:
         path = Path(raw_path).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -245,4 +294,31 @@ class OnnxVoice:
             path=path,
             sha256=digest_file(path),
             size=path.stat().st_size,
+            component=component,
+        )
+
+    @staticmethod
+    def _distribution_cache_id(item_id: str, distribution: str | None) -> str:
+        if distribution is None:
+            return item_id
+        digest = hashlib.sha256(distribution.encode("utf-8")).hexdigest()[:16]
+        return f"{item_id}--dist-{digest}"
+
+    @classmethod
+    def _with_distribution_identity(
+        cls, item: CatalogItem, distribution: str, *, cache: bool = True
+    ) -> CatalogItem:
+        metadata = {**item.metadata, "selected_distribution": distribution}
+        if cache:
+            metadata["cache_id"] = cls._distribution_cache_id(item.id, distribution)
+        return CatalogItem(
+            system=item.system,
+            id=item.id,
+            kind=item.kind,
+            artifacts=item.artifacts,
+            aliases=item.aliases,
+            sample_rate=item.sample_rate,
+            voices=item.voices,
+            default_voice=item.default_voice,
+            metadata=metadata,
         )

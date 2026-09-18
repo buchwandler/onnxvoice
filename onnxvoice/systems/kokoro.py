@@ -9,10 +9,31 @@ from ..errors import CapabilityError, RuntimeContractError
 from ..runtime import OnnxSession
 from ..types import InferenceResult, TensorSpec
 from .base import SystemAdapter
+from .kokoro_split import SplitKokoroRuntime
 
 
 class KokoroAdapter(SystemAdapter):
     system = "kokoro"
+
+    def __init__(self, *args: Any, session_factory: Any | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._split_runtime: SplitKokoroRuntime | None = None
+        self._split_session_factory = session_factory
+
+    def _uses_split_runtime(self) -> bool:
+        runtime = self.installation.metadata.get("runtime") or {}
+        return runtime.get("layout") in {"split", "multi", "split-onnx-v1"}
+
+    def _split(self) -> SplitKokoroRuntime:
+        if self._split_runtime is None:
+            self._split_runtime = SplitKokoroRuntime(
+                self.installation,
+                session_factory=self._split_session_factory,
+                providers=self.providers,
+                provider_options=self.provider_options,
+                session_options=self.session_options,
+            )
+        return self._split_runtime
 
     @property
     def session(self) -> OnnxSession:
@@ -21,9 +42,9 @@ class KokoroAdapter(SystemAdapter):
                 artifact for artifact in self.installation.artifacts if artifact.role == "model"
             ]
             runtime = self.installation.metadata.get("runtime") or {}
-            if len(models) != 1 or runtime.get("layout") in {"split", "multi"}:
+            if len(models) != 1 or runtime.get("layout") in {"split", "multi", "split-onnx-v1"}:
                 raise CapabilityError(
-                    "Split or multi-component Kokoro layouts are not supported by this adapter"
+                    "Split or multi-component Kokoro layouts do not expose a single session"
                 )
             self._session = OnnxSession(
                 models[0].path,
@@ -39,8 +60,13 @@ class KokoroAdapter(SystemAdapter):
         *,
         style: np.ndarray | Sequence[float] | None = None,
         speed: float = 1.0,
+        seed: int = 1234,
         **_: Any,
     ) -> InferenceResult:
+        if self._uses_split_runtime():
+            if style is None:
+                raise RuntimeContractError("A model-ready Kokoro style must be provided")
+            return self._split().infer(token_ids, style=style, speed=speed, seed=seed)
         if style is None:
             raise RuntimeContractError("A model-ready Kokoro style must be provided")
         token_values = list(token_ids)
@@ -58,10 +84,7 @@ class KokoroAdapter(SystemAdapter):
         if style_value.ndim == 1:
             style_value = style_value[None, :]
 
-        inputs: dict[str, np.ndarray] = {
-            token_name: padded,
-            style_name: style_value,
-        }
+        inputs: dict[str, np.ndarray] = {token_name: padded, style_name: style_value}
         if "speed" in names:
             inputs["speed"] = np.asarray(
                 [speed], dtype=self._numpy_dtype(self._input_spec("speed"), default=np.float32)
@@ -73,6 +96,8 @@ class KokoroAdapter(SystemAdapter):
             )
         outputs = self.session.run(inputs)
         output_names = tuple(getattr(self.session, "output_names", ()))
+        if not outputs:
+            raise RuntimeContractError("Kokoro model returned no outputs")
         if len(output_names) != len(outputs):
             output_names = tuple(f"output_{index}" for index in range(len(outputs)))
         named_outputs = {
@@ -81,14 +106,8 @@ class KokoroAdapter(SystemAdapter):
         audio_name = output_names[0]
         audio = self._canonical_audio(named_outputs[audio_name])
         auxiliary = {name: value for name, value in named_outputs.items() if name != audio_name}
-        timings = next(
-            (
-                value
-                for name, value in auxiliary.items()
-                if any(token in name.lower() for token in ("timing", "duration", "timestamp"))
-            ),
-            None,
-        )
+        timings = self._select_timings(auxiliary)
+
         return InferenceResult(
             audio=audio,
             sample_rate=int(self.installation.sample_rate or 24000),
@@ -96,6 +115,17 @@ class KokoroAdapter(SystemAdapter):
             outputs=auxiliary,
             metadata={"system": "kokoro", "speed": speed},
         )
+
+    def close(self) -> None:
+        if self._split_runtime is not None:
+            self._split_runtime.close()
+            self._split_runtime = None
+        super().close()
+
+    def diagnostics(self) -> Any:
+        if self._split_runtime is not None:
+            return self._split_runtime.diagnostics()
+        return super().diagnostics()
 
     def _input_spec(self, name: str) -> TensorSpec | None:
         for spec in getattr(self.session, "input_specs", ()):
@@ -129,6 +159,21 @@ class KokoroAdapter(SystemAdapter):
             raise RuntimeContractError(
                 f"Kokoro token sequence has {token_count} tokens, maximum is {maximum - 2}"
             )
+
+    def _select_timings(self, auxiliary: dict[str, np.ndarray]) -> np.ndarray | None:
+        runtime = self.installation.metadata.get("runtime") or {}
+        declared = runtime.get("timings_output")
+        if isinstance(declared, str) and declared in auxiliary:
+            return auxiliary[declared]
+        for name in ("pred_dur", "duration", "timing", "timestamp"):
+            if name in auxiliary:
+                return auxiliary[name]
+        for prefix in ("duration", "timing", "timestamp"):
+            for name in sorted(auxiliary):
+                if name.lower().startswith(prefix):
+                    return auxiliary[name]
+        return None
+
 
     @staticmethod
     def _canonical_audio(value: np.ndarray) -> np.ndarray:

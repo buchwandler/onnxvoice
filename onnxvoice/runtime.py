@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import OptionalDependencyError, RuntimeContractError
-from .types import TensorSpec
+from .types import SessionDiagnostic, TensorSpec
 
 _PROVIDER_ALIASES = {
     "cpu": "CPUExecutionProvider",
@@ -18,6 +18,8 @@ _PROVIDER_ALIASES = {
     "openvino": "OpenVINOExecutionProvider",
     "rocm": "ROCMExecutionProvider",
     "coreml": "CoreMLExecutionProvider",
+    "nnapi": "NnapiExecutionProvider",
+    "xnnpack": "XnnpackExecutionProvider",
 }
 _AUTO_PRIORITY = (
     "TensorrtExecutionProvider",
@@ -26,6 +28,8 @@ _AUTO_PRIORITY = (
     "DmlExecutionProvider",
     "OpenVINOExecutionProvider",
     "CoreMLExecutionProvider",
+    "XnnpackExecutionProvider",
+    "NnapiExecutionProvider",
     "CPUExecutionProvider",
 )
 
@@ -35,8 +39,10 @@ def _ort() -> Any:
         import onnxruntime as ort
     except ImportError as exc:
         raise OptionalDependencyError(
-            "ONNX Runtime is not installed. Install onnxvoice[cpu], onnxvoice[gpu], "
-            "onnxvoice[directml], or onnxvoice[openvino]."
+            "ONNX Runtime is not installed. Install one of onnxvoice[cpu], "
+            "onnxvoice[gpu], onnxvoice[directml], or onnxvoice[openvino]. "
+            "CoreML, NNAPI, and XNNPACK are provided by compatible ONNX Runtime "
+            "builds on supported platforms."
         ) from exc
     return ort
 
@@ -52,21 +58,24 @@ def normalize_provider_name(provider: str) -> str:
     return _PROVIDER_ALIASES.get(name.lower(), name)
 
 
+def _requested_provider_names(providers: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(providers, str):
+        return tuple(part.strip() for part in providers.split(",") if part.strip())
+    return tuple(providers)
+
+
 def resolve_providers(
     providers: str | Sequence[str] | None = None,
     *,
     available: Sequence[str] | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
-    """Resolve aliases and automatic provider policy without importing ORT."""
+    """Resolve aliases and the explicit automatic provider policy without importing ORT."""
     env = os.environ if environment is None else environment
     requested: str | Sequence[str] | None = providers
     if requested is None:
         requested = env.get("ONNXVOICE_PROVIDERS") or env.get("ONNXVOICE_PROVIDER") or "cpu"
-    if isinstance(requested, str):
-        requested_names = tuple(part.strip() for part in requested.split(",") if part.strip())
-    else:
-        requested_names = tuple(requested)
+    requested_names = _requested_provider_names(requested)
     if not requested_names:
         raise RuntimeContractError("At least one ONNX Runtime provider is required")
 
@@ -115,11 +124,13 @@ class OnnxSession:
         self,
         model: str | Path,
         *,
+        component: str | None = None,
         providers: str | Sequence[str] | None = None,
         provider_options: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
         session_options: Any | None = None,
     ) -> None:
         self.model = Path(model)
+        self.component = component
         self.provider_request = providers
         self.providers = (
             tuple(providers) if not isinstance(providers, str) and providers else providers
@@ -188,6 +199,19 @@ class OnnxSession:
 
     def run(self, inputs: dict[str, Any]) -> list[Any]:
         return self.session.run(None, inputs)
+
+    def diagnostics(self) -> SessionDiagnostic:
+        return SessionDiagnostic(
+            component=self.component,
+            model_path=self.model,
+            providers_requested=tuple(
+                normalize_provider_name(name)
+                for name in _requested_provider_names(self.provider_request or "cpu")
+            ),
+            providers_active=self.resolved_providers,
+            inputs=self.input_names,
+            outputs=self.output_names,
+        )
 
     def close(self) -> None:
         self._session = None

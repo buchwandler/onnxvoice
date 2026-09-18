@@ -93,14 +93,56 @@ class Installation:
     def ref(self) -> str:
         return f"{self.system}:{self.id}"
 
-    def artifact(self, role: str, *, quality: str | None = None) -> InstalledArtifact:
-        candidates = [artifact for artifact in self.artifacts if artifact.role == role]
-        if quality is not None:
-            candidates = [artifact for artifact in candidates if artifact.quality == quality]
+    def artifacts_for(
+        self,
+        role: str | None = None,
+        *,
+        component: str | None = None,
+        quality: str | None = None,
+    ) -> tuple[InstalledArtifact, ...]:
+        """Return installed artifacts matching the supplied catalog metadata."""
+        return tuple(
+            artifact
+            for artifact in self.artifacts
+            if (role is None or artifact.role == role)
+            and (component is None or artifact.component == component)
+            and (quality is None or artifact.quality == quality)
+        )
+
+    def artifact(
+        self,
+        role: str,
+        *,
+        component: str | None = None,
+        quality: str | None = None,
+    ) -> InstalledArtifact:
+        candidates = self.artifacts_for(role, component=component, quality=quality)
         if not candidates:
-            detail = f" with quality={quality!r}" if quality is not None else ""
-            raise KeyError(f"No artifact role={role!r}{detail} in {self.ref}")
+            details = [f"role={role!r}"]
+            if component is not None:
+                details.append(f"component={component!r}")
+            if quality is not None:
+                details.append(f"quality={quality!r}")
+            raise KeyError(f"No artifact {', '.join(details)} in {self.ref}")
         return candidates[0]
+
+
+@dataclass(frozen=True, slots=True)
+class SessionDiagnostic:
+    component: str | None
+    model_path: Path
+    providers_requested: tuple[str, ...]
+    providers_active: tuple[str, ...]
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeDiagnostic:
+    system: str
+    ref: str
+    layout: str
+    sessions: tuple[SessionDiagnostic, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -50,6 +50,10 @@ cpu = ["onnxruntime>=1.17"]
 gpu = ["onnxruntime-gpu>=1.17"]
 directml = ["onnxruntime-directml>=1.17"]
 openvino = ["onnxruntime-openvino>=1.17"]
+coreml = []  # Supplied by the supported macOS ONNX Runtime build.
+nnapi = []  # Supplied by a compatible mobile ONNX Runtime build.
+xnnpack = []  # Supplied by a compatible ONNX Runtime build.
+mobile = []  # Convenience marker for platform-managed mobile providers.
 dev = [
   "pytest>=8",
   "pytest-cov>=5",

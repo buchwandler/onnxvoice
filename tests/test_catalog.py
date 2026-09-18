@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from onnxvoice.catalog import CatalogClient
+from onnxvoice.errors import CatalogError
 
 
 def test_piper_catalog_is_normalized(tmp_path):
@@ -96,3 +99,27 @@ def test_kokoro_default_selects_one_model_quality(tmp_path):
     assert [a.quality for a in default.artifacts if a.role == "model"] == ["fp32"]
     fp16 = client.resolve("kokoro:v1.0", quality="fp16")
     assert [a.quality for a in fp16.artifacts if a.role == "model"] == ["fp16"]
+
+
+def test_kokoro_distribution_selection_is_explicit(tmp_path):
+    raw = {
+        "models": {
+            "v1.0": {
+                "runtime": {"layout": "single"},
+                "distributions": [
+                    {"id": "cpu", "artifacts": [{"role": "model", "id": "cpu.onnx", "url": "x"}]},
+                    {"id": "mobile", "artifacts": [{"role": "model", "id": "mobile.onnx", "url": "x"}]},
+                ],
+            }
+        }
+    }
+    source = tmp_path / "kokoro.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    assert client.resolve("kokoro:v1.0").metadata["distribution_id"] == "cpu"
+    selected = client.resolve("kokoro:v1.0", distribution="mobile")
+    assert selected.metadata["distribution_id"] == "mobile"
+    assert selected.artifacts[0].filename == "mobile.onnx"
+    with pytest.raises(CatalogError, match="valid choices: cpu, mobile"):
+        client.resolve("kokoro:v1.0", distribution="unknown")

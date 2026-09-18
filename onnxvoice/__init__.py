@@ -18,12 +18,14 @@ from .errors import NotInstalledError
 from .manager import OnnxVoice
 from .runtime import OnnxSession, available_providers
 from .store import AssetStore
-from .systems import register_adapter, registered_systems
+from .systems import SplitKokoroRuntime, register_adapter, registered_systems
 from .types import (
     AssetProgress,
     CatalogItem,
     InferenceResult,
     Installation,
+    RuntimeDiagnostic,
+    SessionDiagnostic,
     TensorSpec,
 )
 from .validation import validate_audio, validate_onnx, verify_installation
@@ -82,11 +84,14 @@ __all__ = [
     "NotInstalledError",
     "InferenceResult",
     "TensorSpec",
+    "RuntimeDiagnostic",
+    "SessionDiagnostic",
     "CatalogItem",
     "Installation",
     "available_providers",
     "register_adapter",
     "registered_systems",
+    "SplitKokoroRuntime",
     "verify_installation",
     "validate_onnx",
     "validate_audio",
