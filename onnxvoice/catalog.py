@@ -29,8 +29,9 @@ class CatalogClient:
     offline: bool = False
 
     def __post_init__(self) -> None:
-        self.cache_dir = Path(self.cache_dir or user_cache_path("onnxvoice")) / "catalogs"
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_root = Path(self.cache_dir or user_cache_path("onnxvoice")) / "catalogs"
+        self.cache_dir = cache_root
+        cache_root.mkdir(parents=True, exist_ok=True)
         merged = dict(DEFAULT_SOURCES)
         if self.sources:
             merged.update(self.sources)
@@ -44,9 +45,11 @@ class CatalogClient:
         return tuple(sorted(self.sources or {}))
 
     def _cache_path(self, system: str) -> Path:
+        assert self.cache_dir is not None
         return self.cache_dir / f"{system}.json"
 
     def _catalog_lock_path(self, system: str) -> Path:
+        assert self.cache_dir is not None
         return self.cache_dir.parent / "locks" / "catalog" / f"{system}.lock"
 
     def _read_source(self, source: str) -> bytes:
@@ -169,6 +172,9 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
     voices = data.get("voices")
     if not isinstance(voices, dict):
         raise CatalogError("Piper catalog is missing the 'voices' mapping")
+    source = data.get("source") or {}
+    if not isinstance(source, dict):
+        raise CatalogError("Piper catalog source metadata must be an object")
     result: list[CatalogItem] = []
     for voice_id, entry in voices.items():
         artifacts: list[Artifact] = []
@@ -200,6 +206,9 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
                     "name": entry.get("name"),
                     "num_speakers": entry.get("num_speakers"),
                     "speaker_id_map": entry.get("speaker_id_map") or {},
+                    "source_revision": source.get("revision"),
+                    "source_repository": source.get("repository"),
+                    "requested_revision": source.get("requested_revision"),
                 },
             )
         )

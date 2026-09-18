@@ -10,14 +10,17 @@ except ImportError:  # source checkout before setuptools_scm has generated _vers
     except Exception:
         __version__ = "0.0.0"
 
+
+from typing import Any
+
 from .catalog import CatalogClient
+from .errors import NotInstalledError
 from .manager import OnnxVoice
 from .runtime import OnnxSession, available_providers
 from .store import AssetStore
 from .systems import register_adapter, registered_systems
 from .types import (
     AssetProgress,
-    AudioResult,
     CatalogItem,
     InferenceResult,
     Installation,
@@ -39,15 +42,25 @@ def install(ref: str, **kwargs) -> Installation:
     return _manager().install(ref, **kwargs)
 
 
+def open(ref: str | Installation, **kwargs: Any):
+    return _manager().open(ref, **kwargs)
+
+
+def open_local(**kwargs: Any):
+    return OnnxVoice.open_local(**kwargs)
+
+
 def resolve(ref: str, **kwargs) -> Installation:
     return _manager().resolve(ref, **kwargs)
 
 
-def load(ref: str | Installation, **kwargs):
+def load(ref: str | Installation, **kwargs: Any):
+    if kwargs.get("download") is True:
+        raise ValueError("load(download=True) is obsolete; call install() before open()")
     return _manager().load(ref, **kwargs)
 
 
-def load_local(**kwargs):
+def load_local(**kwargs: Any):
     return OnnxVoice.load_local(**kwargs)
 
 
@@ -66,7 +79,7 @@ __all__ = [
     "AssetStore",
     "OnnxSession",
     "AssetProgress",
-    "AudioResult",
+    "NotInstalledError",
     "InferenceResult",
     "TensorSpec",
     "CatalogItem",
@@ -78,6 +91,8 @@ __all__ = [
     "validate_onnx",
     "validate_audio",
     "install",
+    "open",
+    "open_local",
     "resolve",
     "load",
     "load_local",

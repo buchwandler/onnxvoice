@@ -56,28 +56,21 @@ def test_piper_adapter_builds_runtime_inputs(tmp_path):
     assert fake.seen["scales"].dtype == np.float32
 
 
-def test_kokoro_adapter_selects_voice_row_by_token_length(tmp_path):
+def test_kokoro_adapter_accepts_model_ready_style(tmp_path):
     model = tmp_path / "kokoro.onnx"
     model.write_bytes(b"x")
-    voices = tmp_path / "voices.npz"
-    np.savez(voices, af_heart=np.arange(4 * 3, dtype=np.float32).reshape(4, 3))
     installation = Installation(
         "kokoro",
         "v1",
         "model",
         tmp_path,
-        (
-            InstalledArtifact("model", model.name, model, "0" * 64, 1, "fp32"),
-            InstalledArtifact("voices", voices.name, voices, "0" * 64, voices.stat().st_size),
-        ),
+        (InstalledArtifact("model", model.name, model, "0" * 64, 1),),
         sample_rate=24000,
-        voices=("af_heart",),
-        default_voice="af_heart",
     )
     adapter = KokoroAdapter(installation)
     fake = FakeSession(("input_ids", "style", "speed"), np.array([[0.1, 0.2]], dtype=np.float32))
     adapter._session = fake  # type: ignore[assignment]
-    result = adapter.infer([5, 6])
+    result = adapter.infer([5, 6], style=np.array([3, 4, 5], dtype=np.float32))
     assert result.sample_rate == 24000
     np.testing.assert_array_equal(fake.seen["input_ids"], np.array([[0, 5, 6, 0]]))
     np.testing.assert_array_equal(fake.seen["style"], np.array([[3, 4, 5]], dtype=np.float32))

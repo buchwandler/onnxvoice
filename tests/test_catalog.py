@@ -7,6 +7,11 @@ from onnxvoice.catalog import CatalogClient
 
 def test_piper_catalog_is_normalized(tmp_path):
     raw = {
+        "source": {
+            "repository": "buchwandler/piper-onnx-voices",
+            "revision": "a" * 40,
+            "requested_revision": "main",
+        },
         "voices": {
             "en_US-test-medium": {
                 "id": "en_US-test-medium",
@@ -30,7 +35,7 @@ def test_piper_catalog_is_normalized(tmp_path):
                     },
                 },
             }
-        }
+        },
     }
     catalog = tmp_path / "piper.json"
     catalog.write_text(json.dumps(raw), encoding="utf-8")
@@ -39,6 +44,9 @@ def test_piper_catalog_is_normalized(tmp_path):
     assert item.id == "en_US-test-medium"
     assert item.metadata["quality"] == "medium"
     assert {artifact.role for artifact in item.artifacts} == {"config", "model"}
+    assert item.metadata["source_repository"] == "buchwandler/piper-onnx-voices"
+    assert item.metadata["source_revision"] == "a" * 40
+    assert item.metadata["requested_revision"] == "main"
 
 
 def test_kokoro_default_selects_one_model_quality(tmp_path):

@@ -7,7 +7,7 @@ import numpy as np
 
 from ..errors import CapabilityError, RuntimeContractError
 from ..runtime import OnnxSession
-from ..types import AudioResult, TensorSpec
+from ..types import InferenceResult, TensorSpec
 from .base import SystemAdapter
 
 
@@ -17,7 +17,9 @@ class KokoroAdapter(SystemAdapter):
     @property
     def session(self) -> OnnxSession:
         if self._session is None:
-            models = [artifact for artifact in self.installation.artifacts if artifact.role == "model"]
+            models = [
+                artifact for artifact in self.installation.artifacts if artifact.role == "model"
+            ]
             runtime = self.installation.metadata.get("runtime") or {}
             if len(models) != 1 or runtime.get("layout") in {"split", "multi"}:
                 raise CapabilityError(
@@ -27,44 +29,21 @@ class KokoroAdapter(SystemAdapter):
                 models[0].path,
                 providers=self.providers,
                 provider_options=self.provider_options,
+                session_options=self.session_options,
             )
         return self._session
 
-    def _voice_style(self, voice: str, token_count: int, dtype: np.dtype[Any]) -> np.ndarray:
-        if self.installation.voices and voice not in self.installation.voices:
-            raise RuntimeContractError(
-                f"Unknown Kokoro voice {voice!r}. Available: {', '.join(self.installation.voices[:12])}"
-            )
-        try:
-            voices_path = self.installation.artifact("voices").path
-        except KeyError as exc:
-            raise RuntimeContractError("Kokoro installation has no voices archive") from exc
-        with np.load(voices_path, allow_pickle=False) as archive:
-            if voice not in archive.files:
-                raise RuntimeContractError(
-                    f"Unknown Kokoro voice {voice!r}. Available: {', '.join(archive.files[:12])}"
-                )
-            style = np.asarray(archive[voice])
-        if style.ndim == 1:
-            selected = style
-        else:
-            index = min(max(token_count - 1, 0), style.shape[0] - 1)
-            selected = style[index]
-        if selected.ndim == 1:
-            selected = selected[None, :]
-        return np.asarray(selected, dtype=dtype)
-
     def infer(
         self,
-        tokens: Sequence[int],
+        token_ids: Sequence[int],
         *,
-        voice: str | None = None,
-        style: np.ndarray | None = None,
+        style: np.ndarray | Sequence[float] | None = None,
         speed: float = 1.0,
         **_: Any,
-    ) -> AudioResult:
-        token_values = list(tokens)
-        voice = voice or self.installation.default_voice
+    ) -> InferenceResult:
+        if style is None:
+            raise RuntimeContractError("A model-ready Kokoro style must be provided")
+        token_values = list(token_ids)
         names = set(self.session.input_names)
         token_name = "input_ids" if "input_ids" in names else "tokens"
         style_name = "ref_s" if "ref_s" in names else "style"
@@ -75,21 +54,18 @@ class KokoroAdapter(SystemAdapter):
 
         style_spec = self._input_spec(style_name)
         style_dtype = self._numpy_dtype(style_spec, default=np.float32)
-        if style is None:
-            if not voice:
-                raise RuntimeContractError("A Kokoro voice must be provided")
-            style_value = self._voice_style(voice, len(token_values), style_dtype)
-        else:
-            style_value = np.asarray(style, dtype=style_dtype)
-            if style_value.ndim == 1:
-                style_value = style_value[None, :]
+        style_value = np.asarray(style, dtype=style_dtype)
+        if style_value.ndim == 1:
+            style_value = style_value[None, :]
 
         inputs: dict[str, np.ndarray] = {
             token_name: padded,
             style_name: style_value,
         }
         if "speed" in names:
-            inputs["speed"] = np.asarray([speed], dtype=self._numpy_dtype(self._input_spec("speed"), default=np.float32))
+            inputs["speed"] = np.asarray(
+                [speed], dtype=self._numpy_dtype(self._input_spec("speed"), default=np.float32)
+            )
         missing = {token_name, style_name} - names
         if missing:
             raise RuntimeContractError(
@@ -113,18 +89,12 @@ class KokoroAdapter(SystemAdapter):
             ),
             None,
         )
-        metadata: dict[str, Any] = {
-            "system": "kokoro",
-            "voice": voice,
-            "speed": speed,
-            "output_names": output_names,
-        }
-        return AudioResult(
+        return InferenceResult(
             audio=audio,
             sample_rate=int(self.installation.sample_rate or 24000),
-            metadata=metadata,
             timings=timings,
             outputs=auxiliary,
+            metadata={"system": "kokoro", "speed": speed},
         )
 
     def _input_spec(self, name: str) -> TensorSpec | None:
@@ -134,9 +104,9 @@ class KokoroAdapter(SystemAdapter):
         return None
 
     @staticmethod
-    def _numpy_dtype(spec: TensorSpec | None, *, default: np.dtype[Any]) -> np.dtype[Any]:
+    def _numpy_dtype(spec: TensorSpec | None, *, default: Any) -> np.dtype[Any]:
         if spec is None:
-            return default
+            return np.dtype(default)
         dtype_name = spec.ort_type.lower()
         for marker, dtype in (
             ("int64", np.int64),

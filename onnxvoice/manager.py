@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from .catalog import CatalogClient, filter_items, parse_ref
 from .checksums import digest_file
+from .errors import AssetNotFoundError, NotInstalledError
 from .store import AssetStore, ProgressCallback
 from .systems import get_adapter
 from .types import CatalogItem, Installation, InstalledArtifact
 
+CatalogResults = list[CatalogItem] | list[Installation]
+Installations = list[Installation]
+
 
 class OnnxVoice:
-    """High-level catalog, store and runtime facade."""
+    """High-level catalog, store and local runtime facade."""
 
     def __init__(
         self,
@@ -37,7 +42,7 @@ class OnnxVoice:
         quality: str | None = None,
         refresh: bool = False,
         progress: ProgressCallback | None = None,
-    ) -> list[CatalogItem] | list[Installation]:
+    ) -> CatalogResults:
         if installed:
             return self.store.installed(system)
         if system is None:
@@ -60,32 +65,107 @@ class OnnxVoice:
         item = self.catalog.resolve(ref, refresh=refresh, quality=quality, progress=progress)
         return self.store.install(item, force=force, progress=progress)
 
+    def open(
+        self,
+        ref: str | Installation,
+        *,
+        quality: str | None = None,
+        providers: str | Sequence[str] | None = None,
+        provider: str | None = None,
+        provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
+        session_options: Any | None = None,
+    ):
+        """Open an existing local installation without catalog or network access."""
+        installation = ref if isinstance(ref, Installation) else self.resolve(ref, quality=quality)
+        self.store.verify(installation)
+        if provider is not None:
+            if providers is not None:
+                raise ValueError("Use provider or providers, not both")
+            providers = provider
+        adapter = get_adapter(installation.system)
+        return adapter(
+            installation,
+            providers=providers,
+            provider_options=provider_options,
+            session_options=session_options,
+        )
+
+    @staticmethod
+    def open_local(
+        *,
+        system: str,
+        model: str | Path,
+        config: str | Path | None = None,
+        voices: str | Path | None = None,
+        sample_rate: int | None = None,
+        providers: str | Sequence[str] | None = None,
+        provider: str | None = None,
+        provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
+        session_options: Any | None = None,
+    ):
+        """Open explicit local files without registering or copying them."""
+        if provider is not None:
+            if providers is not None:
+                raise ValueError("Use provider or providers, not both")
+            providers = provider
+        artifacts = [OnnxVoice._local_artifact("model", model)]
+        if config is not None:
+            artifacts.append(OnnxVoice._local_artifact("config", config))
+        if voices is not None:
+            artifacts.append(OnnxVoice._local_artifact("voices", voices))
+        model_path = Path(model).expanduser().resolve()
+        installation = Installation(
+            system=system,
+            id=f"local-{model_path.stem}",
+            kind="external",
+            path=model_path.parent,
+            artifacts=tuple(artifacts),
+            sample_rate=sample_rate,
+            metadata={"external": True, "managed": False},
+        )
+        adapter = get_adapter(system)
+        return adapter(
+            installation,
+            providers=providers,
+            provider_options=provider_options,
+            session_options=session_options,
+        )
+
     def resolve(
         self,
         ref: str,
         *,
         quality: str | None = None,
-        download: bool = True,
-        refresh: bool = False,
+        download: bool | None = None,
+        refresh: bool | None = None,
         progress: ProgressCallback | None = None,
     ) -> Installation:
-        system, item_id = parse_ref(ref)
-        if self.store.is_installed(system, item_id):
-            installation = self.store.get(system, item_id)
-            self.store.verify(installation)
-            if quality is None or installation.metadata.get("selected_quality") == quality:
-                return installation
-        if not download:
-            raise FileNotFoundError(f"Not installed: {ref}")
-        return self.install(
-            ref,
-            quality=quality,
-            refresh=refresh,
-            progress=progress,
-            force=quality is not None,
-        )
+        """Resolve and verify an existing installation only.
 
-    def installed(self, system: str | None = None) -> list[Installation]:
+        The legacy download, refresh, and progress arguments are rejected when
+        they request acquisition because resolution is now strictly local.
+        """
+        if download:
+            raise ValueError("resolve() is local-only; call install() before open()")
+        if refresh:
+            raise ValueError("resolve() is local-only; catalog refresh belongs to install()")
+        if progress is not None:
+            raise ValueError("resolve() is local-only and does not accept progress callbacks")
+        system, item_id = parse_ref(ref)
+        try:
+            installation = self.store.get(system, item_id)
+        except AssetNotFoundError as exc:
+            raise NotInstalledError(
+                f"Not installed: {ref}. Run onnxvoice.install(...) first."
+            ) from exc
+        self.store.verify(installation)
+        if quality is not None and installation.metadata.get("selected_quality") != quality:
+            raise NotInstalledError(
+                f"Not installed: {ref} with quality={quality!r}. Run onnxvoice.install(...) first."
+            )
+        return installation
+
+    def installed(self, system: str | None = None) -> Installations:
         return self.store.installed(system)
 
     def where(self, ref: str) -> Path:
@@ -127,65 +207,32 @@ class OnnxVoice:
         ref: str | Installation,
         *,
         quality: str | None = None,
-        download: bool = True,
+        download: bool | None = None,
         providers: str | Sequence[str] | None = None,
         provider: str | None = None,
         provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
+        session_options: Any | None = None,
     ):
-        installation = (
-            ref
-            if isinstance(ref, Installation)
-            else self.resolve(ref, quality=quality, download=download)
-        )
-        if provider is not None:
-            if providers is not None:
-                raise ValueError("Use provider or providers, not both")
-            providers = provider
-        adapter = get_adapter(installation.system)
-        return adapter(
-            installation,
+        """Deprecated alias for :meth:`open` with no acquisition behavior."""
+        warnings.warn("load() is deprecated; use open()", DeprecationWarning, stacklevel=2)
+        if download:
+            raise ValueError("load(download=True) is obsolete; call install() before open()")
+        return self.open(
+            ref,
+            quality=quality,
             providers=providers,
+            provider=provider,
             provider_options=provider_options,
+            session_options=session_options,
         )
 
     @staticmethod
-    def load_local(
-        *,
-        system: str,
-        model: str | Path,
-        config: str | Path | None = None,
-        voices: str | Path | None = None,
-        sample_rate: int | None = None,
-        providers: str | Sequence[str] | None = None,
-        provider: str | None = None,
-        provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
-    ):
-        """Load local assets without registering or copying them into the cache."""
-        if provider is not None:
-            if providers is not None:
-                raise ValueError("Use provider or providers, not both")
-            providers = provider
-        artifacts = [OnnxVoice._local_artifact("model", model)]
-        if config is not None:
-            artifacts.append(OnnxVoice._local_artifact("config", config))
-        if voices is not None:
-            artifacts.append(OnnxVoice._local_artifact("voices", voices))
-        model_path = Path(model).expanduser().resolve()
-        installation = Installation(
-            system=system,
-            id=f"local-{model_path.stem}",
-            kind="external",
-            path=model_path.parent,
-            artifacts=tuple(artifacts),
-            sample_rate=sample_rate,
-            metadata={"external": True, "managed": False},
+    def load_local(**kwargs: Any):
+        """Deprecated alias for :meth:`open_local`."""
+        warnings.warn(
+            "load_local() is deprecated; use open_local()", DeprecationWarning, stacklevel=2
         )
-        adapter = get_adapter(system)
-        return adapter(
-            installation,
-            providers=providers,
-            provider_options=provider_options,
-        )
+        return OnnxVoice.open_local(**kwargs)
 
     @staticmethod
     def _local_artifact(role: str, raw_path: str | Path) -> InstalledArtifact:

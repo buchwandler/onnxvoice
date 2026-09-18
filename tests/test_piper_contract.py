@@ -18,8 +18,10 @@ class PiperSession:
         TensorSpec("scales", "tensor(float16)", (3,)),
         TensorSpec("sid", "tensor(int64)", (1,)),
     )
+    output_names = ("audio",)
 
-    def __init__(self):
+    def __init__(self, names=None):
+        self.input_names = tuple(names or self.input_names)
         self.seen = None
 
     def run(self, inputs):
@@ -30,20 +32,12 @@ class PiperSession:
         pass
 
 
-def test_piper_validates_speakers_and_graph_dtypes(tmp_path):
+def _installation(tmp_path):
     model = tmp_path / "voice.onnx"
     model.write_bytes(b"model")
     config = tmp_path / "voice.json"
-    config.write_text(
-        json.dumps(
-            {
-                "num_speakers": 2,
-                "speaker_id_map": {"alice": 0, "bob": 1},
-                "audio": {"sample_rate": 16000},
-            }
-        )
-    )
-    installation = Installation(
+    config.write_text(json.dumps({"audio": {"sample_rate": 16000}}), encoding="utf-8")
+    return Installation(
         "piper",
         "voice",
         "voice",
@@ -53,20 +47,61 @@ def test_piper_validates_speakers_and_graph_dtypes(tmp_path):
             InstalledArtifact("config", config.name, config, "1" * 64, config.stat().st_size),
         ),
     )
-    adapter = PiperAdapter(installation)
+
+
+def test_piper_forwards_model_ready_speaker_id_and_graph_dtypes(tmp_path):
+    adapter = PiperAdapter(_installation(tmp_path))
     fake = PiperSession()
     adapter._session = fake  # type: ignore[assignment]
 
-    result = adapter.infer([1, 2], speaker="bob")
+    result = adapter.infer([1, 2], speaker_id=1)
 
+    assert adapter.requires_speaker_id is True
     assert result.sample_rate == 16000
     assert result.audio.dtype == np.float32
     assert fake.seen["input"].dtype == np.int32
     assert fake.seen["scales"].dtype == np.float16
+    assert fake.seen["sid"].dtype == np.int64
     assert fake.seen["sid"].item() == 1
     assert adapter._config() is adapter._config()
 
-    with pytest.raises(RuntimeContractError, match="Unknown Piper speaker"):
-        adapter.infer([1], speaker="missing")
-    with pytest.raises(RuntimeContractError, match="must be provided"):
+
+def test_piper_requires_speaker_id_when_sid_exists(tmp_path):
+    adapter = PiperAdapter(_installation(tmp_path))
+    adapter._session = PiperSession()  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeContractError, match="speaker_id was not provided"):
         adapter.infer([1])
+
+
+def test_piper_rejects_speaker_id_when_sid_is_absent(tmp_path):
+    adapter = PiperAdapter(_installation(tmp_path))
+    adapter._session = PiperSession(("input", "input_lengths", "scales"))  # type: ignore[assignment]
+
+    assert adapter.requires_speaker_id is False
+    with pytest.raises(RuntimeContractError, match="no input 'sid'"):
+        adapter.infer([1], speaker_id=0)
+
+
+def test_piper_passes_provider_and_session_options(tmp_path, monkeypatch):
+    import onnxvoice.systems.piper as piper_module
+
+    captured = {}
+    options = object()
+
+    class CapturingSession:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(piper_module, "OnnxSession", CapturingSession)
+    adapter = PiperAdapter(
+        _installation(tmp_path),
+        providers=("cpu",),
+        provider_options={"cpu": {"arena_extend_strategy": "kNextPowerOfTwo"}},
+        session_options=options,
+    )
+    _ = adapter.session
+
+    assert captured["providers"] == ("cpu",)
+    assert captured["provider_options"] == {"cpu": {"arena_extend_strategy": "kNextPowerOfTwo"}}
+    assert captured["session_options"] is options

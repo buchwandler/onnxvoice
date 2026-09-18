@@ -1,10 +1,18 @@
 # onnxvoice
 
-`onnxvoice` manages, validates and runs ONNX voice models from one shared local store.
+`onnxvoice` is the published Python infrastructure package for shared ONNX voice-model catalogs, asset installation, integrity verification, ONNX Runtime sessions, and model tensor-contract execution.
 
-The project deliberately sits below text processing. PyKokoro, PiperSynth, UtterRender or another frontend can turn text into tokens. `onnxvoice` resolves the requested model/voice, manages the shared cache, creates the ONNX Runtime session, maps system-specific inputs and returns NumPy audio.
+Install the package and an optional ONNX Runtime provider with:
 
-> Status: early release. The Milestone A low-level contract is covered by tests; downstream bridge work remains separate.
+```bash
+pip install onnxvoice
+pip install "onnxvoice[cpu]"
+pip install "onnxvoice[gpu]"
+pip install "onnxvoice[directml]"
+pip install "onnxvoice[openvino]"
+```
+
+Model catalogs and model artifacts remain external data. `onnxvoice` does not bundle model files or speech-engine policy.
 
 ## Why
 
@@ -25,7 +33,6 @@ The cache is content-addressed:
 
 Installations hard-link to immutable blobs when the filesystem supports it. The same bytes therefore do not need to be stored twice by different model installations.
 
-
 ## Stable low-level contract
 
 Milestone A defines the dependency boundary used by downstream frontends:
@@ -35,39 +42,25 @@ Milestone A defines the dependency boundary used by downstream frontends:
 - Installations, catalog writes, blob publication, and garbage collection use process locks. Interrupted staging is removed.
 - Asset operations accept progress callbacks receiving `AssetProgress` events.
 - The canonical inference result is float32, one-dimensional NumPy audio with a positive sample rate. Kokoro timing and named auxiliary outputs are available on the result.
-- Provider names support aliases such as `cpu`, `cuda`, `gpu`, `directml`, and `openvino`. Use `auto` for deterministic priority selection, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an environment policy. Explicit unavailable providers fail instead of silently falling back.
+- `open()` resolves and verifies an existing installation only. `open_local()` uses explicit local files without copying them into the shared cache. Call `install()` explicitly for catalog access and downloads.
+- Provider names support aliases such as `cpu`, `cuda`, `gpu`, `directml`, and `openvino`. Use `auto` for deterministic priority selection, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an environment policy.
 - `load_local()` constructs an unmanaged runtime from local files and does not register or copy them into the shared cache.
 
 The shared cache is never required for importing the package. Offline mode reads existing catalog and blob data only and does not make network requests.
+
 ## Install
 
-Base package, without an ONNX runtime:
+The base package does not install ONNX Runtime. Choose the extra for the deployment provider:
 
 ```bash
-pip install -e .
+pip install onnxvoice
+pip install "onnxvoice[cpu]"
+pip install "onnxvoice[gpu]"
+pip install "onnxvoice[directml]"
+pip install "onnxvoice[openvino]"
 ```
 
-CPU runtime:
-
-```bash
-pip install -e '.[cpu]'
-```
-
-Development:
-
-```bash
-pip install -e '.[dev,cpu]'
-```
-
-GPU/runtime variants are optional extras:
-
-```bash
-pip install -e '.[gpu]'
-pip install -e '.[directml]'
-pip install -e '.[openvino]'
-```
-
-## Catalogs
+For development, install `onnxvoice[dev,cpu]`.
 
 The MVP directly understands the existing catalogs from:
 
@@ -99,6 +92,9 @@ onnxvoice show piper:en_US-lessac-medium
 
 onnxvoice cache info
 onnxvoice cache gc
+
+onnxvoice catalog piper build --output catalog/voices.json --source-output catalog/source.json
+onnxvoice catalog piper verify --catalog catalog/voices.json --source catalog/source.json
 ```
 
 Kokoro has multiple ONNX model qualities in one distribution. `onnxvoice install kokoro:v1.0` selects `fp32` by default rather than downloading all model variants. Non-model runtime artifacts from the selected distribution are installed with it.
@@ -124,14 +120,15 @@ print([item.ref for item in ov.installed()])
 
 ### Piper inference
 
-`onnxvoice` expects already-tokenized Piper IDs. It does not phonemize text.
+`onnxvoice` expects already-tokenized Piper IDs and a model-ready numeric speaker ID when the graph has a `sid` input. It does not phonemize text or resolve speaker names.
 
 ```python
-from onnxvoice import load
+from onnxvoice import open
 
-runtime = load("piper:en_US-lessac-medium")
+runtime = open("piper:en_US-lessac-medium")
 result = runtime.infer(
     [1, 20, 14, 5, 2],
+    speaker_id=0,
     length_scale=1.0,
     noise_scale=0.667,
     noise_w=0.8,
@@ -144,13 +141,13 @@ runtime.close()
 
 ### Kokoro inference
 
-Kokoro voice styles are loaded from the installed voice archive. The style row is selected from the effective token length.
+Kokoro receives an explicit model-ready style tensor. Logical voice selection and style archives belong to the higher-level engine.
 
 ```python
-runtime = load("kokoro:v1.0", quality="fp16")
+runtime = open("kokoro:v1.0", quality="fp16")
 result = runtime.infer(
     [50, 31, 12, 99],
-    voice="af_heart",
+    style=style_tensor,
     speed=1.0,
 )
 print(result.audio.shape, result.sample_rate)
@@ -169,7 +166,7 @@ ov.import_model(
     config="voice.onnx.json",
 )
 
-runtime = ov.load("piper:my-voice", download=False)
+runtime = ov.open("piper:my-voice")
 ```
 
 For Kokoro:
@@ -184,13 +181,12 @@ ov.import_model(
 )
 ```
 
-
-Local files can be loaded without cache registration:
+Local files can be opened without cache registration:
 
 ```python
-from onnxvoice import load_local
+from onnxvoice import open_local
 
-runtime = load_local(
+runtime = open_local(
     system="piper",
     model="voice.onnx",
     config="voice.onnx.json",
@@ -199,6 +195,7 @@ runtime = load_local(
 ```
 
 The unmanaged runtime keeps the original file paths. Use `import_model()` when a durable managed installation and manifest are required.
+
 ## System adapters
 
 A TTS system adapter owns only the model-specific ONNX contract. It does not own text normalization, G2P, sentence splitting or document planning.
@@ -256,6 +253,7 @@ The project uses `setuptools_scm`. There is no hard-coded project version and no
 ## Current limitations
 
 The current release supports the built-in Piper and Kokoro catalog formats and deterministic rejection of split or multi-component Kokoro layouts that the adapter cannot execute. Resumable downloads, general third-party catalog schemas, release-grade waveform parity gates, and downstream package bridge migrations remain separate work.
+
 ## License
 
 The `onnxvoice` source code is Apache-2.0. Downloaded models, voice packs and model cards retain their own licenses and terms; installing them through `onnxvoice` does not relicense those artifacts.

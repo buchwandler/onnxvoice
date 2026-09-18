@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..runtime import OnnxSession
-from ..types import AudioResult, Installation
+from ..types import InferenceResult, Installation
 
 
 class SystemAdapter(ABC):
@@ -15,12 +15,14 @@ class SystemAdapter(ABC):
         self,
         installation: Installation,
         *,
-        providers: Sequence[str] | None = None,
-        provider_options: Sequence[dict[str, Any]] | None = None,
+        providers: str | Sequence[str] | None = None,
+        provider_options: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
+        session_options: Any | None = None,
     ) -> None:
         self.installation = installation
         self.providers = providers
         self.provider_options = provider_options
+        self.session_options = session_options
         self._session: OnnxSession | None = None
 
     @property
@@ -29,7 +31,7 @@ class SystemAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def infer(self, tokens: Sequence[int], **kwargs: Any) -> AudioResult:
+    def infer(self, token_ids: Sequence[int], **kwargs: Any) -> InferenceResult:
         raise NotImplementedError
 
     def close(self) -> None:

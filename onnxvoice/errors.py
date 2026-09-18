@@ -10,6 +10,10 @@ class AssetNotFoundError(OnnxVoiceError):
     """Requested model or voice does not exist."""
 
 
+class NotInstalledError(AssetNotFoundError):
+    """Requested model or voice is not installed locally."""
+
+
 class IntegrityError(OnnxVoiceError):
     """Downloaded or cached content failed integrity validation."""
 

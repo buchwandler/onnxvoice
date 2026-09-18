@@ -372,10 +372,14 @@ class AssetStore:
                 )
                 return known_blob, artifact.sha256
 
-        self._emit(progress, AssetProgress("download_started", ref, artifact.filename, total=artifact.size))
+        self._emit(
+            progress, AssetProgress("download_started", ref, artifact.filename, total=artifact.size)
+        )
         with tempfile.TemporaryDirectory(prefix="onnxvoice-download-") as temp_dir:
             temp = Path(temp_dir) / Path(artifact.filename).name
-            self._download(artifact.url, temp, ref=ref, artifact=artifact.filename, progress=progress)
+            self._download(
+                artifact.url, temp, ref=ref, artifact=artifact.filename, progress=progress
+            )
             verify_file(
                 temp,
                 expected_size=artifact.size,
@@ -393,7 +397,13 @@ class AssetStore:
                         shutil.copy2(temp, blob)
             self._emit(
                 progress,
-                AssetProgress("download_completed", ref, artifact.filename, completed=artifact.size, total=artifact.size),
+                AssetProgress(
+                    "download_completed",
+                    ref,
+                    artifact.filename,
+                    completed=artifact.size,
+                    total=artifact.size,
+                ),
             )
             return blob, sha256
 
@@ -413,7 +423,9 @@ class AssetStore:
             shutil.copy2(Path(unquote(parsed.path)), destination)
             self._emit(
                 progress,
-                AssetProgress("download_progress", ref, artifact, completed=destination.stat().st_size),
+                AssetProgress(
+                    "download_progress", ref, artifact, completed=destination.stat().st_size
+                ),
             )
             return
         if self.offline:

@@ -4,13 +4,28 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
+from .catalog_tools.piper import (
+    DEFAULT_REPOSITORY,
+    DEFAULT_REVISION,
+    fetch_and_build_catalog,
+    load_catalog,
+    verify_catalog,
+)
 from .manager import OnnxVoice
 from .validation import verify_installation
 
 
 def _manager(args: argparse.Namespace) -> OnnxVoice:
     return OnnxVoice(cache_dir=args.cache_dir, offline=getattr(args, "offline", False))
+
+
+def _write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,15 +75,54 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--sample-rate", type=int)
     import_parser.add_argument("--force", action="store_true")
 
+    catalog_parser = sub.add_parser("catalog", help="Build and verify external catalogs")
+    catalog_sub = catalog_parser.add_subparsers(dest="catalog_system", required=True)
+    piper_parser = catalog_sub.add_parser("piper", help="Manage the Piper catalog")
+    piper_sub = piper_parser.add_subparsers(dest="catalog_action", required=True)
+
+    build_parser = piper_sub.add_parser("build", help="Build a pinned Piper catalog")
+    build_parser.add_argument("--output", type=Path, required=True)
+    build_parser.add_argument("--source-output", type=Path)
+    build_parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
+    build_parser.add_argument("--revision", default=DEFAULT_REVISION)
+
+    verify_catalog_parser = piper_sub.add_parser("verify", help="Verify a Piper catalog")
+    verify_catalog_parser.add_argument("--catalog", type=Path, required=True)
+    verify_catalog_parser.add_argument("--source", type=Path)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    manager = _manager(args)
 
     try:
+        if args.command == "catalog":
+            if args.catalog_system != "piper":
+                raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
+            if args.catalog_action == "build":
+                catalog = fetch_and_build_catalog(
+                    repository=args.repository,
+                    revision=args.revision,
+                )
+                verify_catalog(catalog)
+                _write_json(args.output, catalog)
+                if args.source_output is not None:
+                    _write_json(args.source_output, {"schema": 1, **catalog["source"]})
+                print(f"Wrote {len(catalog['voices'])} voices to {args.output}")
+                return 0
+            if args.catalog_action == "verify":
+                catalog = load_catalog(args.catalog)
+                if args.source is not None:
+                    source = json.loads(args.source.read_text(encoding="utf-8"))
+                    expected = {"schema": 1, **catalog["source"]}
+                    if source != expected:
+                        raise ValueError("Source metadata does not match catalog provenance")
+                print(f"Verified {len(catalog['voices'])} Piper voices")
+                return 0
+
+        manager = _manager(args)
         if args.command == "list":
             items = manager.list(
                 args.system,
@@ -78,11 +132,10 @@ def main(argv: list[str] | None = None) -> int:
                 refresh=args.refresh,
             )
             for item in items:
-                if hasattr(item, "ref"):
-                    suffix = ""
-                    if getattr(item, "metadata", {}).get("quality"):
-                        suffix = f" [{item.metadata['quality']}]"
-                    print(f"{item.ref}{suffix}")
+                suffix = ""
+                if getattr(item, "metadata", {}).get("quality"):
+                    suffix = f" [{item.metadata['quality']}]"
+                print(f"{item.ref}{suffix}")
             return 0
 
         if args.command == "install":

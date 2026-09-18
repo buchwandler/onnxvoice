@@ -104,26 +104,6 @@ class Installation:
 
 
 @dataclass(frozen=True, slots=True)
-class AudioResult:
-    audio: np.ndarray
-    sample_rate: int
-    metadata: dict[str, Any] = field(default_factory=dict)
-    timings: np.ndarray | None = None
-    outputs: Mapping[str, np.ndarray] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        audio = np.asarray(self.audio, dtype=np.float32)
-        if audio.ndim != 1:
-            raise ValueError("audio must be a one-dimensional array")
-        if self.sample_rate <= 0:
-            raise ValueError("sample_rate must be positive")
-        object.__setattr__(self, "audio", audio)
-        if self.timings is not None:
-            object.__setattr__(self, "timings", np.asarray(self.timings))
-
-
-
-@dataclass(frozen=True, slots=True)
 class TensorSpec:
     name: str
     ort_type: str

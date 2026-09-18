@@ -73,7 +73,9 @@ def resolve_providers(
     available_names = tuple(available if available is not None else available_providers())
     available_set = set(available_names)
     if any(name.lower() == "auto" for name in requested_names):
-        selected = next((provider for provider in _AUTO_PRIORITY if provider in available_set), None)
+        selected = next(
+            (provider for provider in _AUTO_PRIORITY if provider in available_set), None
+        )
         if selected is None:
             raise RuntimeContractError(
                 "Automatic provider selection found no usable provider, "
@@ -98,9 +100,7 @@ def provider_options_for(
     if options is None:
         return None
     if isinstance(options, Mapping):
-        normalized = {
-            normalize_provider_name(name): value for name, value in options.items()
-        }
+        normalized = {normalize_provider_name(name): value for name, value in options.items()}
         return [dict(normalized.get(provider, {})) for provider in providers]
     values = [dict(value) for value in options]
     if len(values) != len(providers):
@@ -121,7 +121,9 @@ class OnnxSession:
     ) -> None:
         self.model = Path(model)
         self.provider_request = providers
-        self.providers = tuple(providers) if not isinstance(providers, str) and providers else providers
+        self.providers = (
+            tuple(providers) if not isinstance(providers, str) and providers else providers
+        )
         self.provider_options = provider_options
         self.session_options = session_options
         self._session: Any | None = None

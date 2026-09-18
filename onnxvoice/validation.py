@@ -8,7 +8,7 @@ import numpy as np
 from .errors import IntegrityError
 from .runtime import OnnxSession
 from .store import AssetStore
-from .types import AudioResult, Installation
+from .types import InferenceResult, Installation
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +32,7 @@ def validate_onnx(
     return ValidationReport(True, ("onnx-load", "inputs", "outputs"))
 
 
-def validate_audio(result: AudioResult) -> ValidationReport:
+def validate_audio(result: InferenceResult) -> ValidationReport:
     audio = np.asarray(result.audio)
     if audio.size == 0:
         raise IntegrityError("Inference returned empty audio")

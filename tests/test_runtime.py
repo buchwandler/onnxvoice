@@ -18,7 +18,9 @@ class FakeOrt:
     def InferenceSession(self, model, **kwargs):
         self.created = (model, kwargs)
         return SimpleNamespace(
-            get_inputs=lambda: [SimpleNamespace(name="tokens", type="tensor(int32)", shape=[1, "N"])],
+            get_inputs=lambda: [
+                SimpleNamespace(name="tokens", type="tensor(int32)", shape=[1, "N"])
+            ],
             get_outputs=lambda: [SimpleNamespace(name="audio", type="tensor(float)", shape=["N"])],
             run=lambda *_: [],
         )
