@@ -2,14 +2,14 @@ schema_version: 1
 object_type: commit_audit_sheet
 versioning:
   schema_version: 1
-  revision: 2
+  revision: 3
 release_version: v0.1.1
 git_base_ref: v0.1.0
 git_base_sha: 7d0d0c7dfb322d6bdb21f2a121b2d3c7f25de97a
 git_head_ref: HEAD
-git_head_sha: c6d50b7697ed7e9c137a7cd3dc6325eb8a142f4b
-git_range: 7d0d0c7dfb322d6bdb21f2a121b2d3c7f25de97a..c6d50b7697ed7e9c137a7cd3dc6325eb8a142f4b
-commit_count: 1
+git_head_sha: 318c197e34650cc1541727439bcf11c1f3a386db
+git_range: 7d0d0c7dfb322d6bdb21f2a121b2d3c7f25de97a..318c197e34650cc1541727439bcf11c1f3a386db
+commit_count: 3
 rows:
   - sha: c6d50b7697ed7e9c137a7cd3dc6325eb8a142f4b
     source_ref: git:c6d50b7697ed7e9c137a7cd3dc6325eb8a142f4b
@@ -54,3 +54,48 @@ rows:
     evidence_subject: "feat: add support for pocket"
     target_entry_id: entry-0001
     notes: Single commit adding complete Pocket TTS integration
+  - sha: fd4ea6afbf3ec23b1e6534e00e18162bd44fe001
+    source_ref: git:fd4ea6afbf3ec23b1e6534e00e18162bd44fe001
+    short_sha: fd4ea6a
+    changed_paths:
+      - .ledger/releaseledger/data/ledgers/main/events/events.jsonl
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/audit/commit-audit.yaml
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/entries/entry-0001.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/entries/entry-0002.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/entries/entry-0003.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/entries/entry-0004.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/entries/entry-0005.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/entries/entry-0006.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.1.1/release.md
+      - docs/changelog.md
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_concurrency.py
+      - tests/test_store_progress.py
+    stats:
+      files_changed: 14
+      insertions: 729
+      deletions: 9
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: improved download emit and fixed types"
+  - sha: 318c197e34650cc1541727439bcf11c1f3a386db
+    source_ref: git:318c197e34650cc1541727439bcf11c1f3a386db
+    short_sha: 318c197
+    changed_paths:
+      - .github/workflows/test.yml
+    stats:
+      files_changed: 1
+      insertions: 2
+      deletions: 1
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "chore: ci"
