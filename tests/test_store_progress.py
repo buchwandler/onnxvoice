@@ -10,6 +10,7 @@ from onnxvoice.types import Artifact, AssetProgress, CatalogItem
 
 
 def _make_item(
+    tmp_path: Path,
     system: str = "test",
     item_id: str = "one",
     kind: str = "model",
@@ -18,7 +19,7 @@ def _make_item(
     role: str = "model",
 ) -> tuple[CatalogItem, Path]:
     """Create a CatalogItem and write the payload to a temporary source file."""
-    source = Path(f"/tmp/{filename}")
+    source = tmp_path / filename
     source.write_bytes(payload)
     sha = hashlib.sha256(payload).hexdigest()
     item = CatalogItem(
@@ -40,7 +41,7 @@ def _make_item(
 
 def test_fresh_install_events(tmp_path):
     """Test that a fresh install emits the correct event sequence."""
-    item, source = _make_item()
+    item, source = _make_item(tmp_path)
     store = AssetStore(tmp_path / "cache")
     events: list[AssetProgress] = []
 
@@ -121,7 +122,7 @@ def test_fresh_install_events(tmp_path):
 
 def test_already_installed_no_download_events(tmp_path):
     """Test that already-installed runs emit install_started/install_completed without download events."""
-    item, source = _make_item()
+    item, source = _make_item(tmp_path)
     store = AssetStore(tmp_path / "cache")
 
     # First install

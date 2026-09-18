@@ -482,10 +482,11 @@ class AssetStore:
         progress: ProgressCallback | None,
     ) -> None:
         if source.startswith("file://"):
-            from urllib.parse import unquote, urlparse
+            from urllib.parse import urlparse
+            from urllib.request import url2pathname
 
             parsed = urlparse(source)
-            shutil.copy2(Path(unquote(parsed.path)), destination)
+            shutil.copy2(Path(url2pathname(parsed.path)), destination)
             self._emit(
                 progress,
                 AssetProgress(

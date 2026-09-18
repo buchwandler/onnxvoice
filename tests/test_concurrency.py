@@ -37,7 +37,8 @@ def test_concurrent_installers_converge(tmp_path):
     source = tmp_path / "voice.onnx"
     source.write_bytes(b"same model")
     cache = tmp_path / "cache"
-    context = multiprocessing.get_context("fork")
+    start_method = "fork" if "fork" in multiprocessing.get_all_start_methods() else "spawn"
+    context = multiprocessing.get_context(start_method)
     result_queue = context.Queue()
     processes = [
         context.Process(target=_install_worker, args=(str(cache), str(source), result_queue))
