@@ -53,6 +53,28 @@ Milestone A defines the dependency boundary used by downstream frontends:
 
 The shared cache is never required for importing the package. Offline mode reads existing catalog and blob data only and does not make network requests.
 
+## Stable voice selectors
+
+Short voice selectors are persisted identity aliases, not positions in the current catalog. The canonical form is `<language-key>-<engine-code>-<slot>`:
+
+```text
+de-ko-1       -> kokoro:de-anna, logical voice df_anna
+de-pi-1       -> piper:de_DE-eva_k-x_low
+en_us-ko-12   -> a future Kokoro registry identity
+```
+
+`ko` is the permanent Kokoro code and `pi` is the permanent Piper code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Use the selector API to resolve the complete identity:
+
+```python
+from onnxvoice import resolve_voice_selector
+
+identity = resolve_voice_selector("de-ko-1")
+assert identity.backing_ref == "kokoro:de-anna"
+assert identity.voice_id == "df_anna"
+```
+
+Asset operations still use canonical `system:id` references such as `kokoro:de-anna` and `piper:de_DE-eva_k-x_low`. Resolving a Kokoro selector does not choose a style tensor; producer packages remain responsible for style/policy selection. Catalog voices without registry assignments are reported as unassigned rather than receiving a runtime-generated number.
+
 ## Install
 
 The base package does not install ONNX Runtime. Choose the extra for the deployment provider:

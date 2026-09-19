@@ -48,6 +48,29 @@ class Artifact:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceIdentity:
+    """Stable identity assigned to a catalog voice selector."""
+
+    selector: str
+    language: str
+    engine_code: str
+    slot: int
+    system: str
+    asset_id: str
+    voice_id: str
+    state: str = "active"
+
+    @property
+    def backing_ref(self) -> str:
+        """Canonical asset reference used by install/open operations."""
+        return f"{self.system}:{self.asset_id}"
+
+    @property
+    def canonical_key(self) -> tuple[str, str, str]:
+        return (self.system, self.asset_id, self.voice_id)
+
+
+@dataclass(frozen=True, slots=True)
 class CatalogItem:
     system: str
     id: str
@@ -139,6 +162,48 @@ class CatalogItem:
                 f"{len(candidates)} matches. Specify component or quality."
             )
         return candidates[0]
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceRecord:
+    """A stable selector identity projected onto current catalog state."""
+
+    identity: VoiceIdentity | None
+    available: bool
+    catalog_item: CatalogItem | None
+    languages: tuple[str, ...] = ()
+    gender: str = "unknown"
+    catalog_voice_id: str | None = None
+
+    @property
+    def selector(self) -> str | None:
+        return self.identity.selector if self.identity is not None else None
+
+    @property
+    def system(self) -> str | None:
+        if self.identity is not None:
+            return self.identity.system
+        return self.catalog_item.system if self.catalog_item is not None else None
+
+    @property
+    def asset_id(self) -> str | None:
+        if self.identity is not None:
+            return self.identity.asset_id
+        return self.catalog_item.id if self.catalog_item is not None else None
+
+    @property
+    def voice_id(self) -> str | None:
+        if self.identity is not None:
+            return self.identity.voice_id
+        if self.catalog_item is None:
+            return None
+        if self.catalog_voice_id is not None:
+            return self.catalog_voice_id
+        return self.catalog_item.id if self.catalog_item.kind == "voice" else None
+
+    @property
+    def state(self) -> str:
+        return self.identity.state if self.identity is not None else "unassigned"
 
 
 @dataclass(frozen=True, slots=True)

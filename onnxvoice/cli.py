@@ -71,6 +71,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--installed", action="store_true", help="Show only installed entries (legacy alias)"
     )
 
+    # --- voices ---
+    voices_parser = sub.add_parser("voices", help="List and resolve stable short voice selectors")
+    voices_sub = voices_parser.add_subparsers(dest="voices_command", required=True)
+
+    voices_list_parser = voices_sub.add_parser(
+        "list", help="List catalog voices with stable selectors"
+    )
+    voices_list_parser.add_argument("--system", choices=["kokoro", "piper"])
+    voices_list_parser.add_argument("--lang", "--language", dest="language")
+    voices_list_parser.add_argument("--refresh", action="store_true")
+    voices_list_parser.add_argument("--include-retired", action="store_true")
+    voices_list_parser.add_argument(
+        "--no-unassigned",
+        dest="include_unassigned",
+        action="store_false",
+        help="Hide current catalog voices without a registry assignment",
+    )
+    voices_list_parser.set_defaults(include_unassigned=True)
+    voices_list_parser.add_argument(
+        "--format", choices=["table", "plain", "json", "tsv"], default="table"
+    )
+
+    voices_show_parser = voices_sub.add_parser(
+        "show", help="Show the full identity behind a short selector"
+    )
+    voices_show_parser.add_argument("selector")
+    voices_show_parser.add_argument("--refresh", action="store_true")
+    voices_show_parser.add_argument("--include-retired", action="store_true")
+    voices_show_parser.add_argument(
+        "--format", choices=["table", "plain", "json", "tsv"], default="table"
+    )
     # --- installed ---
     installed_parser = sub.add_parser(
         "installed", help="List installed entries (local-only, no network)"
@@ -207,6 +238,135 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
+
+
+def _voice_payload(record) -> dict[str, Any]:
+    identity = record.identity
+    system = record.system
+    asset_id = record.asset_id
+    voice_id = record.voice_id
+    backing_ref = (
+        identity.backing_ref
+        if identity is not None
+        else (f"{system}:{asset_id}" if system and asset_id else None)
+    )
+    return {
+        "selector": record.selector,
+        "language_key": identity.language if identity is not None else None,
+        "engine_code": identity.engine_code if identity is not None else None,
+        "slot": identity.slot if identity is not None else None,
+        "system": system,
+        "asset_id": asset_id,
+        "voice_id": voice_id,
+        "backing_ref": backing_ref,
+        "state": record.state,
+        "available": record.available,
+        "languages": list(record.languages),
+        "gender": record.gender,
+    }
+
+
+def _render_voice_records(records, output_format: str) -> None:
+    columns = ["SELECTOR", "SYSTEM", "ASSET", "VOICE", "LANG", "STATUS"]
+    rows = []
+    for record in records:
+        status = "available" if record.available else record.state
+        rows.append(
+            [
+                record.selector or "-",
+                record.system or "-",
+                record.asset_id or "-",
+                record.voice_id or "-",
+                ",".join(record.languages) or "-",
+                status,
+            ]
+        )
+    if output_format == "json":
+        print(
+            json.dumps(
+                {"items": [_voice_payload(record) for record in records]}, indent=2, sort_keys=True
+            )
+        )
+        return
+    from ._table import render_inventory
+
+    render_inventory(columns, rows, format=output_format)
+
+
+def _cmd_voices_list(args: argparse.Namespace) -> int:
+    manager = _manager(args)
+    records = manager.list_voices(
+        system=args.system,
+        language=args.language,
+        refresh=args.refresh,
+        include_retired=args.include_retired,
+        include_unassigned=args.include_unassigned,
+    )
+    _render_voice_records(records, args.format)
+    return 0
+
+
+def _cmd_voices_show(args: argparse.Namespace) -> int:
+    manager = _manager(args)
+    identity = manager.resolve_voice_selector(args.selector, include_retired=args.include_retired)
+    record = None
+    try:
+        record = next(
+            (
+                item
+                for item in manager.list_voices(
+                    system=identity.system,
+                    language=identity.language,
+                    refresh=args.refresh,
+                    include_retired=args.include_retired,
+                    include_unassigned=True,
+                )
+                if item.identity is not None
+                and item.identity.canonical_key == identity.canonical_key
+            ),
+            None,
+        )
+    except Exception:
+        # Showing a known identity remains useful when the catalog is offline.
+        record = None
+    if record is None:
+        from .types import VoiceRecord
+
+        record = VoiceRecord(
+            identity=identity,
+            available=False,
+            catalog_item=None,
+            languages=(identity.language,),
+            gender="unknown",
+        )
+    if args.format == "json":
+        print(json.dumps(_voice_payload(record), indent=2, sort_keys=True))
+    elif args.format in {"plain", "tsv"}:
+        _render_voice_records([record], args.format)
+    else:
+        payload = _voice_payload(record)
+        for key in (
+            "selector",
+            "system",
+            "asset_id",
+            "voice_id",
+            "backing_ref",
+            "language_key",
+            "engine_code",
+            "slot",
+            "state",
+            "available",
+        ):
+            print(f"{key.replace('_', ' ').title():16} {payload[key]}")
+    return 0
+
+
+def _cmd_voices(args: argparse.Namespace) -> int:
+    if args.voices_command == "list":
+        return _cmd_voices_list(args)
+    if args.voices_command == "show":
+        return _cmd_voices_show(args)
+    raise ValueError(f"unknown voices command: {args.voices_command}")
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -697,6 +857,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
 
         # Command dispatch
+        if args.command == "voices":
+            return _cmd_voices(args)
+
         handlers = {
             "list": _cmd_list,
             "installed": _cmd_installed,

@@ -14,7 +14,13 @@ except ImportError:  # source checkout before setuptools_scm has generated _vers
 from typing import Any
 
 from .catalog import CatalogClient
-from .errors import NotInstalledError
+from .errors import (
+    NotInstalledError,
+    VoiceSelectorError,
+    VoiceSelectorNotFoundError,
+    VoiceSelectorRegistryError,
+    VoiceSelectorRetiredError,
+)
 from .manager import OnnxVoice
 from .runtime import OnnxSession, available_providers
 from .store import AssetStore
@@ -29,6 +35,17 @@ from .types import (
     RuntimeDiagnostic,
     SessionDiagnostic,
     TensorSpec,
+    VoiceIdentity,
+    VoiceRecord,
+)
+from .voice_selectors import (
+    format_voice_selector,
+    is_voice_selector,
+    iter_voice_identities,
+    load_voice_selector_registry,
+    parse_voice_selector,
+    resolve_voice_selector,
+    selector_for_voice,
 )
 
 _default: OnnxVoice | None = None
@@ -89,6 +106,10 @@ __all__ = [
     "AssetProgress",
     "InstalledArtifact",
     "NotInstalledError",
+    "VoiceSelectorError",
+    "VoiceSelectorNotFoundError",
+    "VoiceSelectorRetiredError",
+    "VoiceSelectorRegistryError",
     "InferenceResult",
     "TensorSpec",
     "RuntimeDiagnostic",
@@ -96,6 +117,15 @@ __all__ = [
     "CatalogItem",
     "Installation",
     "available_providers",
+    "VoiceIdentity",
+    "VoiceRecord",
+    "format_voice_selector",
+    "parse_voice_selector",
+    "is_voice_selector",
+    "resolve_voice_selector",
+    "selector_for_voice",
+    "iter_voice_identities",
+    "load_voice_selector_registry",
     "register_adapter",
     "registered_systems",
     "SplitKokoroRuntime",

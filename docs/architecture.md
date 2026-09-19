@@ -1,6 +1,12 @@
 # OnnxVoice architecture
 
-OnnxVoice executes installed voice-model runtimes. Producer packages prepare token IDs, model-ready style rows, speed, and other producer-owned policy. Text normalization, language detection, G2P, phoneme segmentation, voice aliases, sentence handling, trace objects, and final audio composition remain outside this package.
+OnnxVoice executes installed voice-model runtimes and owns stable catalog voice identity selectors. Producer packages prepare token IDs, model-ready style rows, speed, and other producer-owned policy. Text normalization, language detection, G2P, phoneme segmentation, producer semantic voice aliases, sentence handling, trace objects, and final audio composition remain outside this package.
+
+## Stable catalog voice identity
+
+Short selectors such as `de-ko-1` and `de-pi-1` are persisted, append-only aliases for complete canonical identities. They resolve to a system, backing asset/model, and logical voice ID while leaving `system:id` asset references unchanged. Catalog projection may report an unassigned voice, but runtime discovery never invents a numeric slot.
+
+This identity alias is distinct from producer semantic voice aliases and style policy. In particular, resolving a Kokoro selector does not select or construct a style tensor; the producer remains responsible for that operation.
 
 ## Runtime boundary
 

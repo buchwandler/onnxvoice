@@ -16,6 +16,15 @@ from .inventory import InventoryRecord
 from .store import AssetStore, ProgressCallback
 from .systems import get_adapter
 from .types import CatalogItem, Installation, InstalledArtifact
+from .voice_selectors import (
+    VoiceIdentity,
+    VoiceRecord,
+    catalog_voice_keys,
+    iter_voice_identities,
+    make_voice_record,
+    selector_for_voice,
+)
+from .voice_selectors import resolve_voice_selector as _resolve_voice_selector
 
 CatalogResults = list[CatalogItem] | list[Installation]
 Installations = list[Installation]
@@ -70,6 +79,103 @@ class OnnxVoice:
             self.catalog.list(system, refresh=refresh, progress=progress),
             language=language,
             quality=quality,
+        )
+
+    def resolve_voice_selector(
+        self,
+        value: str,
+        *,
+        include_retired: bool = False,
+    ) -> VoiceIdentity:
+        """Resolve a stable short selector without opening or selecting an asset."""
+        return _resolve_voice_selector(value, include_retired=include_retired)
+
+    def list_voices(
+        self,
+        system: str | None = None,
+        *,
+        language: str | None = None,
+        refresh: bool = False,
+        include_retired: bool = False,
+        include_unassigned: bool = True,
+        progress: ProgressCallback | None = None,
+    ) -> list[VoiceRecord]:
+        """List flattened catalog voices joined to stable selector identities."""
+        from .inventory import language_codes_from_metadata, matches_language
+        from .voice_selectors import get_voice_selector_registry
+
+        systems = (system.casefold(),) if system is not None else ("kokoro", "piper")
+        unsupported = set(systems) - {"kokoro", "piper"}
+        if unsupported:
+            raise ValueError(
+                f"voice selectors are not available for: {', '.join(sorted(unsupported))}"
+            )
+
+        items: list[CatalogItem] = []
+        for catalog_system in systems:
+            items.extend(self.catalog.list(catalog_system, refresh=refresh, progress=progress))
+        registry = get_voice_selector_registry()
+        records: list[VoiceRecord] = []
+        seen: set[tuple[str, str, str]] = set()
+
+        for item, asset_id, voice_id in catalog_voice_keys(items):
+            key = (item.system, asset_id, voice_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            identity = selector_for_voice(
+                system=item.system,
+                asset_id=asset_id,
+                voice_id=voice_id,
+                include_retired=True,
+                registry=registry,
+            )
+            if identity is not None and identity.state == "retired" and not include_retired:
+                continue
+            if identity is None and not include_unassigned:
+                continue
+            metadata = item.metadata
+            if language is not None and not matches_language(metadata, language):
+                continue
+            records.append(
+                make_voice_record(
+                    identity,
+                    available=identity is not None and identity.state == "active",
+                    catalog_item=item,
+                    languages=language_codes_from_metadata(metadata),
+                    gender=str(metadata.get("gender") or "unknown")
+                    if item.system == "piper"
+                    else "unknown",
+                    voice_id=voice_id,
+                )
+            )
+
+        for identity in iter_voice_identities(
+            system=system, include_retired=include_retired, registry=registry
+        ):
+            if identity.canonical_key in seen:
+                continue
+            if language is not None and identity.language != language.casefold().replace("-", "_"):
+                continue
+            records.append(
+                make_voice_record(
+                    identity,
+                    available=False,
+                    catalog_item=None,
+                    languages=(identity.language,),
+                    gender="unknown",
+                )
+            )
+
+        return sorted(
+            records,
+            key=lambda record: (
+                record.selector is None,
+                record.selector or "",
+                record.system or "",
+                record.asset_id or "",
+                record.voice_id or "",
+            ),
         )
 
     def install(

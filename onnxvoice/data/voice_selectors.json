@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "engine_codes": {
+    "kokoro": "ko",
+    "piper": "pi"
+  },
+  "entries": [
+    {
+      "language": "de",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "de-anna",
+      "voice_id": "df_anna",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "de-crane",
+      "voice_id": "default",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "de-thorsten",
+      "voice_id": "thorsten",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "v1.2-de-martin",
+      "voice_id": "martin",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "de_DE-eva_k-x_low",
+      "voice_id": "de_DE-eva_k-x_low",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "de_DE-karlsson-low",
+      "voice_id": "de_DE-karlsson-low",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "de_DE-kerstin-low",
+      "voice_id": "de_DE-kerstin-low",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "de_DE-mls-medium",
+      "voice_id": "de_DE-mls-medium",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "de_DE-pavoque-low",
+      "voice_id": "de_DE-pavoque-low",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 6,
+      "system": "piper",
+      "asset_id": "de_DE-ramona-low",
+      "voice_id": "de_DE-ramona-low",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 7,
+      "system": "piper",
+      "asset_id": "de_DE-thorsten-high",
+      "voice_id": "de_DE-thorsten-high",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 8,
+      "system": "piper",
+      "asset_id": "de_DE-thorsten-low",
+      "voice_id": "de_DE-thorsten-low",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 9,
+      "system": "piper",
+      "asset_id": "de_DE-thorsten-medium",
+      "voice_id": "de_DE-thorsten-medium",
+      "state": "active"
+    },
+    {
+      "language": "de",
+      "engine_code": "pi",
+      "slot": 10,
+      "system": "piper",
+      "asset_id": "de_DE-thorsten_emotional-medium",
+      "voice_id": "de_DE-thorsten_emotional-medium",
+      "state": "active"
+    }
+  ]
+}
