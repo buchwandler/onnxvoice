@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 
 
 def validate_safe_component(value: str, *, field_name: str) -> str:
@@ -63,6 +63,82 @@ class CatalogItem:
     def ref(self) -> str:
         return f"{self.system}:{self.id}"
 
+    @property
+    def selected_distribution(self) -> str | None:
+        """The explicit distribution selector, if any."""
+        value = self.metadata.get("distribution_id")
+        return value if isinstance(value, str) else None
+
+    @property
+    def distribution_choices(self) -> tuple[str, ...]:
+        """Available distribution ids for this catalog item."""
+        value = self.metadata.get("distribution_choices")
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(str(x) for x in value)
+
+    @property
+    def selected_quality(self) -> str | None:
+        """The explicit quality selector, if any."""
+        value = self.metadata.get("selected_quality")
+        return value if isinstance(value, str) else None
+
+    def artifacts_for(
+        self,
+        role: str | None = None,
+        *,
+        component: str | None = None,
+        quality: str | None = None,
+    ) -> tuple[Artifact, ...]:
+        """Return catalog artifacts matching the supplied metadata."""
+        return tuple(
+            artifact
+            for artifact in self.artifacts
+            if (role is None or artifact.role == role)
+            and (component is None or artifact.component == component)
+            and (quality is None or artifact.quality == quality)
+        )
+
+    def artifact(
+        self,
+        role: str,
+        *,
+        component: str | None = None,
+        quality: str | None = None,
+    ) -> Artifact:
+        """Return the first artifact matching the supplied metadata."""
+        candidates = self.artifacts_for(role, component=component, quality=quality)
+        if not candidates:
+            details = [f"role={role!r}"]
+            if component is not None:
+                details.append(f"component={component!r}")
+            if quality is not None:
+                details.append(f"quality={quality!r}")
+            raise KeyError(f"No artifact {', '.join(details)} in {self.ref}")
+        return candidates[0]
+
+    def require_artifact(
+        self,
+        role: str,
+        *,
+        component: str | None = None,
+        quality: str | None = None,
+    ) -> Artifact:
+        """Return exactly one artifact or raise on ambiguity."""
+        candidates = self.artifacts_for(role, component=component, quality=quality)
+        if len(candidates) == 0:
+            details = [f"role={role!r}"]
+            if component is not None:
+                details.append(f"component={component!r}")
+            if quality is not None:
+                details.append(f"quality={quality!r}")
+            raise KeyError(f"No artifact {', '.join(details)} in {self.ref}")
+        if len(candidates) > 1:
+            raise KeyError(
+                f"Ambiguous artifact lookup for role={role!r} in {self.ref}: "
+                f"{len(candidates)} matches. Specify component or quality."
+            )
+        return candidates[0]
 
 @dataclass(frozen=True, slots=True)
 class InstalledArtifact:
@@ -88,11 +164,24 @@ class Installation:
     voices: tuple[str, ...] = ()
     default_voice: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    storage_id: str | None = None
 
     @property
     def ref(self) -> str:
+        """Canonical catalog reference (system:id), never the physical storage key."""
         return f"{self.system}:{self.id}"
 
+    @property
+    def selected_distribution(self) -> str | None:
+        """The explicit distribution selector, if any."""
+        value = self.metadata.get("selected_distribution")
+        return value if isinstance(value, str) else None
+
+    @property
+    def selected_quality(self) -> str | None:
+        """The explicit quality selector, if any."""
+        value = self.metadata.get("selected_quality")
+        return value if isinstance(value, str) else None
     def artifacts_for(
         self,
         role: str | None = None,
@@ -126,6 +215,40 @@ class Installation:
             raise KeyError(f"No artifact {', '.join(details)} in {self.ref}")
         return candidates[0]
 
+    def require_artifact(
+        self,
+        role: str,
+        *,
+        component: str | None = None,
+        quality: str | None = None,
+    ) -> InstalledArtifact:
+        """Return exactly one artifact or raise on ambiguity."""
+        candidates = self.artifacts_for(role, component=component, quality=quality)
+        if len(candidates) == 0:
+            details = [f"role={role!r}"]
+            if component is not None:
+                details.append(f"component={component!r}")
+            if quality is not None:
+                details.append(f"quality={quality!r}")
+            raise KeyError(f"No artifact {', '.join(details)} in {self.ref}")
+        if len(candidates) > 1:
+            raise KeyError(
+                f"Ambiguous artifact lookup for role={role!r} in {self.ref}: "
+                f"{len(candidates)} matches. Specify component or quality."
+            )
+        return candidates[0]
+
+    def artifact_path(
+        self,
+        role: str,
+        *,
+        component: str | None = None,
+        quality: str | None = None,
+    ) -> Path:
+        """Convenience: return the filesystem path for a single artifact."""
+        return self.artifact(
+            role, component=component, quality=quality
+        ).path
 
 @dataclass(frozen=True, slots=True)
 class SessionDiagnostic:

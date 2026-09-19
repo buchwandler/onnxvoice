@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
-
 from .catalog import CatalogClient, filter_items, parse_ref
 from .checksums import digest_file
 from .errors import AssetNotFoundError, NotInstalledError
@@ -71,11 +71,14 @@ class OnnxVoice:
             distribution=distribution,
             progress=progress,
         )
-        selected_distribution = distribution or item.metadata.get("distribution_id")
-        if isinstance(selected_distribution, str):
-            item = self._with_distribution_identity(
-                item, selected_distribution, cache=distribution is not None
-            )
+        # Apply selection identity when explicit selectors were provided.
+        # Only *explicit* selectors (passed by the caller) affect the
+        # storage identity; catalog-chosen defaults do not.
+        item = self._with_selection_identity(
+            item,
+            quality=quality if quality is not None else None,
+            distribution=distribution if distribution is not None else None,
+        )
         return self.store.install(item, force=force, progress=progress)
 
     def open(
@@ -221,15 +224,23 @@ class OnnxVoice:
         if progress is not None:
             raise ValueError("resolve() is local-only and does not accept progress callbacks")
         system, item_id = parse_ref(ref)
-        storage_id = self._distribution_cache_id(item_id, distribution)
+        storage_id = self._selection_storage_id(
+            item_id, quality=quality, distribution=distribution
+        )
         try:
             installation = self.store.get(system, storage_id)
         except AssetNotFoundError as exc:
-            detail = f" with distribution={distribution!r}" if distribution else ""
+            parts = []
+            if distribution is not None:
+                parts.append(f"distribution={distribution!r}")
+            if quality is not None:
+                parts.append(f"quality={quality!r}")
+            detail = f" with {', '.join(parts)}" if parts else ""
             raise NotInstalledError(
                 f"Not installed: {ref}{detail}. Run onnxvoice.install(...) first."
             ) from exc
         self.store.verify(installation)
+        # Validate that the stored selection matches the requested one
         if quality is not None and installation.metadata.get("selected_quality") != quality:
             raise NotInstalledError(
                 f"Not installed: {ref} with quality={quality!r}. Run onnxvoice.install(...) first."
@@ -246,14 +257,56 @@ class OnnxVoice:
     def installed(self, system: str | None = None) -> Installations:
         return self.store.installed(system)
 
-    def where(self, ref: str) -> Path:
-        system, item_id = parse_ref(ref)
-        return self.store.where(system, item_id)
+    def where(
+        self,
+        ref: str,
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
+    ) -> Path:
+        """Return the installation path for a selected installation."""
+        return self.resolve(
+            ref, quality=quality, distribution=distribution
+        ).path
 
-    def remove(self, ref: str) -> None:
+    def remove(
+        self,
+        ref: str,
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
+    ) -> None:
+        """Remove a selected installation."""
         system, item_id = parse_ref(ref)
-        self.store.remove(system, item_id)
+        storage_id = self._selection_storage_id(
+            item_id, quality=quality, distribution=distribution
+        )
+        self.store.remove(system, storage_id)
 
+    def verify(
+        self,
+        ref: str,
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
+    ) -> None:
+        """Verify checksums for a selected installation."""
+        installation = self.resolve(
+            ref, quality=quality, distribution=distribution
+        )
+        self.store.verify(installation)
+
+    def show(
+        self,
+        ref: str,
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
+    ) -> Installation:
+        """Return a selected installation (resolves and verifies)."""
+        return self.resolve(
+            ref, quality=quality, distribution=distribution
+        )
     def import_model(
         self,
         *,
@@ -339,19 +392,55 @@ class OnnxVoice:
         )
 
     @staticmethod
-    def _distribution_cache_id(item_id: str, distribution: str | None) -> str:
-        if distribution is None:
+    def _selection_storage_id(
+        item_id: str,
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
+    ) -> str:
+        """Compute deterministic storage identity from explicit selectors.
+
+        Returns the canonical *item_id* when no explicit selectors are
+        given, preserving the stable default installation path.  When any
+        explicit selector is present the result is *item_id* plus a
+        ``--sel-<digest>`` suffix derived from the canonical JSON of the
+        selector tuple.
+        """
+        if quality is None and distribution is None:
             return item_id
-        digest = hashlib.sha256(distribution.encode("utf-8")).hexdigest()[:16]
-        return f"{item_id}--dist-{digest}"
+        payload = json.dumps(
+            {"distribution": distribution, "quality": quality},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        return f"{item_id}--sel-{digest}"
 
     @classmethod
-    def _with_distribution_identity(
-        cls, item: CatalogItem, distribution: str, *, cache: bool = True
+    def _with_selection_identity(
+        cls,
+        item: CatalogItem,
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
     ) -> CatalogItem:
-        metadata = {**item.metadata, "selected_distribution": distribution}
-        if cache:
-            metadata["cache_id"] = cls._distribution_cache_id(item.id, distribution)
+        """Return a copy of *item* annotated with explicit selection metadata.
+
+        When *distribution* or *quality* is non-None the returned item's
+        metadata includes ``selected_distribution``, ``selected_quality``,
+        and ``cache_id`` so the store can address the correct physical
+        installation.
+        """
+        metadata = dict(item.metadata)
+        if distribution is not None:
+            metadata["selected_distribution"] = distribution
+        if quality is not None:
+            metadata["selected_quality"] = quality
+        storage_id = cls._selection_storage_id(
+            item.id, quality=quality, distribution=distribution
+        )
+        if storage_id != item.id:
+            metadata["cache_id"] = storage_id
         return CatalogItem(
             system=item.system,
             id=item.id,

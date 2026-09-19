@@ -126,3 +126,101 @@ def test_kokoro_distribution_selection_is_explicit(tmp_path):
     assert selected.artifacts[0].filename == "mobile.onnx"
     with pytest.raises(CatalogError, match="valid choices: cpu, mobile"):
         client.resolve("kokoro:v1.0", distribution="unknown")
+
+
+def test_kokoro_distribution_selection_is_scoped_to_requested_model(tmp_path):
+    """P0 regression: resolving v1.0 with its distribution must not fail on v1.1-zh."""
+    raw = {
+        "models": {
+            "v1.0": {
+                "distributions": [
+                    {
+                        "id": "dist-v1",
+                        "artifacts": [
+                            {"role": "model", "id": "v1.onnx", "url": "x"}
+                        ],
+                    }
+                ],
+            },
+            "v1.1-zh": {
+                "distributions": [
+                    {
+                        "id": "dist-zh",
+                        "artifacts": [
+                            {"role": "model", "id": "zh.onnx", "url": "x"}
+                        ],
+                    }
+                ],
+            },
+        }
+    }
+    source = tmp_path / "kokoro.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    # This used to fail because distribution validation applied to ALL models
+    item = client.resolve("kokoro:v1.0", distribution="dist-v1")
+    assert item.id == "v1.0"
+    assert item.metadata["distribution_id"] == "dist-v1"
+
+    # The other model should also work with its own distribution
+    zh = client.resolve("kokoro:v1.1-zh", distribution="dist-zh")
+    assert zh.id == "v1.1-zh"
+    assert zh.metadata["distribution_id"] == "dist-zh"
+
+
+def test_kokoro_wrong_distribution_error_names_requested_model(tmp_path):
+    """Error must reference the requested model, not an unrelated one."""
+    raw = {
+        "models": {
+            "v1.0": {
+                "distributions": [
+                    {"id": "dist-v1", "artifacts": [{"role": "model", "id": "a.onnx", "url": "x"}]}
+                ],
+            },
+            "v1.1-zh": {
+                "distributions": [
+                    {"id": "dist-zh", "artifacts": [{"role": "model", "id": "b.onnx", "url": "x"}]}
+                ],
+            },
+        }
+    }
+    source = tmp_path / "kokoro.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    # Error must reference v1.0, not v1.1-zh
+    with pytest.raises(CatalogError, match="for 'v1.0'"):
+        client.resolve("kokoro:v1.0", distribution="dist-zh")
+
+    # And vice versa
+    with pytest.raises(CatalogError, match="for 'v1.1-zh'"):
+        client.resolve("kokoro:v1.1-zh", distribution="dist-v1")
+
+
+def test_kokoro_list_uses_each_models_own_default_distribution(tmp_path):
+    """list() should parse all models without any caller-specific distribution constraint."""
+    raw = {
+        "models": {
+            "v1.0": {
+                "distributions": [
+                    {"id": "dist-a", "artifacts": [{"role": "model", "id": "a.onnx", "url": "x"}]},
+                    {"id": "dist-b", "artifacts": [{"role": "model", "id": "b.onnx", "url": "x"}]},
+                ],
+            },
+            "v1.1-zh": {
+                "distributions": [
+                    {"id": "dist-zh", "artifacts": [{"role": "model", "id": "zh.onnx", "url": "x"}]},
+                ],
+            },
+        }
+    }
+    source = tmp_path / "kokoro.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    items = client.list("kokoro")
+    assert len(items) == 2
+    by_id = {item.id: item for item in items}
+    assert by_id["v1.0"].metadata["distribution_id"] == "dist-a"
+    assert by_id["v1.1-zh"].metadata["distribution_id"] == "dist-zh"

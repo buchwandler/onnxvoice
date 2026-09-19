@@ -43,7 +43,7 @@ def test_manifest_round_trip_preserves_runtime_metadata(tmp_path):
     assert artifact.metadata == {"layout": "single", "version": 3}
     assert installation.metadata["source_revision"] == "a" * 40
     assert artifact.path.read_bytes() == b"model"
-    assert json.loads((installation.path / "manifest.json").read_text())["schema"] == 2
+    assert json.loads((installation.path / "manifest.json").read_text())["schema"] == 3
 
 
 def test_schema_one_manifest_remains_readable(tmp_path):
@@ -66,6 +66,78 @@ def test_schema_one_manifest_remains_readable(tmp_path):
     assert migrated.artifact("model").metadata == {}
 
 
+
+
+def test_schema_two_still_loads(tmp_path):
+    """Schema 2 manifests remain readable after the bump to schema 3."""
+    source = tmp_path / "voice.onnx"
+    source.write_bytes(b"model")
+    store = AssetStore(tmp_path / "cache")
+    installation = store.install(_item(source))
+    manifest_path = installation.path / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    # Downgrade to schema 2 by removing storage_id
+    data["schema"] = 2
+    data.pop("storage_id", None)
+    manifest_path.write_text(json.dumps(data))
+
+    migrated = store.get("test", "voice")
+    assert migrated.id == "voice"
+    assert migrated.storage_id is None
+
+
+def test_schema_three_round_trip_separates_id_and_storage_id(tmp_path):
+    """Schema 3 manifest preserves canonical id and storage_id separately."""
+    source = tmp_path / "voice.onnx"
+    source.write_bytes(b"model")
+    store = AssetStore(tmp_path / "cache")
+    item = _item(source)
+    # Add cache_id to simulate explicit selection
+    item = CatalogItem(
+        system=item.system,
+        id=item.id,
+        kind=item.kind,
+        artifacts=item.artifacts,
+        metadata={**item.metadata, "cache_id": "voice--sel-abcd1234"},
+    )
+    installation = store.install(item)
+
+    assert installation.id == "voice"
+    # storage_id is set because cache_id was provided
+    assert installation.storage_id == "voice--sel-abcd1234"
+    # Verify manifest has both fields
+    manifest = json.loads((installation.path / "manifest.json").read_text())
+    assert manifest["id"] == "voice"
+    assert "storage_id" in manifest
+
+
+def test_legacy_distribution_cache_manifest_recovers_canonical_id(tmp_path):
+    """Legacy schema 2 with --dist- hashed id recovers canonical prefix."""
+    source = tmp_path / "voice.onnx"
+    source.write_bytes(b"model")
+    store = AssetStore(tmp_path / "cache")
+    installation = store.install(_item(source))
+    manifest_path = installation.path / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    # Simulate legacy schema 2 with hashed storage id as canonical id
+    data["schema"] = 2
+    data["id"] = "voice--dist-abcd1234ef015678"
+    data.pop("storage_id", None)
+    data["metadata"] = {
+        **data.get("metadata", {}),
+        "cache_id": "voice--dist-abcd1234ef015678",
+        "selected_distribution": "mobile",
+    }
+    manifest_path.write_text(json.dumps(data))
+
+    # Rename directory to match the hashed id
+    old_dir = installation.path
+    new_dir = old_dir.parent / "voice--dist-abcd1234ef015678"
+    old_dir.rename(new_dir)
+
+    migrated = store.get("test", "voice--dist-abcd1234ef015678")
+    assert migrated.id == "voice"
+    assert migrated.storage_id == "voice--dist-abcd1234ef015678"
 def test_install_rejects_unsafe_paths(tmp_path):
     source = tmp_path / "voice.onnx"
     source.write_bytes(b"model")

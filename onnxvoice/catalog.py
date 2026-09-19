@@ -4,7 +4,7 @@ import json
 import os
 import time
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -145,46 +145,60 @@ class CatalogClient:
         system, item_id = parse_ref(ref)
         if system == "kokoro":
             raw = self.load_raw(system, refresh=refresh, progress=progress)
-            items = _parse_kokoro(raw, distribution=distribution)
+            models = _kokoro_models(raw)
+            entry = models.get(item_id)
+            if entry is None:
+                # Check aliases
+                for mid, mentry in models.items():
+                    aliases = mentry.get("aliases") or ()
+                    if item_id in aliases:
+                        entry = mentry
+                        item_id = mid
+                        break
+            if entry is None:
+                raise AssetNotFoundError(f"Unknown catalog item: {ref}")
+            item = _parse_kokoro_entry(item_id, entry, distribution=distribution)
         else:
             items = self.list(system, refresh=refresh, progress=progress)
-        for item in items:
-            if item.id != item_id and item_id not in item.aliases:
-                continue
-            if item.system == "pocket":
-                return _select_pocket_profile(item, quality)
-            selected_quality = quality
-            model_artifacts = [a for a in item.artifacts if a.role == "model"]
-            if selected_quality is None and len(model_artifacts) > 1:
-                selected_quality = (
-                    "fp32"
-                    if any(a.quality == "fp32" for a in model_artifacts)
-                    else model_artifacts[0].quality
-                )
-            if selected_quality is None:
-                return item
-            artifacts = tuple(
-                artifact
-                for artifact in item.artifacts
-                if artifact.role != "model" or artifact.quality in {None, selected_quality}
+            item = None
+            for candidate in items:
+                if candidate.id == item_id or item_id in candidate.aliases:
+                    item = candidate
+                    break
+            if item is None:
+                raise AssetNotFoundError(f"Unknown catalog item: {ref}")
+        if item.system == "pocket":
+            return _select_pocket_profile(item, quality)
+        selected_quality = quality
+        model_artifacts = [a for a in item.artifacts if a.role == "model"]
+        if selected_quality is None and len(model_artifacts) > 1:
+            selected_quality = (
+                "fp32"
+                if any(a.quality == "fp32" for a in model_artifacts)
+                else model_artifacts[0].quality
             )
-            if not any(a.role == "model" for a in artifacts):
-                raise AssetNotFoundError(
-                    f"{ref} has no model artifact with quality={selected_quality!r}"
-                )
-            return CatalogItem(
-                system=item.system,
-                id=item.id,
-                kind=item.kind,
-                artifacts=artifacts,
-                aliases=item.aliases,
-                sample_rate=item.sample_rate,
-                voices=item.voices,
-                default_voice=item.default_voice,
-                metadata={**item.metadata, "selected_quality": selected_quality},
+        if selected_quality is None:
+            return item
+        artifacts = tuple(
+            artifact
+            for artifact in item.artifacts
+            if artifact.role != "model" or artifact.quality in {None, selected_quality}
+        )
+        if not any(a.role == "model" for a in artifacts):
+            raise AssetNotFoundError(
+                f"{ref} has no model artifact with quality={selected_quality!r}"
             )
-        raise AssetNotFoundError(f"Unknown catalog item: {ref}")
-
+        return CatalogItem(
+            system=item.system,
+            id=item.id,
+            kind=item.kind,
+            artifacts=artifacts,
+            aliases=item.aliases,
+            sample_rate=item.sample_rate,
+            voices=item.voices,
+            default_voice=item.default_voice,
+            metadata={**item.metadata, "selected_quality": selected_quality},
+        )
     @staticmethod
     def _emit(progress: ProgressCallback | None, event: AssetProgress) -> None:
         if progress is not None:
@@ -249,76 +263,94 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
     return result
 
 
-def _parse_kokoro(
-    data: dict[str, Any],
+def _parse_kokoro_entry(
+    model_id: str,
+    entry: Mapping[str, Any],
     *,
     distribution: str | None = None,
-) -> list[CatalogItem]:
+) -> CatalogItem:
+    """Parse a single Kokoro catalog model entry.
+
+    When *distribution* is ``None`` the first runtime-ready distribution
+    is chosen (the catalog default).  When a distribution id is supplied it
+    must match one of the model's own distributions — no other model's
+    distributions are inspected.
+    """
+    raw_distributions = entry.get("distributions", ())
+    distributions = [value for value in raw_distributions if value.get("runtime_ready", True)]
+    if not distributions:
+        raise CatalogError(f"Kokoro model {model_id!r} has no runtime-ready distributions")
+    choices = tuple(str(value.get("id")) for value in distributions if value.get("id"))
+    if distribution is None:
+        selected = distributions[0]
+    else:
+        selected = next(
+            (value for value in distributions if str(value.get("id")) == distribution),
+            None,
+        )
+        if selected is None:
+            raise CatalogError(
+                f"Unknown Kokoro distribution {distribution!r} for {model_id!r}; "
+                f"valid choices: {', '.join(choices)}"
+            )
+    artifacts: list[Artifact] = []
+    for raw in selected.get("artifacts", ()):
+        artifacts.append(
+            Artifact(
+                role=str(raw.get("role") or raw.get("id") or "artifact"),
+                filename=str(raw.get("local_name") or raw.get("id")),
+                url=raw.get("url"),
+                size=raw.get("size"),
+                sha256=raw.get("sha256"),
+                quality=raw.get("quality"),
+                component=raw.get("component"),
+                format=raw.get("format"),
+                metadata={
+                    "id": raw.get("id"),
+                    "handling": raw.get("handling"),
+                    **(raw.get("metadata") or {}),
+                },
+            )
+        )
+    runtime = entry.get("runtime") or {}
+    metadata = {
+        "model_version": entry.get("model_version"),
+        "frontend": entry.get("frontend"),
+        "language_codes": entry.get("language_codes") or [],
+        "runtime": runtime,
+        "distribution_id": selected.get("id"),
+        "distribution_choices": choices,
+        "release_tag": selected.get("release_tag"),
+    }
+    return CatalogItem(
+        system="kokoro",
+        id=str(model_id),
+        kind="model",
+        artifacts=tuple(artifacts),
+        sample_rate=entry.get("sample_rate"),
+        voices=tuple(runtime.get("voices") or ()),
+        default_voice=runtime.get("default_voice"),
+        metadata=metadata,
+    )
+
+
+def _parse_kokoro(data: dict[str, Any]) -> list[CatalogItem]:
+    """Parse the full Kokoro catalog — each model uses its own default distribution."""
     models = data.get("models")
     if not isinstance(models, dict):
         raise CatalogError("Kokoro catalog is missing the 'models' mapping")
     result: list[CatalogItem] = []
     for model_id, entry in models.items():
-        raw_distributions = entry.get("distributions", ())
-        distributions = [value for value in raw_distributions if value.get("runtime_ready", True)]
-        if not distributions:
-            continue
-        choices = tuple(str(value.get("id")) for value in distributions if value.get("id"))
-        if distribution is None:
-            selected = distributions[0]
-        else:
-            selected = next(
-                (value for value in distributions if str(value.get("id")) == distribution),
-                None,
-            )
-            if selected is None:
-                raise CatalogError(
-                    f"Unknown Kokoro distribution {distribution!r} for {model_id!r}; "
-                    f"valid choices: {', '.join(choices)}"
-                )
-        artifacts: list[Artifact] = []
-        for raw in selected.get("artifacts", ()):
-            artifacts.append(
-                Artifact(
-                    role=str(raw.get("role") or raw.get("id") or "artifact"),
-                    filename=str(raw.get("local_name") or raw.get("id")),
-                    url=raw.get("url"),
-                    size=raw.get("size"),
-                    sha256=raw.get("sha256"),
-                    quality=raw.get("quality"),
-                    component=raw.get("component"),
-                    format=raw.get("format"),
-                    metadata={
-                        "id": raw.get("id"),
-                        "handling": raw.get("handling"),
-                        **(raw.get("metadata") or {}),
-                    },
-                )
-            )
-        runtime = entry.get("runtime") or {}
-        metadata = {
-            "model_version": entry.get("model_version"),
-            "frontend": entry.get("frontend"),
-            "language_codes": entry.get("language_codes") or [],
-            "runtime": runtime,
-            "distribution_id": selected.get("id"),
-            "distribution_choices": choices,
-            "release_tag": selected.get("release_tag"),
-        }
-        result.append(
-            CatalogItem(
-                system="kokoro",
-                id=str(model_id),
-                kind="model",
-                artifacts=tuple(artifacts),
-                sample_rate=entry.get("sample_rate"),
-                voices=tuple(runtime.get("voices") or ()),
-                default_voice=runtime.get("default_voice"),
-                metadata=metadata,
-            )
-        )
+        result.append(_parse_kokoro_entry(model_id, entry))
     return result
 
+
+def _kokoro_models(data: dict[str, Any]) -> dict[str, Mapping[str, Any]]:
+    """Return the raw models mapping from Kokoro catalog data."""
+    models = data.get("models")
+    if not isinstance(models, dict):
+        raise CatalogError("Kokoro catalog is missing the 'models' mapping")
+    return models
 
 def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
     bundles = data.get("bundles")

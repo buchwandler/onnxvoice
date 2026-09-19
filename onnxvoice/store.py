@@ -260,7 +260,8 @@ class AssetStore:
                 manifest_data = {
                     "schema": MANIFEST_SCHEMA_VERSION,
                     "system": item.system,
-                    "id": storage_id,
+                    "id": item.id,
+                    "storage_id": storage_id,
                     "kind": item.kind,
                     "sample_rate": item.sample_rate,
                     "voices": list(item.voices),
@@ -286,7 +287,7 @@ class AssetStore:
                 if target.exists():
                     shutil.rmtree(target)
                 os.replace(staging, target)
-            installation = self.get(item.system, item.id)
+            installation = self.get(item.system, storage_id)
             self._emit(progress, AssetProgress("install_completed", item.ref, target=str(target)))
             return installation
         except Exception:
@@ -568,13 +569,27 @@ class AssetStore:
             raise ManifestError(f"Manifest must contain an object: {path}")
 
         schema = data.get("schema", 1)
-        if schema not in {1, MANIFEST_SCHEMA_VERSION}:
+        if schema not in {1, 2, MANIFEST_SCHEMA_VERSION}:
             raise ManifestError(f"Unsupported manifest schema {schema!r} in {path}")
         try:
             system = validate_safe_component(data["system"], field_name="system")
-            item_id = validate_safe_component(data["id"], field_name="item id")
+            raw_id = validate_safe_component(data["id"], field_name="item id")
         except (KeyError, ValueError) as exc:
             raise UnsafePathError(f"Invalid manifest identity in {path}: {exc}") from exc
+
+        # Schema 3 introduces separate storage_id; schema 1/2 used a single id
+        # that may have been a hashed storage key for explicit distributions.
+        storage_id = data.get("storage_id")
+        if storage_id is not None:
+            # Schema 3: id is canonical, storage_id is physical
+            try:
+                storage_id = validate_safe_component(storage_id, field_name="storage id")
+            except ValueError as exc:
+                raise UnsafePathError(f"Invalid storage id in {path}: {exc}") from exc
+            item_id = raw_id
+        else:
+            # Schema 1/2: recover canonical id from legacy hashed form
+            item_id, storage_id = cls._recover_legacy_identity(data, raw_id, path)
 
         root = path.parent.resolve()
         raw_artifacts = data.get("artifacts")
@@ -628,7 +643,29 @@ class AssetStore:
             voices=tuple(data.get("voices") or ()),
             default_voice=data.get("default_voice"),
             metadata=metadata,
+            storage_id=storage_id,
         )
+
+    _LEGACY_DIST_PATTERN = __import__("re").compile(r"^(.+)--dist-[0-9a-f]{16}$")
+
+    @classmethod
+    def _recover_legacy_identity(
+        cls, data: dict[str, Any], raw_id: str, path: Path
+    ) -> tuple[str, str | None]:
+        """Recover canonical id from legacy schema 1/2 manifests.
+
+        A schema-2 manifest written by the old explicit-distribution code may
+        have stored the hashed storage key as ``id``.  Detect and recover the
+        canonical prefix when metadata confirms it.
+        """
+        metadata = data.get("metadata") or {}
+        cache_id = metadata.get("cache_id")
+        has_selected = "selected_distribution" in metadata
+        match = cls._LEGACY_DIST_PATTERN.match(raw_id)
+        if match and has_selected and cache_id == raw_id:
+            canonical = match.group(1)
+            return canonical, raw_id
+        return raw_id, None
 
     @staticmethod
     def _storage_item_id(item: CatalogItem) -> str:

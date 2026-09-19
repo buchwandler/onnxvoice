@@ -20,15 +20,16 @@ from .runtime import OnnxSession, available_providers
 from .store import AssetStore
 from .systems import SplitKokoroRuntime, register_adapter, registered_systems
 from .types import (
+    Artifact,
     AssetProgress,
     CatalogItem,
     InferenceResult,
     Installation,
+    InstalledArtifact,
     RuntimeDiagnostic,
     SessionDiagnostic,
     TensorSpec,
 )
-from .validation import validate_audio, validate_onnx, verify_installation
 
 _default: OnnxVoice | None = None
 
@@ -70,9 +71,12 @@ def installed(system: str | None = None) -> list[Installation]:
     return _manager().installed(system)
 
 
-def where(ref: str):
-    return _manager().where(ref)
+def where(ref: str, **kwargs):
+    return _manager().where(ref, **kwargs)
 
+
+def remove(ref: str, **kwargs):
+    return _manager().remove(ref, **kwargs)
 
 __all__ = [
     "__version__",
@@ -80,7 +84,9 @@ __all__ = [
     "CatalogClient",
     "AssetStore",
     "OnnxSession",
+    "Artifact",
     "AssetProgress",
+    "InstalledArtifact",
     "NotInstalledError",
     "InferenceResult",
     "TensorSpec",
@@ -103,4 +109,5 @@ __all__ = [
     "load_local",
     "installed",
     "where",
+    "remove",
 ]

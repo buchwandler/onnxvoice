@@ -45,21 +45,29 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser = sub.add_parser("install", help="Install a model/voice from a catalog")
     install_parser.add_argument("ref", help="e.g. piper:en_US-lessac-medium or kokoro:v1.0")
     install_parser.add_argument("--quality")
+    install_parser.add_argument("--distribution")
     install_parser.add_argument("--refresh", action="store_true")
     install_parser.add_argument("--force", action="store_true")
 
     path_parser = sub.add_parser("path", help="Print an installed model/voice path")
     path_parser.add_argument("ref")
+    path_parser.add_argument("--quality")
+    path_parser.add_argument("--distribution")
 
     show_parser = sub.add_parser("show", help="Show an installed manifest")
     show_parser.add_argument("ref")
+    show_parser.add_argument("--quality")
+    show_parser.add_argument("--distribution")
 
     remove_parser = sub.add_parser("remove", help="Remove an installation")
     remove_parser.add_argument("ref")
+    remove_parser.add_argument("--quality")
+    remove_parser.add_argument("--distribution")
 
     verify_parser = sub.add_parser("verify", help="Verify checksums for an installation")
     verify_parser.add_argument("ref")
-
+    verify_parser.add_argument("--quality")
+    verify_parser.add_argument("--distribution")
     cache_parser = sub.add_parser("cache", help="Show cache information")
     cache_sub = cache_parser.add_subparsers(dest="cache_command", required=True)
     cache_sub.add_parser("info")
@@ -182,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
             installed = manager.install(
                 args.ref,
                 quality=args.quality,
+                distribution=getattr(args, "distribution", None),
                 refresh=args.refresh,
                 force=args.force,
             )
@@ -189,22 +198,42 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "path":
-            print(manager.where(args.ref))
+            print(manager.where(
+                args.ref,
+                quality=getattr(args, "quality", None),
+                distribution=getattr(args, "distribution", None),
+            ))
             return 0
 
         if args.command == "show":
-            system, item_id = args.ref.split(":", 1)
-            installation = manager.store.get(system, item_id)
+            installation = manager.show(
+                args.ref,
+                quality=getattr(args, "quality", None),
+                distribution=getattr(args, "distribution", None),
+            )
             print((installation.path / "manifest.json").read_text(encoding="utf-8"), end="")
             return 0
 
         if args.command == "remove":
-            manager.remove(args.ref)
+            manager.remove(
+                args.ref,
+                quality=getattr(args, "quality", None),
+                distribution=getattr(args, "distribution", None),
+            )
             return 0
 
         if args.command == "verify":
-            system, item_id = args.ref.split(":", 1)
-            report = verify_installation(manager.store, manager.store.get(system, item_id))
+            manager.verify(
+                args.ref,
+                quality=getattr(args, "quality", None),
+                distribution=getattr(args, "distribution", None),
+            )
+            installation = manager.show(
+                args.ref,
+                quality=getattr(args, "quality", None),
+                distribution=getattr(args, "distribution", None),
+            )
+            report = verify_installation(manager.store, installation)
             print(json.dumps({"ok": report.ok, "checks": report.checks}))
             return 0
 
