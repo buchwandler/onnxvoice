@@ -1,0 +1,65 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.1.3
+git_base_ref: d87cb9c89b0d66cb49cfac1d0873bf6d64333a18
+git_base_sha: d87cb9c89b0d66cb49cfac1d0873bf6d64333a18
+git_head_ref: cc690a6ace8e892cff29d065bda5b89ab79354fd
+git_head_sha: cc690a6ace8e892cff29d065bda5b89ab79354fd
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added direct model lookup and alias resolution for Kokoro catalog with CatalogItem helper methods for artifact querying"
+    status: accepted
+    source_refs:
+      - git:e45e3f43dc7756e9bb8caf2f87763e54b6da8ab6
+    paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    sources:
+      - git:e45e3f43dc7756e9bb8caf2f87763e54b6da8ab6
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: internal
+    summary: "Improved pre-commit formatting and import organization"
+    status: accepted
+    source_refs:
+      - git:ab74586cce5f3553ea61f0343441b7320dde1fa0
+    paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    sources:
+      - git:ab74586cce5f3553ea61f0343441b7320dde1fa0
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+    internal: true
+  - kind: internal
+    summary: "Fixed import ordering in manager module"
+    status: accepted
+    source_refs:
+      - git:cc690a6ace8e892cff29d065bda5b89ab79354fd
+    paths:
+      - onnxvoice/manager.py
+    sources:
+      - git:cc690a6ace8e892cff29d065bda5b89ab79354fd
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+    internal: true

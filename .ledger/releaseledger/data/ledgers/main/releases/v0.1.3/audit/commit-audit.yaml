@@ -1,0 +1,102 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 3
+release_version: v0.1.3
+git_base_ref: v0.1.2
+git_base_sha: d87cb9c89b0d66cb49cfac1d0873bf6d64333a18
+git_head_ref: HEAD
+git_head_sha: cc690a6ace8e892cff29d065bda5b89ab79354fd
+git_range: d87cb9c89b0d66cb49cfac1d0873bf6d64333a18..cc690a6ace8e892cff29d065bda5b89ab79354fd
+commit_count: 3
+rows:
+  - sha: e45e3f43dc7756e9bb8caf2f87763e54b6da8ab6
+    source_ref: git:e45e3f43dc7756e9bb8caf2f87763e54b6da8ab6
+    short_sha: e45e3f4
+    changed_paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    stats:
+      files_changed: 8
+      insertions: 623
+      deletions: 136
+    inspected: true
+    inspected_paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    observed_behavior:
+      Improved Kokoro catalog with direct model ID lookup, alias resolution,
+      CatalogItem helper properties (selected_distribution, distribution_choices, selected_quality),
+      and artifact query methods (artifacts_for, artifact, require_artifact). Bumped
+      manifest schema to v3.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: improve catalog for kokoro"
+    target_entry_id: entry-0001
+    notes: ""
+  - sha: ab74586cce5f3553ea61f0343441b7320dde1fa0
+    source_ref: git:ab74586cce5f3553ea61f0343441b7320dde1fa0
+    short_sha: ab74586
+    changed_paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    stats:
+      files_changed: 7
+      insertions: 29
+      deletions: 35
+    inspected: true
+    inspected_paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    observed_behavior:
+      Pre-commit formatting cleanup, import sorting, and minor code
+      style adjustments
+    public_impact: internal
+    decision: internal
+    stale: false
+    evidence_subject: "chore: pre-commit"
+    target_entry_id: entry-0002
+    notes: ""
+  - sha: cc690a6ace8e892cff29d065bda5b89ab79354fd
+    source_ref: git:cc690a6ace8e892cff29d065bda5b89ab79354fd
+    short_sha: cc690a6
+    changed_paths:
+      - onnxvoice/manager.py
+    stats:
+      files_changed: 1
+      insertions: 1
+      deletions: 0
+    inspected: true
+    inspected_paths:
+      - onnxvoice/manager.py
+    observed_behavior: Sorted imports in manager module for consistency
+    public_impact: internal
+    decision: internal
+    stale: false
+    evidence_subject: "fix: sort imports in manager.py"
+    target_entry_id: entry-0003
+    notes: ""

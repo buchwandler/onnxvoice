@@ -1,0 +1,47 @@
+rows:
+  - sha: e45e3f43dc7756e9bb8caf2f87763e54b6da8ab6
+    inspected: true
+    inspected_paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    observed_behavior: "Improved Kokoro catalog with direct model ID lookup, alias resolution, CatalogItem helper properties (selected_distribution, distribution_choices, selected_quality), and artifact query methods (artifacts_for, artifact, require_artifact). Bumped manifest schema to v3."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: ab74586cce5f3553ea61f0343441b7320dde1fa0
+    inspected: true
+    inspected_paths:
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_manifest.py
+    observed_behavior: "Pre-commit formatting cleanup, import sorting, and minor code style adjustments"
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: cc690a6ace8e892cff29d065bda5b89ab79354fd
+    inspected: true
+    inspected_paths:
+      - onnxvoice/manager.py
+    observed_behavior: "Sorted imports in manager module for consistency"
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
