@@ -99,7 +99,7 @@ class OnnxVoice:
         include_retired: bool = False,
         include_unassigned: bool = True,
         progress: ProgressCallback | None = None,
-    ) -> list[VoiceRecord]:
+    ) -> builtins.list[VoiceRecord]:
         """List flattened catalog voices joined to stable selector identities."""
         from .inventory import language_codes_from_metadata, matches_language
         from .voice_selectors import get_voice_selector_registry

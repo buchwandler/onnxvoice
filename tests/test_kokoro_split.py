@@ -108,8 +108,10 @@ def test_split_runtime_executes_graph_and_is_seeded(tmp_path) -> None:
     np.testing.assert_array_equal(first.timings, np.array([1, 1]))
     assert first.audio.dtype == np.float32
     assert first.audio.ndim == 1
+    prosody_seen = sessions["prosody"].seen
+    assert prosody_seen is not None
     np.testing.assert_array_equal(
-        sessions["prosody"].seen["input_ids"], np.array([[0, 1, 2, 0]], dtype=np.int64)
+        prosody_seen["input_ids"], np.array([[0, 1, 2, 0]], dtype=np.int64)
     )
     assert set(first.outputs) == {"pred_dur", "f0_curve", "n_curve"}
     adapter.close()

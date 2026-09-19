@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from onnxvoice.inventory import (
     InventoryFilter,
@@ -285,9 +286,9 @@ class TestSizeHelpers:
 # ---------------------------------------------------------------------------
 
 
-def _make_record(**kwargs) -> InventoryRecord:
+def _make_record(**kwargs: Any) -> InventoryRecord:
     """Helper to create InventoryRecord with defaults."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "system": "piper",
         "id": "test",
         "kind": "voice",

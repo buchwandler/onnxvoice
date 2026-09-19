@@ -405,7 +405,7 @@ def build_catalog(
     }
 
 
-def verify_catalog(catalog: dict[str, Any]) -> None:
+def verify_catalog(catalog: Any) -> None:
     """Verify a Pocket catalog against the contract."""
     _require(isinstance(catalog, dict), "Catalog must be an object")
 

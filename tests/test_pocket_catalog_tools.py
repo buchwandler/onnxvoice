@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,7 +21,7 @@ from onnxvoice.catalog_tools.pocket import (
     verify_catalog,
 )
 
-SAMPLE_CATALOG = {
+SAMPLE_CATALOG: dict[str, Any] = {
     "schema": 1,
     "kind": "pocket-bundle-catalog",
     "source": {
