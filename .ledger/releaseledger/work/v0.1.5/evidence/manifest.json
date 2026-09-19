@@ -1,0 +1,58 @@
+{
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "additions": 3079,
+      "deletions": 64,
+      "patch_file": "c0a7c1d.patch",
+      "patch_sha256": "2d0faf2b69a226634b06497506fb893993c48c4490c9b74a07531d8b58b096a4",
+      "paths": [
+        "README.md",
+        "onnxvoice/_table.py",
+        "onnxvoice/catalog.py",
+        "onnxvoice/cli.py",
+        "onnxvoice/inventory.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/store.py",
+        "onnxvoice/types.py",
+        "tests/test_cache_usage.py",
+        "tests/test_cli.py",
+        "tests/test_inventory.py",
+        "tests/test_store.py",
+        "tests/test_updates.py"
+      ],
+      "sha": "c0a7c1d6faf9412da57dc5f27008e717a23db509",
+      "short_sha": "c0a7c1d",
+      "source_ref": "git:c0a7c1d6faf9412da57dc5f27008e717a23db509"
+    },
+    {
+      "additions": 51,
+      "deletions": 76,
+      "patch_file": "7357ca4.patch",
+      "patch_sha256": "76044f4a4fa91e3f8f2b699349c088d807af35c88a9198b1bf3193eb4035a3e9",
+      "paths": [
+        "onnxvoice/_table.py",
+        "onnxvoice/catalog.py",
+        "onnxvoice/cli.py",
+        "onnxvoice/inventory.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/store.py",
+        "tests/test_cache_usage.py",
+        "tests/test_cli.py",
+        "tests/test_inventory.py",
+        "tests/test_updates.py"
+      ],
+      "sha": "7357ca4b357aa6e04dbae20d27845c14063f6d89",
+      "short_sha": "7357ca4",
+      "source_ref": "git:7357ca4b357aa6e04dbae20d27845c14063f6d89"
+    }
+  ],
+  "git_base_ref": "2864e892841bcd2e57eaf2afe642eeafa6df3cd0",
+  "git_base_sha": "2864e892841bcd2e57eaf2afe642eeafa6df3cd0",
+  "git_head_ref": "7357ca4b357aa6e04dbae20d27845c14063f6d89",
+  "git_head_sha": "7357ca4b357aa6e04dbae20d27845c14063f6d89",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.1.5",
+  "schema_version": 1
+}

@@ -1,0 +1,58 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.1.5
+git_base_ref: 2864e892841bcd2e57eaf2afe642eeafa6df3cd0
+git_base_sha: 2864e892841bcd2e57eaf2afe642eeafa6df3cd0
+git_head_ref: 7357ca4b357aa6e04dbae20d27845c14063f6d89
+git_head_sha: 7357ca4b357aa6e04dbae20d27845c14063f6d89
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: ""
+    status: draft
+    source_refs:
+      - git:c0a7c1d6faf9412da57dc5f27008e717a23db509
+    paths:
+      - README.md
+      - onnxvoice/_table.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/inventory.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_cache_usage.py
+      - tests/test_cli.py
+      - tests/test_inventory.py
+      - tests/test_store.py
+      - tests/test_updates.py
+    sources:
+      - git:c0a7c1d6faf9412da57dc5f27008e717a23db509
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: internal
+    summary: ""
+    status: draft
+    source_refs:
+      - git:7357ca4b357aa6e04dbae20d27845c14063f6d89
+    paths:
+      - onnxvoice/_table.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/inventory.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - tests/test_cache_usage.py
+      - tests/test_cli.py
+      - tests/test_inventory.py
+      - tests/test_updates.py
+    sources:
+      - git:7357ca4b357aa6e04dbae20d27845c14063f6d89
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

@@ -1,0 +1,373 @@
+ onnxvoice/_table.py       |  2 --
+ onnxvoice/catalog.py      |  2 +-
+ onnxvoice/cli.py          | 11 +++++------
+ onnxvoice/inventory.py    | 34 +++++++++++++---------------------
+ onnxvoice/manager.py      | 17 +++++++++--------
+ onnxvoice/store.py        |  2 ++
+ tests/test_cache_usage.py |  7 +------
+ tests/test_cli.py         |  6 +-----
+ tests/test_inventory.py   | 39 +++++++++++++++++----------------------
+ tests/test_updates.py     |  7 ++-----
+ 10 files changed, 51 insertions(+), 76 deletions(-)
+
+diff --git a/onnxvoice/_table.py b/onnxvoice/_table.py
+index adfe7d3..e6b8d49 100644
+--- a/onnxvoice/_table.py
++++ b/onnxvoice/_table.py
+@@ -8,12 +8,10 @@ TTY-aware truncation, and plain/tsv/json format modes.
+ from __future__ import annotations
+
+ import json
+-import os
+ import sys
+ from collections.abc import Sequence
+ from typing import Any, TextIO
+
+-
+ # ---------------------------------------------------------------------------
+ # Byte formatting (IEC units)
+ # ---------------------------------------------------------------------------
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index 59b6703..32583ee 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -467,7 +467,7 @@ def filter_items(
+     language: str | None = None,
+     quality: str | None = None,
+ ) -> list[CatalogItem]:
+-    from .inventory import language_codes_from_metadata, matches_language
++    from .inventory import matches_language
+
+     result = list(items)
+     if language:
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 98eb063..2d37709 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -211,7 +211,6 @@ def build_parser() -> argparse.ArgumentParser:
+
+ def _cmd_list(args: argparse.Namespace) -> int:
+     from ._table import format_bytes, render_inventory
+-    from .inventory import InventoryRecord
+
+     manager = _manager(args)
+
+@@ -424,12 +423,12 @@ def _cmd_info(args: argparse.Namespace) -> int:
+         return 2
+
+     from .inventory import (
+-        language_codes_from_metadata,
+-        gender_from_metadata,
+-        effective_quality,
+         effective_distribution,
+-        version_label,
++        effective_quality,
++        gender_from_metadata,
++        language_codes_from_metadata,
+         logical_size_bytes,
++        version_label,
+     )
+
+     meta = installation.metadata
+@@ -586,7 +585,7 @@ def _cmd_remove(args: argparse.Namespace) -> int:
+
+
+ def _cmd_cache_info(args: argparse.Namespace) -> int:
+-    from ._table import format_bytes, render_inventory
++    from ._table import format_bytes
+
+     manager = _manager(args)
+     usage = manager.store.usage()
+diff --git a/onnxvoice/inventory.py b/onnxvoice/inventory.py
+index dd25164..a0b843c 100644
+--- a/onnxvoice/inventory.py
++++ b/onnxvoice/inventory.py
+@@ -8,15 +8,11 @@ and artifact-level update comparison.
+ from __future__ import annotations
+
+ import hashlib
+-import json
+-from collections.abc import Iterable, Mapping, Sequence
+-from dataclasses import dataclass, field
+-from pathlib import Path
++from collections.abc import Iterable, Mapping
++from dataclasses import dataclass
+ from typing import Any, Literal
+
+-from .catalog import CatalogClient, filter_items as catalog_filter_items
+-from .types import CatalogItem, Installation, InstalledArtifact, Artifact
+-
++from .types import Artifact, CatalogItem, Installation, InstalledArtifact
+
+ # ---------------------------------------------------------------------------
+ # Language normalization
+@@ -94,9 +90,7 @@ def _match_code(pattern: str, code: str) -> bool:
+         return True
+     # Pattern "en" matches "en-US", "en-GB", etc.
+     # But pattern "en-US" should NOT match "en-GB"
+-    if "-" not in pattern and code.startswith(pattern + "-"):
+-        return True
+-    return False
++    return "-" not in pattern and code.startswith(pattern + "-")
+
+
+ def matches_language(metadata: Mapping[str, Any], language_filter: str) -> bool:
+@@ -331,15 +325,13 @@ def matches_filter(record: InventoryRecord, spec: InventoryFilter) -> bool:
+             return False
+     if spec.genders and record.gender not in spec.genders:
+         return False
+-    if spec.qualities:
+-        if record.quality is None or record.quality not in spec.qualities:
+-            return False
+-    if spec.distributions:
+-        if record.distribution is None or record.distribution not in spec.distributions:
+-            return False
+-    if spec.statuses and record.status not in spec.statuses:
++    if spec.qualities and (record.quality is None or record.quality not in spec.qualities):
+         return False
+-    return True
++    if spec.distributions and (
++        record.distribution is None or record.distribution not in spec.distributions
++    ):
++        return False
++    return not (spec.statuses and record.status not in spec.statuses)
+
+
+ # ---------------------------------------------------------------------------
+@@ -374,9 +366,9 @@ def compare_installation_to_catalog(
+         installed_by_key[key] = artifact
+
+     catalog_by_key: dict[str, Artifact] = {}
+-    for artifact in item.artifacts:
+-        key = _artifact_identity_key(artifact)
+-        catalog_by_key[key] = artifact
++    for cat_art in item.artifacts:
++        key = _artifact_identity_key(cat_art)
++        catalog_by_key[key] = cat_art
+
+     # If no catalog artifacts match at all, it might be a different selection
+     if not installed_by_key and not catalog_by_key:
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index e3d4db2..85fa942 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -1,15 +1,18 @@
+ from __future__ import annotations
+
++import builtins
+ import hashlib
+ import json
+ import warnings
+ from collections.abc import Mapping, Sequence
++from contextlib import suppress
+ from pathlib import Path
+ from typing import Any
+
+ from .catalog import CatalogClient, filter_items, parse_ref
+ from .checksums import digest_file
+ from .errors import AssetNotFoundError, NotInstalledError
++from .inventory import InventoryRecord
+ from .store import AssetStore, ProgressCallback
+ from .systems import get_adapter
+ from .types import CatalogItem, Installation, InstalledArtifact
+@@ -270,7 +273,7 @@ class OnnxVoice:
+     def installed(self, system: str | None = None) -> Installations:
+         return self.store.installed(system)
+
+-    def find_installed(self, ref: str) -> list[Installation]:
++    def find_installed(self, ref: str) -> builtins.list[Installation]:
+         """Find all installed variants matching a canonical ref.
+
+         Returns installations whose system and canonical id match.
+@@ -298,7 +301,7 @@ class OnnxVoice:
+         refresh: bool = False,
+         check_updates: bool = False,
+         progress: ProgressCallback | None = None,
+-    ) -> list[InventoryRecord]:
++    ) -> builtins.list[InventoryRecord]:
+         """Query merged inventory with optional filtering and update checking."""
+         from .inventory import InventoryFilter, query_inventory
+
+@@ -311,12 +314,10 @@ class OnnxVoice:
+                 else:
+                     all_items = []
+                     for sys in self.catalog.systems():
+-                        try:
++                        with suppress(Exception):
+                             all_items.extend(
+                                 self.catalog.list(sys, refresh=refresh, progress=progress)
+-                            )
+-                        except Exception:
+-                            pass  # Partial catalog failure is OK
++                            )  # Partial catalog failure is OK
+                     catalog_items = all_items
+             except Exception:
+                 if installed_only:
+@@ -328,7 +329,7 @@ class OnnxVoice:
+             catalog_items = []
+
+         # Build filter spec
+-        statuses = ()
++        statuses: tuple[str, ...] = ()
+         if status:
+             statuses = (status,)
+
+@@ -357,7 +358,7 @@ class OnnxVoice:
+         kind: str | None = None,
+         refresh: bool = True,
+         progress: ProgressCallback | None = None,
+-    ) -> list[InventoryRecord]:
++    ) -> builtins.list[InventoryRecord]:
+         """Check for available updates. Refreshes catalogs by default."""
+         return self.inventory(
+             system=system,
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index 5d59079..06794c4 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -26,7 +26,9 @@ from .types import (
+     MANIFEST_SCHEMA_VERSION,
+     Artifact,
+     AssetProgress,
++    CacheUsage,
+     CatalogItem,
++    GcReport,
+     Installation,
+     InstalledArtifact,
+     validate_relative_path,
+diff --git a/tests/test_cache_usage.py b/tests/test_cache_usage.py
+index fde2453..d79c929 100644
+--- a/tests/test_cache_usage.py
++++ b/tests/test_cache_usage.py
+@@ -3,15 +3,10 @@
+ from __future__ import annotations
+
+ import hashlib
+-import os
+-from pathlib import Path
+-
+-import pytest
+
+ from onnxvoice.store import AssetStore
+ from onnxvoice.types import Artifact, CatalogItem
+
+-
+ # ---------------------------------------------------------------------------
+ # Cache usage tests
+ # ---------------------------------------------------------------------------
+@@ -24,7 +19,7 @@ class TestCacheUsage:
+             system=system,
+             id=item_id,
+             kind="model",
+-            artifacts=(Artifact("model", "model.onnx", f"file:///dev/null", len(content), sha),),
++            artifacts=(Artifact("model", "model.onnx", "file:///dev/null", len(content), sha),),
+         )
+
+     def test_empty_cache_usage(self, tmp_path):
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index d73d6b2..60f3c48 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -4,12 +4,8 @@ from __future__ import annotations
+
+ import json
+ from io import StringIO
+-from pathlib import Path
+-
+-import pytest
+-
+-from onnxvoice._table import format_bytes, render_json, render_table, render_inventory
+
++from onnxvoice._table import format_bytes, render_inventory, render_json, render_table
+
+ # ---------------------------------------------------------------------------
+ # format_bytes tests
+diff --git a/tests/test_inventory.py b/tests/test_inventory.py
+index 1b02f00..5679f03 100644
+--- a/tests/test_inventory.py
++++ b/tests/test_inventory.py
+@@ -4,14 +4,10 @@ from __future__ import annotations
+
+ from pathlib import Path
+
+-import pytest
+-
+ from onnxvoice.inventory import (
+     InventoryFilter,
+     InventoryRecord,
+-    _display_code,
+     _match_code,
+-    catalog_content_fingerprint,
+     catalog_size_bytes,
+     compare_installation_to_catalog,
+     effective_distribution,
+@@ -30,8 +26,7 @@ from onnxvoice.inventory import (
+     query_inventory,
+     version_label,
+ )
+-from onnxvoice.types import Artifact, CatalogItem, InstalledArtifact, Installation
+-
++from onnxvoice.types import Artifact, CatalogItem, Installation, InstalledArtifact
+
+ # ---------------------------------------------------------------------------
+ # Language normalization tests
+@@ -292,22 +287,22 @@ class TestSizeHelpers:
+
+ def _make_record(**kwargs) -> InventoryRecord:
+     """Helper to create InventoryRecord with defaults."""
+-    defaults = dict(
+-        system="piper",
+-        id="test",
+-        kind="voice",
+-        language_codes=("en-US",),
+-        gender="unknown",
+-        quality=None,
+-        distribution=None,
+-        version=None,
+-        installed=False,
+-        installation=None,
+-        catalog_item=None,
+-        size_bytes=100,
+-        status="available",
+-        update_status="not_checked",
+-    )
++    defaults = {
++        "system": "piper",
++        "id": "test",
++        "kind": "voice",
++        "language_codes": ("en-US",),
++        "gender": "unknown",
++        "quality": None,
++        "distribution": None,
++        "version": None,
++        "installed": False,
++        "installation": None,
++        "catalog_item": None,
++        "size_bytes": 100,
++        "status": "available",
++        "update_status": "not_checked",
++    }
+     defaults.update(kwargs)
+     return InventoryRecord(**defaults)
+
+diff --git a/tests/test_updates.py b/tests/test_updates.py
+index af195e0..431fb9e 100644
+--- a/tests/test_updates.py
++++ b/tests/test_updates.py
+@@ -4,14 +4,11 @@ from __future__ import annotations
+
+ from pathlib import Path
+
+-import pytest
+-
+ from onnxvoice.inventory import (
+-    UpdateComparison,
+-    compare_installation_to_catalog,
+     catalog_content_fingerprint,
++    compare_installation_to_catalog,
+ )
+-from onnxvoice.types import Artifact, CatalogItem, InstalledArtifact, Installation
++from onnxvoice.types import Artifact, CatalogItem, Installation, InstalledArtifact
+
+
+ def _inst(artifacts):

@@ -44,3 +44,11 @@
 {"data":{"updated_rows":3},"event":"audit.updated","event_id":"event-0044","record_revisions":{"commit_audit_sheet":2},"release_version":"v0.1.3","schema_version":2}
 {"data":{"entry_ids":["entry-0001","entry-0002","entry-0003"],"synced_audit_rows":3},"event":"entry.batch_added","event_id":"event-0045","record_revisions":{"commit_audit_sheet":3,"entry:v0.1.3/entry-0001":1,"entry:v0.1.3/entry-0002":1,"entry:v0.1.3/entry-0003":1,"release:v0.1.3":3},"release_version":"v0.1.3","schema_version":2}
 {"data":{"released_at":"2026-09-19"},"event":"release.finalized","event_id":"event-0046","record_revisions":{"release:v0.1.3":4},"release_version":"v0.1.3","schema_version":2}
+{"data":{"status":"released"},"event":"release.created","event_id":"event-0047","record_revisions":{"release:0.1.4":1},"release_version":"0.1.4","schema_version":2}
+{"data":{"fields":["git_base_ref","git_base_sha","git_commit_count","git_head_ref","git_head_sha","git_range"]},"event":"release.updated","event_id":"event-0048","record_revisions":{"release:0.1.4":2},"release_version":"0.1.4","schema_version":2}
+{"data":{"status":"planned"},"event":"release.created","event_id":"event-0049","record_revisions":{"release:v0.1.5":1},"release_version":"v0.1.5","schema_version":2}
+{"data":{"fields":["git_base_ref","git_base_sha","git_commit_count","git_head_ref","git_head_sha","git_range"]},"event":"release.updated","event_id":"event-0050","record_revisions":{"release:v0.1.5":2},"release_version":"v0.1.5","schema_version":2}
+{"data":{"row_count":2},"event":"audit.created","event_id":"event-0051","record_revisions":{"commit_audit_sheet":1},"release_version":"v0.1.5","schema_version":2}
+{"data":{"updated_rows":2},"event":"audit.updated","event_id":"event-0052","record_revisions":{"commit_audit_sheet":2},"release_version":"v0.1.5","schema_version":2}
+{"data":{"entry_ids":["entry-0001","entry-0002"],"synced_audit_rows":2},"event":"entry.batch_added","event_id":"event-0053","record_revisions":{"commit_audit_sheet":3,"entry:v0.1.5/entry-0001":1,"entry:v0.1.5/entry-0002":1,"release:v0.1.5":3},"release_version":"v0.1.5","schema_version":2}
+{"data":{"released_at":"2026-09-19"},"event":"release.finalized","event_id":"event-0054","record_revisions":{"release:v0.1.5":4},"release_version":"v0.1.5","schema_version":2}

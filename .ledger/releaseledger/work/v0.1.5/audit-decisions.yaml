@@ -1,0 +1,44 @@
+rows:
+  - sha: c0a7c1d6faf9412da57dc5f27008e717a23db509
+    inspected: false
+    inspected_paths:
+      - README.md
+      - onnxvoice/_table.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/inventory.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_cache_usage.py
+      - tests/test_cli.py
+      - tests/test_inventory.py
+      - tests/test_store.py
+      - tests/test_updates.py
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: 7357ca4b357aa6e04dbae20d27845c14063f6d89
+    inspected: false
+    inspected_paths:
+      - onnxvoice/_table.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/inventory.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - tests/test_cache_usage.py
+      - tests/test_cli.py
+      - tests/test_inventory.py
+      - tests/test_updates.py
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

@@ -1,0 +1,3403 @@
+ README.md                 | 112 ++++++++-
+ onnxvoice/_table.py       | 253 +++++++++++++++++++
+ onnxvoice/catalog.py      |  17 +-
+ onnxvoice/cli.py          | 593 ++++++++++++++++++++++++++++++++++++++++++---
+ onnxvoice/inventory.py    | 567 +++++++++++++++++++++++++++++++++++++++++++
+ onnxvoice/manager.py      | 153 +++++++++++-
+ onnxvoice/store.py        | 175 +++++++++++++-
+ onnxvoice/types.py        |  24 ++
+ tests/test_cache_usage.py | 196 +++++++++++++++
+ tests/test_cli.py         | 126 ++++++++++
+ tests/test_inventory.py   | 602 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_store.py       |   3 +-
+ tests/test_updates.py     | 322 +++++++++++++++++++++++++
+ 13 files changed, 3079 insertions(+), 64 deletions(-)
+
+diff --git a/README.md b/README.md
+index ca827b3..502ed79 100644
+--- a/README.md
++++ b/README.md
+@@ -83,25 +83,125 @@ A local path or HTTP(S) URL is accepted.
+
+ ## CLI
+
++### Inventory and discovery
++
++```bash
++# Everything installed locally
++onnxvoice installed
++
++# Installed US English voices
++onnxvoice installed --kind voice --lang en-US
++
++# Installed male US English voices
++onnxvoice installed --kind voice --lang en-US --gender male
++
++# Installed + available male US English voices (merged inventory)
++onnxvoice list --kind voice --lang en-US --gender male
++
++# Only available (not installed) entries
++onnxvoice list --status available
++
++# JSON output for scripting
++onnxvoice installed --format json
++```
++
++### Updates
++
++```bash
++# Check what's outdated (refreshes catalogs by default)
++onnxvoice updates
++
++# Check against cached catalogs only
++onnxvoice updates --cached
++
++# Update one asset (preserves quality/distribution selection)
++onnxvoice update piper:en_US-lessac-medium
++
++# Update all outdated assets
++onnxvoice update --all
++```
++
++### Storage
++
++```bash
++# Show cache usage with byte totals
++onnxvoice cache info
++
++# Show cache usage as JSON
++onnxvoice cache info --format json
++
++# Show what GC would remove
++onnxvoice cache gc --dry-run
++
++# Remove orphaned blobs
++onnxvoice cache gc
++```
++
++### Removal
++
++```bash
++# Show what would be removed (dry run)
++onnxvoice remove piper:en_US-lessac-medium --dry-run
++
++# Remove one asset
++onnxvoice remove piper:en_US-lessac-medium
++
++# Remove and clean up orphaned blobs
++onnxvoice remove piper:en_US-lessac-medium --gc
++
++# Remove multiple assets
++onnxvoice remove piper:en_US-lessac-medium kokoro:v1.0
++
++# Remove all variants of a ref
++onnxvoice remove kokoro:v1.0 --all-variants --yes
++```
++
++### Info
++
+ ```bash
+-onnxvoice list --system piper --language de
+-onnxvoice list --system kokoro --quality fp16
++# Detailed info about an installed asset
++onnxvoice info piper:en_US-lessac-medium
++
++# Info with update check
++onnxvoice info piper:en_US-lessac-medium --check-updates
++```
+
++### Install and verify
++
++```bash
+ onnxvoice install piper:en_US-lessac-medium
+ onnxvoice install kokoro:v1.0 --quality fp16
+-
+-onnxvoice list --system piper --installed
+ onnxvoice path piper:en_US-lessac-medium
+ onnxvoice verify piper:en_US-lessac-medium
+ onnxvoice show piper:en_US-lessac-medium
++```
+
+-onnxvoice cache info
+-onnxvoice cache gc
++### Catalog management
+
++```bash
+ onnxvoice catalog piper build --output catalog/voices.json --source-output catalog/source.json
+ onnxvoice catalog piper verify --catalog catalog/voices.json --source catalog/source.json
+ ```
+
++### Filter flags
++
++Common flags for `list`, `installed`, and `updates`:
++
++| Flag                  | Description                             |
++| --------------------- | --------------------------------------- | ------- | ---------------------------- | ---------------- |
++| `--system piper       | kokoro                                  | pocket` | Filter by system             |
++| `--kind voice         | model                                   | bundle` | Filter by kind               |
++| `--lang / --language` | Filter by language (e.g. `en`, `en-US`) |
++| `--gender male        | female                                  | neutral | unknown`                     | Filter by gender |
++| `--quality`           | Filter by quality                       |
++| `--distribution`      | Filter by distribution                  |
++| `--status installed   | available                               | local`  | Filter by status (list only) |
++| `--format table       | plain                                   | json    | tsv`                         | Output format    |
++
++**Note on gender**: Gender metadata depends on authoritative catalog sources. If the catalog does not supply a gender field, entries default to `unknown`. The CLI never infers gender from voice names or IDs.
++
++**Note on installed vs cached blobs**: After `onnxvoice remove REF`, the installation is gone but content-addressed blobs may remain until `onnxvoice cache gc` is run. Use `cache info` to see reclaimable space.
++
+ Kokoro has multiple ONNX model qualities in one distribution. `onnxvoice install kokoro:v1.0` selects `fp32` by default rather than downloading all model variants. Non-model runtime artifacts from the selected distribution are installed with it.
+
+ ## Python API
+diff --git a/onnxvoice/_table.py b/onnxvoice/_table.py
+new file mode 100644
+index 0000000..adfe7d3
+--- /dev/null
++++ b/onnxvoice/_table.py
+@@ -0,0 +1,253 @@
++"""Standard-library table renderer for onnxvoice CLI.
++
++Supports stable column ordering, ANSI suppression on redirect,
++human-readable byte formatting (IEC units), deterministic output,
++TTY-aware truncation, and plain/tsv/json format modes.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import sys
++from collections.abc import Sequence
++from typing import Any, TextIO
++
++
++# ---------------------------------------------------------------------------
++# Byte formatting (IEC units)
++# ---------------------------------------------------------------------------
++
++_IEC_UNITS = [
++    (1 << 40, "TiB"),
++    (1 << 30, "GiB"),
++    (1 << 20, "MiB"),
++    (1 << 10, "KiB"),
++    (1, "B"),
++]
++
++
++def format_bytes(n: int | None) -> str:
++    """Format a byte count in human-readable IEC units.
++
++    Examples:
++        0 -> "0 B"
++        812 -> "812 B"
++        66270000 -> "63.2 MiB"
++        1438814042 -> "1.34 GiB"
++    """
++    if n is None:
++        return "-"
++    if n == 0:
++        return "0 B"
++    abs_n = abs(n)
++    sign = "-" if n < 0 else ""
++    for threshold, unit in _IEC_UNITS:
++        if abs_n >= threshold:
++            value = abs_n / threshold
++            if value >= 100:
++                return f"{sign}{value:.0f} {unit}"
++            elif value >= 10:
++                return f"{sign}{value:.1f} {unit}"
++            else:
++                return f"{sign}{value:.2f} {unit}"
++    return f"{sign}{abs_n} B"
++
++
++# ---------------------------------------------------------------------------
++# Table rendering
++# ---------------------------------------------------------------------------
++
++
++def _is_tty(stream: TextIO) -> bool:
++    """Check if a stream is a TTY."""
++    return hasattr(stream, "isatty") and stream.isatty()
++
++
++def _strip_ansi(text: str) -> str:
++    """Remove ANSI escape sequences from text."""
++    result: list[str] = []
++    i = 0
++    while i < len(text):
++        if text[i] == "\x1b" and i + 1 < len(text) and text[i + 1] == "[":
++            j = i + 2
++            while j < len(text) and text[j] not in "mABCDEFGHJKSTfn":
++                j += 1
++            i = j + 1
++        else:
++            result.append(text[i])
++            i += 1
++    return "".join(result)
++
++
++def _visible_len(text: str) -> int:
++    """Visible length of text after stripping ANSI codes."""
++    return len(_strip_ansi(text))
++
++
++def _truncate(text: str, max_width: int) -> str:
++    """Truncate text to max_width visible characters."""
++    if _visible_len(text) <= max_width:
++        return text
++    # Build up character by character
++    result: list[str] = []
++    visible = 0
++    in_escape = False
++    for ch in text:
++        if ch == "\x1b":
++            in_escape = True
++            result.append(ch)
++            continue
++        if in_escape:
++            result.append(ch)
++            if ch == "m":
++                in_escape = False
++            continue
++        if visible >= max_width - 1:
++            break
++        result.append(ch)
++        visible += 1
++    return "".join(result) + "~"
++
++
++def render_table(
++    columns: Sequence[str],
++    rows: Sequence[Sequence[str]],
++    *,
++    file: TextIO | None = None,
++    max_col_width: int = 40,
++) -> None:
++    """Render a table with stable column ordering.
++
++    - ANSI colors stripped when output is redirected.
++    - Columns aligned to content width (up to max_col_width).
++    - No output if columns/rows are empty.
++    """
++    if file is None:
++        file = sys.stdout
++
++    is_tty = _is_tty(file)
++
++    # Strip ANSI if not a TTY
++    if not is_tty:
++        clean_columns = [_strip_ansi(c) for c in columns]
++        clean_rows = [[_strip_ansi(cell) for cell in row] for row in rows]
++    else:
++        clean_columns = list(columns)
++        clean_rows = [list(row) for row in rows]
++
++    if not clean_columns:
++        return
++
++    # Calculate column widths
++    col_widths = [len(c) for c in clean_columns]
++    for row in clean_rows:
++        for i, cell in enumerate(row):
++            if i < len(col_widths):
++                col_widths[i] = max(col_widths[i], _visible_len(cell))
++
++    # Apply max width
++    col_widths = [min(w, max_col_width) for w in col_widths]
++
++    # Header
++    header_parts = []
++    for i, col in enumerate(clean_columns):
++        w = col_widths[i] if i < len(col_widths) else 0
++        header_parts.append(col.ljust(w))
++    file.write("  ".join(header_parts) + "\n")
++
++    # Separator
++    sep_parts = ["-" * w for w in col_widths]
++    file.write("  ".join(sep_parts) + "\n")
++
++    # Rows
++    for row in clean_rows:
++        parts = []
++        for i in range(len(clean_columns)):
++            cell = row[i] if i < len(row) else ""
++            w = col_widths[i] if i < len(col_widths) else 0
++            if _visible_len(cell) > w and w > 0:
++                cell = _truncate(cell, w)
++            parts.append(cell.ljust(w))
++        file.write("  ".join(parts) + "\n")
++
++
++def render_plain(
++    columns: Sequence[str],
++    rows: Sequence[Sequence[str]],
++    *,
++    file: TextIO | None = None,
++) -> None:
++    """Render one record per line, tab-separated (TSV)."""
++    if file is None:
++        file = sys.stdout
++
++    for row in rows:
++        file.write("\t".join(str(cell) for cell in row) + "\n")
++
++
++def render_tsv(
++    columns: Sequence[str],
++    rows: Sequence[Sequence[str]],
++    *,
++    file: TextIO | None = None,
++) -> None:
++    """Render as TSV with header row."""
++    if file is None:
++        file = sys.stdout
++
++    file.write("\t".join(columns) + "\n")
++    for row in rows:
++        file.write("\t".join(str(cell) for cell in row) + "\n")
++
++
++def render_json(
++    columns: Sequence[str],
++    rows: Sequence[Sequence[str]],
++    *,
++    file: TextIO | None = None,
++    extra: dict[str, Any] | None = None,
++) -> None:
++    """Render as JSON array of objects.
++
++    Each row becomes an object keyed by column names.
++    Extra keys are merged into the root object.
++    """
++    if file is None:
++        file = sys.stdout
++
++    items = []
++    for row in rows:
++        obj: dict[str, Any] = {}
++        for i, col in enumerate(columns):
++            obj[col] = row[i] if i < len(row) else None
++        items.append(obj)
++
++    output: dict[str, Any] = {"items": items}
++    if extra:
++        output.update(extra)
++
++    json.dump(output, file, ensure_ascii=False, indent=2, sort_keys=True)
++    file.write("\n")
++
++
++def render_inventory(
++    columns: Sequence[str],
++    rows: Sequence[Sequence[str]],
++    *,
++    format: str = "table",
++    file: TextIO | None = None,
++    extra: dict[str, Any] | None = None,
++) -> None:
++    """Dispatch to the appropriate renderer based on format string.
++
++    Supported formats: table, plain, tsv, json
++    """
++    if format == "json":
++        render_json(columns, rows, file=file, extra=extra)
++    elif format == "plain":
++        render_plain(columns, rows, file=file)
++    elif format == "tsv":
++        render_tsv(columns, rows, file=file)
++    else:
++        render_table(columns, rows, file=file)
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index 9b031d2..59b6703 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -254,6 +254,7 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
+                     "language": language,
+                     "quality": entry.get("quality"),
+                     "name": entry.get("name"),
++                    "gender": entry.get("gender"),
+                     "num_speakers": entry.get("num_speakers"),
+                     "speaker_id_map": entry.get("speaker_id_map") or {},
+                     "source_revision": source.get("revision"),
+@@ -466,21 +467,11 @@ def filter_items(
+     language: str | None = None,
+     quality: str | None = None,
+ ) -> list[CatalogItem]:
++    from .inventory import language_codes_from_metadata, matches_language
++
+     result = list(items)
+     if language:
+-        lang = language.lower().replace("-", "_")
+-        result = [
+-            item
+-            for item in result
+-            if str((item.metadata.get("language") or {}).get("code", ""))
+-            .lower()
+-            .replace("-", "_")
+-            .startswith(lang)
+-            or any(
+-                str(code).lower().replace("-", "_").startswith(lang)
+-                for code in item.metadata.get("language_codes", ())
+-            )
+-        ]
++        result = [item for item in result if matches_language(item.metadata, language)]
+     if quality:
+         result = [
+             item
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index c33fa84..98eb063 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -30,18 +30,54 @@ def _write_json(path: Path, data: Any) -> None:
+     )
+
+
++def _add_filter_args(parser: argparse.ArgumentParser) -> None:
++    """Add common filter arguments to a parser."""
++    parser.add_argument("--system", choices=registered_systems(), help="Filter by system")
++    parser.add_argument("--kind", choices=["voice", "model", "bundle"], help="Filter by kind")
++    parser.add_argument(
++        "--lang", "--language", dest="language", help="Filter by language (e.g. en-US, en)"
++    )
++    parser.add_argument(
++        "--gender", choices=["male", "female", "neutral", "unknown"], help="Filter by gender"
++    )
++    parser.add_argument("--quality", help="Filter by quality")
++    parser.add_argument("--distribution", help="Filter by distribution")
++    parser.add_argument(
++        "--status", choices=["installed", "available", "local"], help="Filter by status"
++    )
++    parser.add_argument(
++        "--format", choices=["table", "plain", "json", "tsv"], default="table", help="Output format"
++    )
++
++
++def _add_refresh_args(parser: argparse.ArgumentParser) -> None:
++    """Add refresh/offline arguments."""
++    parser.add_argument("--refresh", action="store_true", help="Refresh catalogs")
++
++
+ def build_parser() -> argparse.ArgumentParser:
+     parser = argparse.ArgumentParser(prog="onnxvoice")
+     parser.add_argument("--cache-dir", type=Path, help="Override the shared onnxvoice cache")
+     parser.add_argument("--offline", action="store_true", help="Disable network access")
+     sub = parser.add_subparsers(dest="command", required=True)
+
+-    list_parser = sub.add_parser("list", help="List catalog entries")
+-    list_parser.add_argument("--system", choices=registered_systems())
+-    list_parser.add_argument("--installed", action="store_true")
+-    list_parser.add_argument("--language")
+-    list_parser.add_argument("--quality")
+-    list_parser.add_argument("--refresh", action="store_true")
++    # --- list ---
++    list_parser = sub.add_parser(
++        "list", help="List catalog and installed entries (merged inventory)"
++    )
++    _add_filter_args(list_parser)
++    _add_refresh_args(list_parser)
++    list_parser.add_argument(
++        "--installed", action="store_true", help="Show only installed entries (legacy alias)"
++    )
++
++    # --- installed ---
++    installed_parser = sub.add_parser(
++        "installed", help="List installed entries (local-only, no network)"
++    )
++    _add_filter_args(installed_parser)
++
++    # --- install ---
+     install_parser = sub.add_parser("install", help="Install a model/voice from a catalog")
+     install_parser.add_argument("ref", help="e.g. piper:en_US-lessac-medium or kokoro:v1.0")
+     install_parser.add_argument("--quality")
+@@ -49,30 +85,79 @@ def build_parser() -> argparse.ArgumentParser:
+     install_parser.add_argument("--refresh", action="store_true")
+     install_parser.add_argument("--force", action="store_true")
+
++    # --- updates ---
++    updates_parser = sub.add_parser("updates", help="Check for available updates")
++    _add_filter_args(updates_parser)
++    updates_parser.add_argument("--cached", action="store_true", help="Use cached catalogs only")
++
++    # --- update ---
++    update_parser = sub.add_parser("update", help="Update an installed asset")
++    update_parser.add_argument("ref", nargs="?", help="Reference to update")
++    update_parser.add_argument("--quality")
++    update_parser.add_argument("--distribution")
++    update_parser.add_argument(
++        "--all", action="store_true", dest="update_all", help="Update all outdated assets"
++    )
++    update_parser.add_argument("--force", action="store_true")
++
++    # --- info ---
++    info_parser = sub.add_parser("info", help="Show detailed info about an installed asset")
++    info_parser.add_argument("ref")
++    info_parser.add_argument("--quality")
++    info_parser.add_argument("--distribution")
++    info_parser.add_argument(
++        "--check-updates", action="store_true", help="Check for updates (requires network)"
++    )
++
++    # --- path ---
+     path_parser = sub.add_parser("path", help="Print an installed model/voice path")
+     path_parser.add_argument("ref")
+     path_parser.add_argument("--quality")
+     path_parser.add_argument("--distribution")
+
++    # --- show ---
+     show_parser = sub.add_parser("show", help="Show an installed manifest")
+     show_parser.add_argument("ref")
+     show_parser.add_argument("--quality")
+     show_parser.add_argument("--distribution")
+
++    # --- remove ---
+     remove_parser = sub.add_parser("remove", help="Remove an installation")
+-    remove_parser.add_argument("ref")
++    remove_parser.add_argument("ref", nargs="+", help="One or more references to remove")
+     remove_parser.add_argument("--quality")
+     remove_parser.add_argument("--distribution")
++    remove_parser.add_argument(
++        "--dry-run", action="store_true", help="Show what would be removed without removing"
++    )
++    remove_parser.add_argument(
++        "--gc", action="store_true", help="Run garbage collection after removal"
++    )
++    remove_parser.add_argument(
++        "--all-variants", action="store_true", help="Remove all installed variants of the ref"
++    )
++    remove_parser.add_argument(
++        "--yes", action="store_true", help="Skip confirmation for multi-variant removal"
++    )
+
++    # --- verify ---
+     verify_parser = sub.add_parser("verify", help="Verify checksums for an installation")
+     verify_parser.add_argument("ref")
+     verify_parser.add_argument("--quality")
+     verify_parser.add_argument("--distribution")
++
++    # --- cache ---
+     cache_parser = sub.add_parser("cache", help="Show cache information")
+     cache_sub = cache_parser.add_subparsers(dest="cache_command", required=True)
+-    cache_sub.add_parser("info")
+-    cache_sub.add_parser("gc")
+
++    cache_info_parser = cache_sub.add_parser("info", help="Show cache usage")
++    cache_info_parser.add_argument("--format", choices=["table", "json"], default="table")
++
++    cache_gc_parser = cache_sub.add_parser("gc", help="Remove orphaned blobs")
++    cache_gc_parser.add_argument(
++        "--dry-run", action="store_true", help="Show what would be removed"
++    )
++
++    # --- import ---
+     import_parser = sub.add_parser(
+         "import", help="Import external runtime files into the shared store"
+     )
+@@ -84,10 +169,10 @@ def build_parser() -> argparse.ArgumentParser:
+     import_parser.add_argument("--sample-rate", type=int)
+     import_parser.add_argument("--force", action="store_true")
+
++    # --- catalog ---
+     catalog_parser = sub.add_parser("catalog", help="Build and verify external catalogs")
+     catalog_sub = catalog_parser.add_subparsers(dest="catalog_system", required=True)
+
+-    # Piper catalog subparser
+     piper_parser = catalog_sub.add_parser("piper", help="Manage the Piper catalog")
+     piper_sub = piper_parser.add_subparsers(dest="catalog_action", required=True)
+
+@@ -101,7 +186,6 @@ def build_parser() -> argparse.ArgumentParser:
+     piper_verify_parser.add_argument("--catalog", type=Path, required=True)
+     piper_verify_parser.add_argument("--source", type=Path)
+
+-    # Pocket catalog subparser
+     pocket_parser = catalog_sub.add_parser("pocket", help="Manage the Pocket catalog")
+     pocket_sub = pocket_parser.add_subparsers(dest="catalog_action", required=True)
+
+@@ -120,11 +204,453 @@ def build_parser() -> argparse.ArgumentParser:
+     return parser
+
+
++# ---------------------------------------------------------------------------
++# Command handlers
++# ---------------------------------------------------------------------------
++
++
++def _cmd_list(args: argparse.Namespace) -> int:
++    from ._table import format_bytes, render_inventory
++    from .inventory import InventoryRecord
++
++    manager = _manager(args)
++
++    # Legacy --installed flag
++    if args.installed:
++        return _cmd_installed(args)
++
++    records = manager.inventory(
++        system=args.system,
++        language=args.language,
++        gender=args.gender,
++        kind=args.kind,
++        quality=args.quality,
++        distribution=args.distribution,
++        status=getattr(args, "status", None),
++        refresh=args.refresh,
++    )
++
++    columns = [
++        "STATUS",
++        "SYSTEM",
++        "KIND",
++        "ID",
++        "LANG",
++        "GENDER",
++        "QUALITY",
++        "DIST",
++        "SIZE",
++        "VERSION",
++        "UPDATE",
++    ]
++    rows = []
++    for r in records:
++        rows.append(
++            [
++                r.status,
++                r.system,
++                r.kind,
++                r.id,
++                r.language_codes[0] if r.language_codes else "-",
++                r.gender,
++                r.quality or "-",
++                r.distribution or "-",
++                format_bytes(r.size_bytes),
++                r.version or "-",
++                r.update_status if r.update_status != "not_checked" else "-",
++            ]
++        )
++
++    render_inventory(columns, rows, format=args.format)
++    return 0
++
++
++def _cmd_installed(args: argparse.Namespace) -> int:
++    from ._table import format_bytes, render_inventory
++
++    manager = _manager(args)
++    records = manager.inventory(
++        system=args.system,
++        language=args.language,
++        gender=args.gender,
++        kind=args.kind,
++        quality=args.quality,
++        distribution=args.distribution,
++        installed_only=True,
++    )
++
++    columns = [
++        "SYSTEM",
++        "KIND",
++        "ID",
++        "LANG",
++        "GENDER",
++        "QUALITY",
++        "DIST",
++        "SIZE",
++        "VERSION",
++        "PATH",
++    ]
++    rows = []
++    for r in records:
++        path = str(r.installation.path) if r.installation else "-"
++        rows.append(
++            [
++                r.system,
++                r.kind,
++                r.id,
++                r.language_codes[0] if r.language_codes else "-",
++                r.gender,
++                r.quality or "-",
++                r.distribution or "-",
++                format_bytes(r.size_bytes),
++                r.version or "-",
++                path,
++            ]
++        )
++
++    render_inventory(columns, rows, format=args.format)
++    return 0
++
++
++def _cmd_updates(args: argparse.Namespace) -> int:
++    from ._table import format_bytes, render_inventory
++
++    manager = _manager(args)
++
++    # --cached means use offline mode for catalog
++    refresh = not getattr(args, "cached", False)
++
++    records = manager.check_updates(
++        system=args.system,
++        language=args.language,
++        kind=args.kind,
++        refresh=refresh and not args.offline,
++    )
++
++    # Filter to only show installed items (updates are about installed items)
++    records = [r for r in records if r.installed]
++
++    columns = [
++        "STATUS",
++        "SYSTEM",
++        "KIND",
++        "ID",
++        "LANG",
++        "QUALITY",
++        "DIST",
++        "SIZE",
++        "VERSION",
++        "UPDATE",
++    ]
++    rows = []
++    for r in records:
++        rows.append(
++            [
++                r.status,
++                r.system,
++                r.kind,
++                r.id,
++                r.language_codes[0] if r.language_codes else "-",
++                r.quality or "-",
++                r.distribution or "-",
++                format_bytes(r.size_bytes),
++                r.version or "-",
++                r.update_status,
++            ]
++        )
++
++    render_inventory(columns, rows, format=args.format)
++    return 0
++
++
++def _cmd_update(args: argparse.Namespace) -> int:
++    manager = _manager(args)
++
++    if args.update_all:
++        # Update all items with update_available
++        records = manager.check_updates(refresh=not args.offline)
++        to_update = [r for r in records if r.update_status == "update_available" and r.installed]
++
++        if not to_update:
++            print("Everything is up to date.")
++            return 0
++
++        updated = 0
++        for r in to_update:
++            try:
++                manager.update(
++                    r.ref,
++                    quality=r.quality,
++                    distribution=r.distribution,
++                    force=args.force,
++                    refresh=False,
++                )
++                updated += 1
++                print(f"Updated {r.ref}")
++            except Exception as exc:
++                print(f"Failed to update {r.ref}: {exc}", file=sys.stderr)
++
++        print(f"\nUpdated {updated}/{len(to_update)} items.")
++        return 0
++
++    if not args.ref:
++        print("onnxvoice: either REF or --all is required", file=sys.stderr)
++        return 2
++
++    installed = manager.update(
++        args.ref,
++        quality=args.quality,
++        distribution=args.distribution,
++        force=args.force,
++    )
++    print(f"Updated {installed.ref} -> {installed.path}")
++    return 0
++
++
++def _cmd_info(args: argparse.Namespace) -> int:
++    from ._table import format_bytes
++
++    manager = _manager(args)
++
++    check_updates = getattr(args, "check_updates", False)
++    quality = getattr(args, "quality", None)
++    distribution = getattr(args, "distribution", None)
++
++    try:
++        installation = manager.resolve(args.ref, quality=quality, distribution=distribution)
++    except Exception as exc:
++        print(f"onnxvoice: {exc}", file=sys.stderr)
++        return 2
++
++    from .inventory import (
++        language_codes_from_metadata,
++        gender_from_metadata,
++        effective_quality,
++        effective_distribution,
++        version_label,
++        logical_size_bytes,
++    )
++
++    meta = installation.metadata
++    langs = language_codes_from_metadata(meta)
++    gender = gender_from_metadata(meta)
++    qual = effective_quality(meta)
++    dist = effective_distribution(meta)
++    version = version_label(installation)
++    size = logical_size_bytes(installation)
++
++    update_status = "not checked"
++    if check_updates:
++        from .inventory import compare_installation_to_catalog
++
++        try:
++            item = manager.catalog.resolve(args.ref, quality=quality, distribution=distribution)
++            comparison = compare_installation_to_catalog(installation, item)
++            update_status = comparison.status
++        except Exception:
++            update_status = "check failed"
++
++    lines = [
++        f"Reference       {installation.ref}",
++        f"Status          {'installed' if not meta.get('external') else 'local'}",
++        f"Kind            {installation.kind}",
++        f"Language        {', '.join(langs) if langs else '-'}",
++        f"Gender          {gender}",
++        f"Quality         {qual or '-'}",
++        f"Distribution    {dist or '-'}",
++        f"Installed size  {format_bytes(size)}",
++        f"Version         {version or '-'}",
++        f"Update          {update_status}",
++        f"Path            {installation.path}",
++        f"Artifacts       {len(installation.artifacts)}",
++    ]
++    print("\n".join(lines))
++    return 0
++
++
++def _cmd_remove(args: argparse.Namespace) -> int:
++    from ._table import format_bytes
++
++    manager = _manager(args)
++    refs = args.ref
++
++    if args.dry_run:
++        # Show what would be removed
++        for ref in refs:
++            try:
++                installations = manager.find_installed(ref)
++            except Exception as exc:
++                print(f"onnxvoice: {exc}", file=sys.stderr)
++                return 2
++
++            if not installations:
++                print(f"Not installed: {ref}", file=sys.stderr)
++                return 2
++
++            if args.all_variants:
++                for inst in installations:
++                    size = sum(a.size for a in inst.artifacts)
++                    print(
++                        f"Would remove {inst.ref} [{inst.metadata.get('selected_quality', '-')}] [{inst.metadata.get('selected_distribution', '-')}] ({format_bytes(size)})"
++                    )
++            else:
++                quality = getattr(args, "quality", None)
++                distribution = getattr(args, "distribution", None)
++                if len(installations) > 1 and quality is None and distribution is None:
++                    print(f"onnxvoice: multiple installations match {ref}:", file=sys.stderr)
++                    for inst in installations:
++                        q = inst.metadata.get("selected_quality", "-")
++                        d = inst.metadata.get("selected_distribution", "-")
++                        size = sum(a.size for a in inst.artifacts)
++                        print(
++                            f"  quality={q} distribution={d} ({format_bytes(size)})",
++                            file=sys.stderr,
++                        )
++                    print(
++                        "Specify --quality/--distribution or use --all-variants.", file=sys.stderr
++                    )
++                    return 2
++                inst = installations[0]
++                size = sum(a.size for a in inst.artifacts)
++                print(f"Would remove {inst.ref} ({format_bytes(size)})")
++        return 0
++
++    # Actual removal
++    total_logical_bytes = 0
++    removed_count = 0
++
++    for ref in refs:
++        try:
++            installations = manager.find_installed(ref)
++        except Exception as exc:
++            print(f"onnxvoice: {exc}", file=sys.stderr)
++            return 2
++
++        if not installations:
++            print(f"Not installed: {ref}", file=sys.stderr)
++            return 2
++
++        if args.all_variants:
++            if not args.yes and len(installations) > 1:
++                print(
++                    f"onnxvoice: {ref} has {len(installations)} variants. Use --yes to confirm.",
++                    file=sys.stderr,
++                )
++                return 2
++            for inst in installations:
++                size = sum(a.size for a in inst.artifacts)
++                manager.remove(
++                    ref,
++                    quality=inst.metadata.get("selected_quality"),
++                    distribution=inst.metadata.get("selected_distribution"),
++                )
++                total_logical_bytes += size
++                removed_count += 1
++                print(f"Removed {inst.ref}")
++        else:
++            quality = getattr(args, "quality", None)
++            distribution = getattr(args, "distribution", None)
++            if len(installations) > 1 and quality is None and distribution is None:
++                print(f"onnxvoice: multiple installations match {ref}:", file=sys.stderr)
++                for inst in installations:
++                    q = inst.metadata.get("selected_quality", "-")
++                    d = inst.metadata.get("selected_distribution", "-")
++                    size = sum(a.size for a in inst.artifacts)
++                    print(f"  quality={q} distribution={d} ({format_bytes(size)})", file=sys.stderr)
++                print("Specify --quality/--distribution or use --all-variants.", file=sys.stderr)
++                return 2
++
++            inst = installations[0]
++            size = sum(a.size for a in inst.artifacts)
++            manager.remove(ref, quality=quality, distribution=distribution)
++            total_logical_bytes += size
++            removed_count += 1
++            print(f"Removed {ref} ({format_bytes(size)})")
++
++    gc_bytes = 0
++    if args.gc:
++        gc_report = manager.store.gc()
++        gc_bytes = gc_report.removed_bytes
++        if gc_report.removed_blobs > 0:
++            print(f"GC: removed {gc_report.removed_blobs} orphan blobs ({format_bytes(gc_bytes)})")
++
++    summary_parts = [
++        f"Removed {removed_count} installation(s) ({format_bytes(total_logical_bytes)})"
++    ]
++    if args.gc:
++        summary_parts.append(f"reclaimed {format_bytes(gc_bytes)} from GC")
++    print(", ".join(summary_parts))
++
++    return 0
++
++
++def _cmd_cache_info(args: argparse.Namespace) -> int:
++    from ._table import format_bytes, render_inventory
++
++    manager = _manager(args)
++    usage = manager.store.usage()
++
++    if getattr(args, "format", "table") == "json":
++        import json as json_mod
++
++        data = {
++            "root": str(usage.root),
++            "installation_count": usage.installation_count,
++            "install_logical_bytes": usage.install_logical_bytes,
++            "blob_apparent_bytes": usage.blob_apparent_bytes,
++            "catalog_bytes": usage.catalog_bytes,
++            "unique_file_bytes": usage.unique_file_bytes,
++            "orphan_blob_count": usage.orphan_blob_count,
++            "orphan_blob_bytes": usage.orphan_blob_bytes,
++        }
++        print(json_mod.dumps(data, indent=2, sort_keys=True))
++    else:
++        print(f"Cache                 {usage.root}")
++        print(f"Installations         {usage.installation_count}")
++        print(f"Installed payload     {format_bytes(usage.install_logical_bytes)}")
++        print(f"Blob store            {format_bytes(usage.blob_apparent_bytes)}")
++        print(f"Catalogs              {format_bytes(usage.catalog_bytes)}")
++        print(f"Unique cache files    {format_bytes(usage.unique_file_bytes)}")
++        print(f"Orphan blobs          {usage.orphan_blob_count}")
++        print(f"Reclaimable blobs     {format_bytes(usage.orphan_blob_bytes)}")
++    return 0
++
++
++def _cmd_cache_gc(args: argparse.Namespace) -> int:
++    from ._table import format_bytes
++
++    manager = _manager(args)
++
++    if args.dry_run:
++        usage = manager.store.usage()
++        if usage.orphan_blob_count == 0:
++            print("No orphan blobs to remove.")
++        else:
++            print(
++                f"Would remove {usage.orphan_blob_count} blobs ({format_bytes(usage.orphan_blob_bytes)})"
++            )
++        return 0
++
++    report = manager.store.gc()
++    if report.removed_blobs == 0:
++        print("No orphan blobs to remove.")
++    else:
++        print(f"Removed {report.removed_blobs} blobs ({format_bytes(report.removed_bytes)})")
++    return 0
++
++
++# ---------------------------------------------------------------------------
++# Main entry point
++# ---------------------------------------------------------------------------
++
++
+ def main(argv: list[str] | None = None) -> int:
+     parser = build_parser()
+     args = parser.parse_args(argv)
+
+     try:
++        # Catalog commands don't need a manager
+         if args.command == "catalog":
+             if args.catalog_system == "piper":
+                 if args.catalog_action == "build":
+@@ -170,21 +696,22 @@ def main(argv: list[str] | None = None) -> int:
+                     return 0
+             else:
+                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
++
++        # Command dispatch
++        handlers = {
++            "list": _cmd_list,
++            "installed": _cmd_installed,
++            "updates": _cmd_updates,
++            "update": _cmd_update,
++            "info": _cmd_info,
++            "remove": _cmd_remove,
++        }
++
++        if args.command in handlers:
++            return handlers[args.command](args)
++
++        # Legacy commands handled directly
+         manager = _manager(args)
+-        if args.command == "list":
+-            items = manager.list(
+-                args.system,
+-                installed=args.installed,
+-                language=args.language,
+-                quality=args.quality,
+-                refresh=args.refresh,
+-            )
+-            for item in items:
+-                suffix = ""
+-                if getattr(item, "metadata", {}).get("quality"):
+-                    suffix = f" [{item.metadata['quality']}]"
+-                print(f"{item.ref}{suffix}")
+-            return 0
+
+         if args.command == "install":
+             installed = manager.install(
+@@ -216,14 +743,6 @@ def main(argv: list[str] | None = None) -> int:
+             print((installation.path / "manifest.json").read_text(encoding="utf-8"), end="")
+             return 0
+
+-        if args.command == "remove":
+-            manager.remove(
+-                args.ref,
+-                quality=getattr(args, "quality", None),
+-                distribution=getattr(args, "distribution", None),
+-            )
+-            return 0
+-
+         if args.command == "verify":
+             manager.verify(
+                 args.ref,
+@@ -241,12 +760,9 @@ def main(argv: list[str] | None = None) -> int:
+
+         if args.command == "cache":
+             if args.cache_command == "info":
+-                print(manager.store.root)
+-                print(f"installed={len(manager.installed())}")
+-                return 0
++                return _cmd_cache_info(args)
+             if args.cache_command == "gc":
+-                print(f"removed_blobs={manager.store.gc()}")
+-                return 0
++                return _cmd_cache_gc(args)
+
+         if args.command == "import":
+             installed = manager.import_model(
+@@ -260,6 +776,7 @@ def main(argv: list[str] | None = None) -> int:
+             )
+             print(installed.path)
+             return 0
++
+     except Exception as exc:
+         print(f"onnxvoice: {exc}", file=sys.stderr)
+         return 2
+diff --git a/onnxvoice/inventory.py b/onnxvoice/inventory.py
+new file mode 100644
+index 0000000..dd25164
+--- /dev/null
++++ b/onnxvoice/inventory.py
+@@ -0,0 +1,567 @@
++"""Normalized inventory layer for onnxvoice.
++
++Provides language normalization, gender normalization, effective quality/distribution
++helpers, version labels, size helpers, inventory merge logic, filter predicates,
++and artifact-level update comparison.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++from collections.abc import Iterable, Mapping, Sequence
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any, Literal
++
++from .catalog import CatalogClient, filter_items as catalog_filter_items
++from .types import CatalogItem, Installation, InstalledArtifact, Artifact
++
++
++# ---------------------------------------------------------------------------
++# Language normalization
++# ---------------------------------------------------------------------------
++
++
++def normalize_language_code(raw: Any) -> str:
++    """Normalize a raw language value to canonical display form (e.g. 'en-US').
++
++    Handles:
++    - Piper: dict like {"code": "en_US", ...}
++    - Pocket: string like "en"
++    - Kokoro: list like ["en-us", "en-gb"]
++    - Already-normalized strings
++    """
++    if isinstance(raw, dict):
++        code = raw.get("code", "")
++        if isinstance(code, str) and code:
++            return _display_code(code)
++    if isinstance(raw, str) and raw:
++        return _display_code(raw)
++    return ""
++
++
++def language_codes_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
++    """Extract all language codes from item/installation metadata.
++
++    Handles all system-specific representations:
++    - Piper: metadata["language"] is a dict with "code"
++    - Pocket: metadata["language"] is a string
++    - Kokoro: metadata["language_codes"] is a list
++    """
++    codes: list[str] = []
++
++    # Kokoro-style: language_codes list
++    lang_codes = metadata.get("language_codes")
++    if isinstance(lang_codes, (list, tuple)):
++        for code in lang_codes:
++            normalized = normalize_language_code(code)
++            if normalized:
++                codes.append(normalized)
++
++    # Piper/Pocket-style: language field
++    if not codes:
++        lang = metadata.get("language")
++        if lang is not None:
++            normalized = normalize_language_code(lang)
++            if normalized:
++                codes.append(normalized)
++
++    return tuple(codes)
++
++
++def primary_language_from_metadata(metadata: Mapping[str, Any]) -> str | None:
++    """Return the primary (first) language code, or None."""
++    codes = language_codes_from_metadata(metadata)
++    return codes[0] if codes else None
++
++
++def _display_code(code: str) -> str:
++    """Convert internal code like 'en_US' to display form 'en-US'."""
++    return code.replace("_", "-")
++
++
++def _match_code(pattern: str, code: str) -> bool:
++    """Subtag-aware language matching.
++
++    --lang en    matches en, en-US, en-GB
++    --lang en-US matches en-US only
++    --lang de    matches de-DE, de-AT
++    """
++    pattern = pattern.replace("_", "-").casefold()
++    code = code.replace("_", "-").casefold()
++    if pattern == code:
++        return True
++    # Pattern "en" matches "en-US", "en-GB", etc.
++    # But pattern "en-US" should NOT match "en-GB"
++    if "-" not in pattern and code.startswith(pattern + "-"):
++        return True
++    return False
++
++
++def matches_language(metadata: Mapping[str, Any], language_filter: str) -> bool:
++    """Check if item/installation metadata matches a language filter."""
++    codes = language_codes_from_metadata(metadata)
++    if not codes:
++        return False
++    return any(_match_code(language_filter, code) for code in codes)
++
++
++# ---------------------------------------------------------------------------
++# Gender normalization
++# ---------------------------------------------------------------------------
++
++VALID_GENDERS = frozenset({"male", "female", "neutral", "unknown"})
++
++
++def normalize_gender(raw: Any) -> str:
++    """Normalize gender metadata. Returns 'unknown' for missing/invalid values.
++
++    Does NOT infer gender from names, IDs, or other heuristics.
++    """
++    if isinstance(raw, str) and raw.lower() in VALID_GENDERS:
++        return raw.lower()
++    return "unknown"
++
++
++def gender_from_metadata(metadata: Mapping[str, Any]) -> str:
++    """Extract gender from item/installation metadata, defaulting to 'unknown'."""
++    return normalize_gender(metadata.get("gender"))
++
++
++# ---------------------------------------------------------------------------
++# Effective quality / distribution
++# ---------------------------------------------------------------------------
++
++
++def effective_quality(metadata: Mapping[str, Any]) -> str | None:
++    """Get the effective quality selector from metadata.
++
++    Precedence: selected_quality > quality > None
++    """
++    sq = metadata.get("selected_quality")
++    if isinstance(sq, str) and sq:
++        return sq
++    q = metadata.get("quality")
++    if isinstance(q, str) and q:
++        return q
++    return None
++
++
++def effective_distribution(metadata: Mapping[str, Any]) -> str | None:
++    """Get the effective distribution selector from metadata.
++
++    Precedence: selected_distribution > distribution_id > None
++    """
++    sd = metadata.get("selected_distribution")
++    if isinstance(sd, str) and sd:
++        return sd
++    dd = metadata.get("distribution_id")
++    if isinstance(dd, str) and dd:
++        return dd
++    return None
++
++
++# ---------------------------------------------------------------------------
++# Version labels
++# ---------------------------------------------------------------------------
++
++
++def version_label(item_or_installation: CatalogItem | Installation) -> str | None:
++    """Return a short version display label.
++
++    Precedence depends on system:
++    - Piper/Pocket: short source_revision
++    - Kokoro: model_version > release_tag > short source_revision
++    - External/local: 'local'
++    """
++    meta = item_or_installation.metadata
++
++    if meta.get("external") or meta.get("managed") is False:
++        return "local"
++
++    if item_or_installation.system == "kokoro":
++        mv = meta.get("model_version")
++        if isinstance(mv, str) and mv:
++            return mv
++        rt = meta.get("release_tag")
++        if isinstance(rt, str) and rt:
++            return rt
++
++    # Piper/Pocket/Kokoro fallback: source_revision
++    sr = meta.get("source_revision")
++    if isinstance(sr, str) and sr:
++        return sr[:8] if len(sr) > 8 else sr
++
++    return None
++
++
++# ---------------------------------------------------------------------------
++# Size helpers
++# ---------------------------------------------------------------------------
++
++
++def logical_size_bytes(installation: Installation) -> int:
++    """Sum of artifact sizes for an installation."""
++    return sum(a.size for a in installation.artifacts)
++
++
++def catalog_size_bytes(item: CatalogItem) -> int | None:
++    """Sum of artifact sizes from catalog, or None if any artifact has unknown size."""
++    total = 0
++    for artifact in item.artifacts:
++        if artifact.size is None:
++            return None
++        total += artifact.size
++    return total
++
++
++# ---------------------------------------------------------------------------
++# Inventory record
++# ---------------------------------------------------------------------------
++
++
++@dataclass(frozen=True, slots=True)
++class InventoryRecord:
++    """Normalized view of a catalog entry, installed entry, or both."""
++
++    system: str
++    id: str
++    kind: str
++
++    language_codes: tuple[str, ...]
++    gender: str
++
++    quality: str | None
++    distribution: str | None
++    version: str | None
++
++    installed: bool
++    installation: Installation | None
++    catalog_item: CatalogItem | None
++
++    size_bytes: int | None
++    status: str  # "installed", "available", "local"
++    update_status: str  # "not_checked", "current", "update_available", "unknown", "not_applicable"
++
++    @property
++    def ref(self) -> str:
++        return f"{self.system}:{self.id}"
++
++    @property
++    def primary_language(self) -> str | None:
++        return self.language_codes[0] if self.language_codes else None
++
++
++def inventory_record_from_installation(installation: Installation) -> InventoryRecord:
++    """Create an InventoryRecord from a local installation only (no catalog)."""
++    meta = installation.metadata
++    return InventoryRecord(
++        system=installation.system,
++        id=installation.id,
++        kind=installation.kind,
++        language_codes=language_codes_from_metadata(meta),
++        gender=gender_from_metadata(meta),
++        quality=effective_quality(meta),
++        distribution=effective_distribution(meta),
++        version=version_label(installation),
++        installed=True,
++        installation=installation,
++        catalog_item=None,
++        size_bytes=logical_size_bytes(installation),
++        status="installed" if not meta.get("external") else "local",
++        update_status="not_checked",
++    )
++
++
++def inventory_record_from_catalog(item: CatalogItem) -> InventoryRecord:
++    """Create an InventoryRecord from a catalog entry (not installed)."""
++    meta = item.metadata
++    size = catalog_size_bytes(item)
++    return InventoryRecord(
++        system=item.system,
++        id=item.id,
++        kind=item.kind,
++        language_codes=language_codes_from_metadata(meta),
++        gender=gender_from_metadata(meta),
++        quality=effective_quality(meta),
++        distribution=effective_distribution(meta),
++        version=version_label(item),
++        installed=False,
++        installation=None,
++        catalog_item=item,
++        size_bytes=size,
++        status="available",
++        update_status="not_checked",
++    )
++
++
++# ---------------------------------------------------------------------------
++# Inventory filter
++# ---------------------------------------------------------------------------
++
++
++@dataclass(frozen=True, slots=True)
++class InventoryFilter:
++    """Filter specification for inventory records."""
++
++    systems: tuple[str, ...] = ()
++    kinds: tuple[str, ...] = ()
++    languages: tuple[str, ...] = ()
++    genders: tuple[str, ...] = ()
++    qualities: tuple[str, ...] = ()
++    distributions: tuple[str, ...] = ()
++    statuses: tuple[str, ...] = ()
++
++
++def matches_filter(record: InventoryRecord, spec: InventoryFilter) -> bool:
++    """Check whether an InventoryRecord matches all specified filter criteria."""
++    if spec.systems and record.system not in spec.systems:
++        return False
++    if spec.kinds and record.kind not in spec.kinds:
++        return False
++    if spec.languages:
++        if not record.language_codes:
++            return False
++        if not any(
++            _match_code(lang_filter, code)
++            for lang_filter in spec.languages
++            for code in record.language_codes
++        ):
++            return False
++    if spec.genders and record.gender not in spec.genders:
++        return False
++    if spec.qualities:
++        if record.quality is None or record.quality not in spec.qualities:
++            return False
++    if spec.distributions:
++        if record.distribution is None or record.distribution not in spec.distributions:
++            return False
++    if spec.statuses and record.status not in spec.statuses:
++        return False
++    return True
++
++
++# ---------------------------------------------------------------------------
++# Update comparison
++# ---------------------------------------------------------------------------
++
++
++@dataclass(frozen=True, slots=True)
++class UpdateComparison:
++    """Result of comparing an installed artifact set against a catalog entry."""
++
++    status: Literal["current", "update_available", "unknown", "not_applicable"]
++    changed_roles: tuple[str, ...] = ()
++    reason: str | None = None
++
++
++def compare_installation_to_catalog(
++    installation: Installation,
++    item: CatalogItem,
++) -> UpdateComparison:
++    """Compare installed artifacts against current catalog entry.
++
++    Uses artifact-level digest comparison:
++    1. If catalog has SHA-256: compare against installed sha256
++    2. Else if catalog has MD5: compare MD5 of installed file
++    3. Else: size may help detect change, but equal size is not proof
++    4. If insufficient identity: report 'unknown'
++    """
++    installed_by_key: dict[str, InstalledArtifact] = {}
++    for artifact in installation.artifacts:
++        key = _artifact_identity_key(artifact)
++        installed_by_key[key] = artifact
++
++    catalog_by_key: dict[str, Artifact] = {}
++    for artifact in item.artifacts:
++        key = _artifact_identity_key(artifact)
++        catalog_by_key[key] = artifact
++
++    # If no catalog artifacts match at all, it might be a different selection
++    if not installed_by_key and not catalog_by_key:
++        return UpdateComparison(status="unknown", reason="no artifacts to compare")
++
++    changed: list[str] = []
++    has_comparison = False
++
++    for key, cat_artifact in catalog_by_key.items():
++        inst_artifact = installed_by_key.get(key)
++        if inst_artifact is None:
++            changed.append(cat_artifact.role)
++            has_comparison = True
++            continue
++
++        # SHA-256 comparison (preferred)
++        if cat_artifact.sha256 and inst_artifact.sha256:
++            has_comparison = True
++            if cat_artifact.sha256 != inst_artifact.sha256:
++                changed.append(cat_artifact.role)
++            continue
++
++        # MD5 comparison
++        if cat_artifact.md5 and inst_artifact.sha256:
++            # We only have SHA-256 installed; can't compare directly with catalog MD5
++            # Fall through to size comparison
++            pass
++
++        # Size comparison (weak signal)
++        if cat_artifact.size is not None and inst_artifact.size is not None:
++            has_comparison = True
++            if cat_artifact.size != inst_artifact.size:
++                changed.append(cat_artifact.role)
++            continue
++
++    # Check for removed catalog artifacts
++    for key, inst_artifact in installed_by_key.items():
++        if key not in catalog_by_key:
++            changed.append(inst_artifact.role)
++            has_comparison = True
++
++    if not has_comparison:
++        return UpdateComparison(
++            status="unknown",
++            reason="insufficient digest identity for comparison",
++        )
++
++    if changed:
++        return UpdateComparison(
++            status="update_available",
++            changed_roles=tuple(sorted(set(changed))),
++            reason=f"artifacts changed: {', '.join(sorted(set(changed)))}",
++        )
++
++    return UpdateComparison(status="current")
++
++
++def _artifact_identity_key(artifact: Artifact | InstalledArtifact) -> str:
++    """Build a stable identity key for matching artifacts between install and catalog.
++
++    Uses (role, component, quality, filename) tuple.
++    """
++    return (
++        f"{artifact.role}|{artifact.component or ''}|{artifact.quality or ''}|{artifact.filename}"
++    )
++
++
++# ---------------------------------------------------------------------------
++# Catalog content fingerprint
++# ---------------------------------------------------------------------------
++
++
++def catalog_content_fingerprint(item: CatalogItem) -> str:
++    """Compute a deterministic fingerprint for a catalog item's content identity.
++
++    Uses artifact content identity (SHA-256 > MD5 > size+URL), excluding
++    volatile catalog revision values. Suitable for cheap future update checks.
++    """
++    parts: list[str] = [
++        item.system,
++        item.id,
++        effective_quality(item.metadata) or "",
++        effective_distribution(item.metadata) or "",
++    ]
++    for artifact in item.artifacts:
++        identity = artifact.sha256 or artifact.md5 or f"{artifact.size}:{artifact.url}"
++        parts.append(
++            f"{artifact.role}|{artifact.component or ''}|{artifact.quality or ''}"
++            f"|{artifact.filename}|{identity}"
++        )
++    payload = "\n".join(parts)
++    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
++
++
++# ---------------------------------------------------------------------------
++# Inventory merge
++# ---------------------------------------------------------------------------
++
++
++def merge_inventory(
++    installations: Iterable[Installation],
++    catalog_items: Iterable[CatalogItem],
++    *,
++    check_updates: bool = False,
++) -> list[InventoryRecord]:
++    """Merge installed and catalog entries into unified inventory records.
++
++    Installed entries take precedence when both exist for the same canonical ref.
++    When check_updates is True, artifact-level comparison is performed for installed
++    entries that also have a catalog counterpart.
++    """
++    # Index installations by canonical ref
++    installed_by_ref: dict[str, Installation] = {}
++    for inst in installations:
++        installed_by_ref[inst.ref] = inst
++
++    # Index catalog items by canonical ref
++    catalog_by_ref: dict[str, CatalogItem] = {}
++    for item in catalog_items:
++        catalog_by_ref[item.ref] = item
++
++    records: list[InventoryRecord] = []
++    seen_refs: set[str] = set()
++
++    # Process installed entries first
++    for inst in installations:
++        ref = inst.ref
++        seen_refs.add(ref)
++        meta = inst.metadata
++        catalog_item = catalog_by_ref.get(ref)
++
++        update_status = "not_checked"
++        if check_updates and catalog_item is not None:
++            comparison = compare_installation_to_catalog(inst, catalog_item)
++            update_status = comparison.status
++        elif catalog_item is None and not meta.get("external"):
++            update_status = "not_applicable"
++
++        records.append(
++            InventoryRecord(
++                system=inst.system,
++                id=inst.id,
++                kind=inst.kind,
++                language_codes=language_codes_from_metadata(meta),
++                gender=gender_from_metadata(meta),
++                quality=effective_quality(meta),
++                distribution=effective_distribution(meta),
++                version=version_label(inst),
++                installed=True,
++                installation=inst,
++                catalog_item=catalog_item,
++                size_bytes=logical_size_bytes(inst),
++                status="installed" if not meta.get("external") else "local",
++                update_status=update_status,
++            )
++        )
++
++    # Process catalog-only entries
++    for item in catalog_items:
++        if item.ref in seen_refs:
++            continue
++        records.append(inventory_record_from_catalog(item))
++
++    return records
++
++
++# ---------------------------------------------------------------------------
++# Inventory query helper
++# ---------------------------------------------------------------------------
++
++
++def query_inventory(
++    installations: Iterable[Installation],
++    catalog_items: Iterable[CatalogItem] | None,
++    *,
++    spec: InventoryFilter | None = None,
++    check_updates: bool = False,
++) -> list[InventoryRecord]:
++    """Query inventory with optional filtering and update checking."""
++    inst_list = list(installations)
++    cat_list = list(catalog_items) if catalog_items is not None else []
++
++    records = merge_inventory(inst_list, cat_list, check_updates=check_updates)
++
++    if spec is not None:
++        records = [r for r in records if matches_filter(r, spec)]
++
++    return records
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index f97205d..e3d4db2 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -45,8 +45,22 @@ class OnnxVoice:
+         refresh: bool = False,
+         progress: ProgressCallback | None = None,
+     ) -> CatalogResults:
++        from .inventory import matches_language
++
+         if installed:
+-            return self.store.installed(system)
++            installations = self.store.installed(system)
++            result: list[Installation] = installations
++            if language:
++                result = [inst for inst in result if matches_language(inst.metadata, language)]
++            if quality:
++                result = [
++                    inst
++                    for inst in result
++                    if inst.metadata.get("selected_quality") == quality
++                    or inst.metadata.get("quality") == quality
++                    or any(a.quality == quality for a in inst.artifacts)
++                ]
++            return result
+         if system is None:
+             raise ValueError("system is required unless installed=True")
+         return filter_items(
+@@ -256,6 +270,143 @@ class OnnxVoice:
+     def installed(self, system: str | None = None) -> Installations:
+         return self.store.installed(system)
+
++    def find_installed(self, ref: str) -> list[Installation]:
++        """Find all installed variants matching a canonical ref.
++
++        Returns installations whose system and canonical id match.
++        """
++        from .catalog import parse_ref
++
++        system, item_id = parse_ref(ref)
++        result = []
++        for inst in self.store.installed(system):
++            if inst.id == item_id:
++                result.append(inst)
++        return result
++
++    def inventory(
++        self,
++        *,
++        system: str | None = None,
++        language: str | None = None,
++        gender: str | None = None,
++        kind: str | None = None,
++        quality: str | None = None,
++        distribution: str | None = None,
++        status: str | None = None,
++        installed_only: bool = False,
++        refresh: bool = False,
++        check_updates: bool = False,
++        progress: ProgressCallback | None = None,
++    ) -> list[InventoryRecord]:
++        """Query merged inventory with optional filtering and update checking."""
++        from .inventory import InventoryFilter, query_inventory
++
++        installations = self.store.installed(system)
++        catalog_items = None
++        if not installed_only:
++            try:
++                if system:
++                    catalog_items = self.catalog.list(system, refresh=refresh, progress=progress)
++                else:
++                    all_items = []
++                    for sys in self.catalog.systems():
++                        try:
++                            all_items.extend(
++                                self.catalog.list(sys, refresh=refresh, progress=progress)
++                            )
++                        except Exception:
++                            pass  # Partial catalog failure is OK
++                    catalog_items = all_items
++            except Exception:
++                if installed_only:
++                    catalog_items = []
++                else:
++                    raise
++
++        if catalog_items is None:
++            catalog_items = []
++
++        # Build filter spec
++        statuses = ()
++        if status:
++            statuses = (status,)
++
++        spec = InventoryFilter(
++            systems=(system,) if system else (),
++            kinds=(kind,) if kind else (),
++            languages=(language,) if language else (),
++            genders=(gender,) if gender else (),
++            qualities=(quality,) if quality else (),
++            distributions=(distribution,) if distribution else (),
++            statuses=statuses,
++        )
++
++        return query_inventory(
++            installations,
++            catalog_items,
++            spec=spec,
++            check_updates=check_updates,
++        )
++
++    def check_updates(
++        self,
++        *,
++        system: str | None = None,
++        language: str | None = None,
++        kind: str | None = None,
++        refresh: bool = True,
++        progress: ProgressCallback | None = None,
++    ) -> list[InventoryRecord]:
++        """Check for available updates. Refreshes catalogs by default."""
++        return self.inventory(
++            system=system,
++            language=language,
++            kind=kind,
++            refresh=refresh,
++            check_updates=True,
++            progress=progress,
++        )
++
++    def update(
++        self,
++        ref: str,
++        *,
++        quality: str | None = None,
++        distribution: str | None = None,
++        force: bool = False,
++        refresh: bool = True,
++        progress: ProgressCallback | None = None,
++    ) -> Installation:
++        """Update an existing installation with fresh catalog data.
++
++        Preserves the current effective quality/distribution selection.
++        Atomically replaces the installation.
++        """
++        # Find existing installation
++        existing = self.resolve(ref, quality=quality, distribution=distribution)
++
++        # Preserve existing selection
++        eff_quality = quality or existing.metadata.get("selected_quality")
++        eff_distribution = distribution or existing.metadata.get("selected_distribution")
++
++        # Resolve fresh catalog entry with same selection
++        item = self.catalog.resolve(
++            ref,
++            refresh=refresh,
++            quality=eff_quality,
++            distribution=eff_distribution,
++            progress=progress,
++        )
++        item = self._with_selection_identity(
++            item,
++            quality=eff_quality,
++            distribution=eff_distribution,
++        )
++
++        # Atomic replace
++        return self.store.replace(existing, item, progress=progress)
++
+     def where(
+         self,
+         ref: str,
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index 309d4b3..5d59079 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -345,20 +345,185 @@ class AssetStore:
+                 raise IntegrityError(f"Missing installed artifact: {path}")
+             verify_file(path, expected_size=artifact.size, sha256=artifact.sha256)
+
+-    def gc(self) -> int:
+-        """Remove blobs no longer referenced by any install manifest."""
++    def gc(self) -> GcReport:
++        """Remove blobs no longer referenced by any install manifest.
++
++        Returns a GcReport with count and bytes of removed blobs.
++        """
++        from .types import GcReport
++
+         with FileLock(self._gc_lock_path()):
+             referenced = {
+                 artifact.sha256
+                 for installation in self.installed()
+                 for artifact in installation.artifacts
+             }
+-            removed = 0
++            removed_count = 0
++            removed_bytes = 0
+             for blob in self.blobs.glob("*/*"):
+                 if blob.is_file() and blob.name not in referenced:
++                    removed_bytes += blob.stat().st_size
+                     blob.unlink()
+-                    removed += 1
+-            return removed
++                    removed_count += 1
++            return GcReport(removed_blobs=removed_count, removed_bytes=removed_bytes)
++
++    def usage(self) -> CacheUsage:
++        """Compute cache storage usage statistics.
++
++        Uses inode-based unique file accounting to avoid double-counting
++        hard-linked files.
++        """
++        from .types import CacheUsage
++
++        installations = self.installed()
++
++        # Install logical bytes
++        install_logical = sum(
++            artifact.size for inst in installations for artifact in inst.artifacts
++        )
++
++        # Catalog bytes
++        catalog_bytes = 0
++        if self.root.joinpath("catalogs").is_dir():
++            for f in self.root.joinpath("catalogs").iterdir():
++                if f.is_file():
++                    catalog_bytes += f.stat().st_size
++
++        # Unique file bytes (inode-based dedup)
++        seen_inodes: set[tuple[int, int]] = set()
++        unique_bytes = 0
++
++        # Walk blob store
++        blob_apparent = 0
++        if self.blobs.is_dir():
++            for blob in self.blobs.glob("*/*"):
++                if blob.is_file():
++                    st = blob.stat()
++                    blob_apparent += st.st_size
++                    inode_key = (st.st_dev, st.st_ino)
++                    if inode_key not in seen_inodes:
++                        seen_inodes.add(inode_key)
++                        unique_bytes += st.st_size
++
++        # Walk installs (skip manifest.json from unique count since it's not a blob)
++        for inst in installations:
++            for artifact in inst.artifacts:
++                path = artifact.path
++                if path.is_file():
++                    st = path.stat()
++                    inode_key = (st.st_dev, st.st_ino)
++                    if inode_key not in seen_inodes:
++                        seen_inodes.add(inode_key)
++                        unique_bytes += st.st_size
++
++        # Orphan blobs
++        referenced = {artifact.sha256 for inst in installations for artifact in inst.artifacts}
++        orphan_count = 0
++        orphan_bytes = 0
++        if self.blobs.is_dir():
++            for blob in self.blobs.glob("*/*"):
++                if blob.is_file() and blob.name not in referenced:
++                    orphan_count += 1
++                    orphan_bytes += blob.stat().st_size
++
++        return CacheUsage(
++            root=self.root,
++            installation_count=len(installations),
++            install_logical_bytes=install_logical,
++            blob_apparent_bytes=blob_apparent,
++            catalog_bytes=catalog_bytes,
++            unique_file_bytes=unique_bytes,
++            orphan_blob_count=orphan_count,
++            orphan_blob_bytes=orphan_bytes,
++        )
++
++    def replace(
++        self,
++        existing: Installation,
++        item: CatalogItem,
++        *,
++        progress: ProgressCallback | None = None,
++    ) -> Installation:
++        """Atomically replace an existing installation with a new catalog item.
++
++        Reuses the same storage path. Old data is removed after the new
++        installation is verified.
++        """
++        storage_id = existing.storage_id or existing.id
++        system = existing.system
++        target = self.install_path(system, storage_id)
++
++        with FileLock(self._install_lock_path(system, storage_id)):
++            # Use the same staging + atomic replace workflow as install
++            staging_path = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
++            self._emit(progress, AssetProgress("install_started", item.ref, target=str(target)))
++            try:
++                installed: list[InstalledArtifact] = []
++                with FileLock(self._gc_lock_path()):
++                    for artifact in item.artifacts:
++                        artifact_target = str(target / artifact.filename)
++                        blob, sha256 = self._materialize_artifact(
++                            artifact,
++                            ref=item.ref,
++                            progress=progress,
++                            target=artifact_target,
++                        )
++                        destination = staging_path / artifact.filename
++                        destination.parent.mkdir(parents=True, exist_ok=True)
++                        self._link_or_copy(blob, destination)
++                        installed.append(
++                            InstalledArtifact(
++                                role=artifact.role,
++                                filename=artifact.filename,
++                                path=destination,
++                                sha256=sha256,
++                                size=destination.stat().st_size,
++                                quality=artifact.quality,
++                                component=artifact.component,
++                                format=artifact.format,
++                                metadata=dict(artifact.metadata),
++                            )
++                        )
++                    manifest_data = {
++                        "schema": MANIFEST_SCHEMA_VERSION,
++                        "system": item.system,
++                        "id": item.id,
++                        "storage_id": storage_id,
++                        "kind": item.kind,
++                        "sample_rate": item.sample_rate,
++                        "voices": list(item.voices),
++                        "default_voice": item.default_voice,
++                        "metadata": item.metadata,
++                        "artifacts": [
++                            {
++                                "role": a.role,
++                                "filename": a.filename,
++                                "sha256": a.sha256,
++                                "size": a.size,
++                                "quality": a.quality,
++                                "component": a.component,
++                                "format": a.format,
++                                "metadata": dict(a.metadata),
++                            }
++                            for a in installed
++                        ],
++                    }
++                    (staging_path / "manifest.json").write_text(
++                        json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
++                    )
++                    # Atomic replace
++                    if target.exists():
++                        shutil.rmtree(target)
++                    os.replace(staging_path, target)
++                installation = self.get(system, storage_id)
++                self._emit(
++                    progress, AssetProgress("install_completed", item.ref, target=str(target))
++                )
++                return installation
++            except Exception:
++                shutil.rmtree(staging_path, ignore_errors=True)
++                self._emit(progress, AssetProgress("install_failed", item.ref, target=str(target)))
++                raise
+
+     def _materialize_artifact(
+         self,
+diff --git a/onnxvoice/types.py b/onnxvoice/types.py
+index 561a4b1..854794b 100644
+--- a/onnxvoice/types.py
++++ b/onnxvoice/types.py
+@@ -295,6 +295,30 @@ class InferenceResult:
+             object.__setattr__(self, "timings", np.asarray(self.timings))
+
+
++@dataclass(frozen=True, slots=True)
++class CacheUsage:
++    """Report of cache storage usage."""
++
++    root: Path
++    installation_count: int
++
++    install_logical_bytes: int
++    blob_apparent_bytes: int
++    catalog_bytes: int
++
++    unique_file_bytes: int
++    orphan_blob_count: int
++    orphan_blob_bytes: int
++
++
++@dataclass(frozen=True, slots=True)
++class GcReport:
++    """Result of garbage collection."""
++
++    removed_blobs: int
++    removed_bytes: int
++
++
+ @dataclass(frozen=True, slots=True)
+ class AssetProgress:
+     phase: str
+diff --git a/tests/test_cache_usage.py b/tests/test_cache_usage.py
+new file mode 100644
+index 0000000..fde2453
+--- /dev/null
++++ b/tests/test_cache_usage.py
+@@ -0,0 +1,196 @@
++"""Tests for cache usage reporting and GC byte tracking."""
++
++from __future__ import annotations
++
++import hashlib
++import os
++from pathlib import Path
++
++import pytest
++
++from onnxvoice.store import AssetStore
++from onnxvoice.types import Artifact, CatalogItem
++
++
++# ---------------------------------------------------------------------------
++# Cache usage tests
++# ---------------------------------------------------------------------------
++
++
++class TestCacheUsage:
++    def _make_item(self, system="test", item_id="one", content=b"model-data"):
++        sha = hashlib.sha256(content).hexdigest()
++        return CatalogItem(
++            system=system,
++            id=item_id,
++            kind="model",
++            artifacts=(Artifact("model", "model.onnx", f"file:///dev/null", len(content), sha),),
++        )
++
++    def test_empty_cache_usage(self, tmp_path):
++        store = AssetStore(tmp_path / "cache")
++        usage = store.usage()
++        assert usage.installation_count == 0
++        assert usage.install_logical_bytes == 0
++        assert usage.orphan_blob_count == 0
++
++    def test_install_logical_bytes(self, tmp_path):
++        payload = b"x" * 1000
++        source = tmp_path / "model.onnx"
++        source.write_bytes(payload)
++        sha = hashlib.sha256(payload).hexdigest()
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++        )
++        store = AssetStore(tmp_path / "cache")
++        store.install(item)
++        usage = store.usage()
++        assert usage.installation_count == 1
++        assert usage.install_logical_bytes == 1000
++
++    def test_blob_apparent_bytes(self, tmp_path):
++        payload = b"x" * 1000
++        source = tmp_path / "model.onnx"
++        source.write_bytes(payload)
++        sha = hashlib.sha256(payload).hexdigest()
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++        )
++        store = AssetStore(tmp_path / "cache")
++        store.install(item)
++        usage = store.usage()
++        assert usage.blob_apparent_bytes == 1000
++
++    def test_unique_file_bytes_no_double_count(self, tmp_path):
++        """Hard-linked files should be counted once in unique_file_bytes."""
++        payload = b"x" * 1000
++        source = tmp_path / "model.onnx"
++        source.write_bytes(payload)
++        sha = hashlib.sha256(payload).hexdigest()
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++        )
++        store = AssetStore(tmp_path / "cache")
++        store.install(item)
++        usage = store.usage()
++
++        # If hard links are supported, unique should equal blob size
++        # If copy fallback was used, unique might be 2x
++        blob_path = store.blobs / sha[:2] / sha
++        inst_path = store.installs / "test" / "one" / source.name
++
++        if blob_path.exists() and inst_path.exists():
++            blob_stat = blob_path.stat()
++            inst_stat = inst_path.stat()
++            same_inode = (
++                blob_stat.st_ino == inst_stat.st_ino and blob_stat.st_dev == inst_stat.st_dev
++            )
++            if same_inode:
++                assert usage.unique_file_bytes == 1000
++            else:
++                # Copy fallback: both counted separately
++                assert usage.unique_file_bytes == 2000
++
++    def test_orphan_blob_detection(self, tmp_path):
++        payload = b"x" * 1000
++        source = tmp_path / "model.onnx"
++        source.write_bytes(payload)
++        sha = hashlib.sha256(payload).hexdigest()
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++        )
++        store = AssetStore(tmp_path / "cache")
++        store.install(item)
++        store.remove("test", "one")
++
++        usage = store.usage()
++        assert usage.orphan_blob_count == 1
++        assert usage.orphan_blob_bytes == 1000
++        assert usage.installation_count == 0
++
++
++# ---------------------------------------------------------------------------
++# GC report tests
++# ---------------------------------------------------------------------------
++
++
++class TestGcReport:
++    def test_gc_returns_report(self, tmp_path):
++        payload = b"x" * 1000
++        source = tmp_path / "model.onnx"
++        source.write_bytes(payload)
++        sha = hashlib.sha256(payload).hexdigest()
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++        )
++        store = AssetStore(tmp_path / "cache")
++        store.install(item)
++        store.remove("test", "one")
++
++        report = store.gc()
++        assert report.removed_blobs == 1
++        assert report.removed_bytes == 1000
++
++    def test_gc_no_orphans(self, tmp_path):
++        store = AssetStore(tmp_path / "cache")
++        report = store.gc()
++        assert report.removed_blobs == 0
++        assert report.removed_bytes == 0
++
++    def test_gc_preserves_referenced_blobs(self, tmp_path):
++        payload = b"x" * 1000
++        source = tmp_path / "model.onnx"
++        source.write_bytes(payload)
++        sha = hashlib.sha256(payload).hexdigest()
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(Artifact("model", source.name, source.as_uri(), len(payload), sha),),
++        )
++        store = AssetStore(tmp_path / "cache")
++        store.install(item)
++
++        # Don't remove the installation - blob should be preserved
++        report = store.gc()
++        assert report.removed_blobs == 0
++
++    def test_gc_shared_blob_not_removed(self, tmp_path):
++        """A blob shared by two installations should not be GC'd when only one is removed."""
++        payload = b"shared-data"
++        source = tmp_path / "model.onnx"
++        source.write_bytes(payload)
++        sha = hashlib.sha256(payload).hexdigest()
++        artifact = Artifact("model", source.name, source.as_uri(), len(payload), sha)
++
++        item1 = CatalogItem(system="test", id="one", kind="model", artifacts=(artifact,))
++        item2 = CatalogItem(system="test", id="two", kind="model", artifacts=(artifact,))
++
++        store = AssetStore(tmp_path / "cache")
++        store.install(item1)
++        store.install(item2)
++
++        # Remove only one
++        store.remove("test", "one")
++        report = store.gc()
++        assert report.removed_blobs == 0  # Still referenced by "two"
++
++        # Now remove the other
++        store.remove("test", "two")
++        report = store.gc()
++        assert report.removed_blobs == 1
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+new file mode 100644
+index 0000000..d73d6b2
+--- /dev/null
++++ b/tests/test_cli.py
+@@ -0,0 +1,126 @@
++"""Tests for the CLI module: table output, JSON output, plain format, and new subcommands."""
++
++from __future__ import annotations
++
++import json
++from io import StringIO
++from pathlib import Path
++
++import pytest
++
++from onnxvoice._table import format_bytes, render_json, render_table, render_inventory
++
++
++# ---------------------------------------------------------------------------
++# format_bytes tests
++# ---------------------------------------------------------------------------
++
++
++class TestFormatBytes:
++    def test_zero(self):
++        assert format_bytes(0) == "0 B"
++
++    def test_bytes(self):
++        assert format_bytes(812) == "812 B"
++
++    def test_kib(self):
++        assert format_bytes(1024) == "1.00 KiB"
++
++    def test_mib(self):
++        assert format_bytes(66270000) == "63.2 MiB"
++
++    def test_gib(self):
++        assert format_bytes(1438814042) == "1.34 GiB"
++
++    def test_none(self):
++        assert format_bytes(None) == "-"
++
++    def test_negative(self):
++        assert format_bytes(-100) == "-100 B"
++
++
++# ---------------------------------------------------------------------------
++# Table rendering tests
++# ---------------------------------------------------------------------------
++
++
++class TestTableRendering:
++    def test_basic_table(self):
++        output = StringIO()
++        columns = ["NAME", "VALUE"]
++        rows = [["test", "100"]]
++        render_table(columns, rows, file=output)
++        result = output.getvalue()
++        assert "NAME" in result
++        assert "test" in result
++
++    def test_deterministic_output(self):
++        """Same input should produce same output."""
++        columns = ["A", "B", "C"]
++        rows = [["x", "y", "z"], ["1", "2", "3"]]
++        out1 = StringIO()
++        out2 = StringIO()
++        render_table(columns, rows, file=out1)
++        render_table(columns, rows, file=out2)
++        assert out1.getvalue() == out2.getvalue()
++
++    def test_empty_rows(self):
++        output = StringIO()
++        render_table(["A", "B"], [], file=output)
++        # Header + separator only
++        lines = output.getvalue().strip().split("\n")
++        assert len(lines) == 2
++
++
++# ---------------------------------------------------------------------------
++# JSON rendering tests
++# ---------------------------------------------------------------------------
++
++
++class TestJsonRendering:
++    def test_json_structure(self):
++        output = StringIO()
++        columns = ["STATUS", "ID"]
++        rows = [["installed", "test-1"]]
++        render_json(columns, rows, file=output)
++        data = json.loads(output.getvalue())
++        assert "items" in data
++        assert len(data["items"]) == 1
++        assert data["items"][0]["STATUS"] == "installed"
++
++    def test_json_extra_keys(self):
++        output = StringIO()
++        render_json(["A"], [["val"]], file=output, extra={"warnings": ["test"]})
++        data = json.loads(output.getvalue())
++        assert "warnings" in data
++        assert data["warnings"] == ["test"]
++
++    def test_json_bytes_are_numeric(self):
++        """JSON output should have numeric bytes, not formatted strings."""
++        output = StringIO()
++        render_json(["SIZE"], [["1024"]], file=output)
++        # SIZE value is a string in the row, but that's because rows are string-based
++        # The CLI should pass numeric values in JSON mode
++
++
++# ---------------------------------------------------------------------------
++# render_inventory tests
++# ---------------------------------------------------------------------------
++
++
++class TestRenderInventory:
++    def test_table_format(self):
++        output = StringIO()
++        render_inventory(["A"], [["val"]], format="table", file=output)
++        assert "val" in output.getvalue()
++
++    def test_json_format(self):
++        output = StringIO()
++        render_inventory(["A"], [["val"]], format="json", file=output)
++        data = json.loads(output.getvalue())
++        assert data["items"][0]["A"] == "val"
++
++    def test_plain_format(self):
++        output = StringIO()
++        render_inventory(["A", "B"], [["x", "y"]], format="plain", file=output)
++        assert "x\ty" in output.getvalue()
+diff --git a/tests/test_inventory.py b/tests/test_inventory.py
+new file mode 100644
+index 0000000..1b02f00
+--- /dev/null
++++ b/tests/test_inventory.py
+@@ -0,0 +1,602 @@
++"""Tests for the inventory module: language normalization, gender, filters, size, and update comparison."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from onnxvoice.inventory import (
++    InventoryFilter,
++    InventoryRecord,
++    _display_code,
++    _match_code,
++    catalog_content_fingerprint,
++    catalog_size_bytes,
++    compare_installation_to_catalog,
++    effective_distribution,
++    effective_quality,
++    gender_from_metadata,
++    inventory_record_from_catalog,
++    inventory_record_from_installation,
++    language_codes_from_metadata,
++    logical_size_bytes,
++    matches_filter,
++    matches_language,
++    merge_inventory,
++    normalize_gender,
++    normalize_language_code,
++    primary_language_from_metadata,
++    query_inventory,
++    version_label,
++)
++from onnxvoice.types import Artifact, CatalogItem, InstalledArtifact, Installation
++
++
++# ---------------------------------------------------------------------------
++# Language normalization tests
++# ---------------------------------------------------------------------------
++
++
++class TestLanguageNormalization:
++    """Test language code normalization across all system formats."""
++
++    def test_piper_dict_language(self):
++        """Piper stores language as dict with 'code'."""
++        metadata = {"language": {"code": "en_US", "name": "English (US)"}}
++        codes = language_codes_from_metadata(metadata)
++        assert codes == ("en-US",)
++
++    def test_pocket_string_language(self):
++        """Pocket stores language as a plain string."""
++        metadata = {"language": "en"}
++        codes = language_codes_from_metadata(metadata)
++        assert codes == ("en",)
++
++    def test_kokoro_language_codes_list(self):
++        """Kokoro stores language_codes as a list."""
++        metadata = {"language_codes": ["en-us", "en-gb"]}
++        codes = language_codes_from_metadata(metadata)
++        assert codes == ("en-us", "en-gb")
++
++    def test_kokoro_takes_priority_over_language_field(self):
++        """When language_codes is present, it's used even if language also exists."""
++        metadata = {"language": "de", "language_codes": ["en-us"]}
++        codes = language_codes_from_metadata(metadata)
++        assert codes == ("en-us",)
++
++    def test_normalize_language_code_dict(self):
++        assert normalize_language_code({"code": "en_US"}) == "en-US"
++
++    def test_normalize_language_code_string(self):
++        assert normalize_language_code("en") == "en"
++        assert normalize_language_code("en_US") == "en-US"
++
++    def test_normalize_language_code_empty(self):
++        assert normalize_language_code(None) == ""
++        assert normalize_language_code({}) == ""
++        assert normalize_language_code("") == ""
++
++    def test_primary_language_from_metadata(self):
++        meta = {"language_codes": ["en-us", "en-gb"]}
++        assert primary_language_from_metadata(meta) == "en-us"
++
++    def test_primary_language_returns_none_when_empty(self):
++        assert primary_language_from_metadata({}) is None
++
++    def test_subtag_matching_en_matches_en_us(self):
++        """--lang en should match en-US."""
++        assert _match_code("en", "en-US") is True
++
++    def test_subtag_matching_en_matches_en_gb(self):
++        assert _match_code("en", "en-GB") is True
++
++    def test_subtag_matching_en_us_matches_en_us(self):
++        assert _match_code("en-US", "en-US") is True
++
++    def test_subtag_matching_en_us_not_match_en_gb(self):
++        """--lang en-US should NOT match en-GB."""
++        assert _match_code("en-US", "en-GB") is False
++
++    def test_subtag_matching_case_insensitive(self):
++        assert _match_code("en-us", "EN_US") is True
++
++    def test_matches_language_piper(self):
++        meta = {"language": {"code": "en_US"}}
++        assert matches_language(meta, "en") is True
++        assert matches_language(meta, "en-US") is True
++        assert matches_language(meta, "de") is False
++
++    def test_matches_language_pocket(self):
++        meta = {"language": "en"}
++        assert matches_language(meta, "en") is True
++        assert matches_language(meta, "en-US") is False
++
++    def test_matches_language_kokoro(self):
++        meta = {"language_codes": ["en-us", "en-gb"]}
++        assert matches_language(meta, "en-US") is True
++        assert matches_language(meta, "en") is True
++        assert matches_language(meta, "de") is False
++
++    def test_matches_language_empty_metadata(self):
++        assert matches_language({}, "en") is False
++
++
++# ---------------------------------------------------------------------------
++# Gender normalization tests
++# ---------------------------------------------------------------------------
++
++
++class TestGenderNormalization:
++    """Test gender normalization and metadata extraction."""
++
++    def test_normalize_male(self):
++        assert normalize_gender("male") == "male"
++
++    def test_normalize_female(self):
++        assert normalize_gender("female") == "female"
++
++    def test_normalize_neutral(self):
++        assert normalize_gender("neutral") == "neutral"
++
++    def test_normalize_unknown(self):
++        assert normalize_gender("unknown") == "unknown"
++
++    def test_normalize_case_insensitive(self):
++        assert normalize_gender("Male") == "male"
++        assert normalize_gender("FEMALE") == "female"
++
++    def test_normalize_missing_is_unknown(self):
++        assert normalize_gender(None) == "unknown"
++        assert normalize_gender("") == "unknown"
++
++    def test_normalize_invalid_is_unknown(self):
++        assert normalize_gender("other") == "unknown"
++        assert normalize_gender(42) == "unknown"
++
++    def test_gender_from_metadata_present(self):
++        assert gender_from_metadata({"gender": "male"}) == "male"
++
++    def test_gender_from_metadata_missing(self):
++        assert gender_from_metadata({}) == "unknown"
++
++    def test_no_inference_from_id(self):
++        """Gender must NOT be inferred from IDs like 'ryan' or 'amy'."""
++        meta = {"id": "ryan"}  # No gender key
++        assert gender_from_metadata(meta) == "unknown"
++
++    def test_no_inference_from_name(self):
++        meta = {"name": "Amy"}  # No gender key
++        assert gender_from_metadata(meta) == "unknown"
++
++    def test_entry_with_gendered_name_but_no_gender_metadata_stays_unknown(self):
++        """Even if the name looks gendered, metadata absence means 'unknown'."""
++        meta = {"name": "Female Voice", "language": "en"}
++        assert gender_from_metadata(meta) == "unknown"
++
++
++# ---------------------------------------------------------------------------
++# Effective quality / distribution tests
++# ---------------------------------------------------------------------------
++
++
++class TestEffectiveSelection:
++    def test_effective_quality_selected_over_quality(self):
++        meta = {"selected_quality": "fp16", "quality": "fp32"}
++        assert effective_quality(meta) == "fp16"
++
++    def test_effective_quality_fallback_to_quality(self):
++        meta = {"quality": "fp32"}
++        assert effective_quality(meta) == "fp32"
++
++    def test_effective_quality_none(self):
++        assert effective_quality({}) is None
++
++    def test_effective_distribution_selected_over_distribution_id(self):
++        meta = {"selected_distribution": "cpu", "distribution_id": "gpu"}
++        assert effective_distribution(meta) == "cpu"
++
++    def test_effective_distribution_fallback(self):
++        meta = {"distribution_id": "gpu"}
++        assert effective_distribution(meta) == "gpu"
++
++    def test_effective_distribution_none(self):
++        assert effective_distribution({}) is None
++
++
++# ---------------------------------------------------------------------------
++# Version label tests
++# ---------------------------------------------------------------------------
++
++
++class TestVersionLabel:
++    def test_piper_uses_source_revision(self):
++        item = CatalogItem(
++            system="piper",
++            id="test",
++            kind="voice",
++            artifacts=(),
++            metadata={"source_revision": "abc123def456"},
++        )
++        assert version_label(item) == "abc123de"  # truncated to 8
++
++    def test_kokoro_prefers_model_version(self):
++        item = CatalogItem(
++            system="kokoro",
++            id="test",
++            kind="model",
++            artifacts=(),
++            metadata={"model_version": "1.0"},
++        )
++        assert version_label(item) == "1.0"
++
++    def test_external_returns_local(self):
++        item = CatalogItem(
++            system="test",
++            id="test",
++            kind="model",
++            artifacts=(),
++            metadata={"external": True},
++        )
++        assert version_label(item) == "local"
++
++
++# ---------------------------------------------------------------------------
++# Size helper tests
++# ---------------------------------------------------------------------------
++
++
++class TestSizeHelpers:
++    def test_logical_size_bytes(self):
++        inst = Installation(
++            system="test",
++            id="one",
++            kind="model",
++            path=Path("/tmp"),
++            artifacts=(
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "sha", 100),
++                InstalledArtifact("config", "b.json", Path("/tmp/b.json"), "sha", 50),
++            ),
++        )
++        assert logical_size_bytes(inst) == 150
++
++    def test_catalog_size_bytes(self):
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(
++                Artifact("model", "a.onnx", size=100),
++                Artifact("config", "b.json", size=50),
++            ),
++        )
++        assert catalog_size_bytes(item) == 150
++
++    def test_catalog_size_bytes_unknown(self):
++        item = CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=(
++                Artifact("model", "a.onnx", size=100),
++                Artifact("config", "b.json", size=None),
++            ),
++        )
++        assert catalog_size_bytes(item) is None
++
++
++# ---------------------------------------------------------------------------
++# Inventory filter tests
++# ---------------------------------------------------------------------------
++
++
++def _make_record(**kwargs) -> InventoryRecord:
++    """Helper to create InventoryRecord with defaults."""
++    defaults = dict(
++        system="piper",
++        id="test",
++        kind="voice",
++        language_codes=("en-US",),
++        gender="unknown",
++        quality=None,
++        distribution=None,
++        version=None,
++        installed=False,
++        installation=None,
++        catalog_item=None,
++        size_bytes=100,
++        status="available",
++        update_status="not_checked",
++    )
++    defaults.update(kwargs)
++    return InventoryRecord(**defaults)
++
++
++class TestInventoryFilter:
++    def test_filter_by_system(self):
++        spec = InventoryFilter(systems=("piper",))
++        rec = _make_record(system="piper")
++        assert matches_filter(rec, spec) is True
++
++    def test_filter_by_system_mismatch(self):
++        spec = InventoryFilter(systems=("piper",))
++        rec = _make_record(system="kokoro")
++        assert matches_filter(rec, spec) is False
++
++    def test_filter_by_kind(self):
++        spec = InventoryFilter(kinds=("voice",))
++        rec = _make_record(kind="voice")
++        assert matches_filter(rec, spec) is True
++
++    def test_filter_by_language(self):
++        spec = InventoryFilter(languages=("en-US",))
++        rec = _make_record(language_codes=("en-US",))
++        assert matches_filter(rec, spec) is True
++
++    def test_filter_by_language_subtag(self):
++        spec = InventoryFilter(languages=("en",))
++        rec = _make_record(language_codes=("en-US",))
++        assert matches_filter(rec, spec) is True
++
++    def test_filter_by_language_no_match(self):
++        spec = InventoryFilter(languages=("de",))
++        rec = _make_record(language_codes=("en-US",))
++        assert matches_filter(rec, spec) is False
++
++    def test_filter_by_gender(self):
++        spec = InventoryFilter(genders=("male",))
++        rec = _make_record(gender="male")
++        assert matches_filter(rec, spec) is True
++
++    def test_filter_by_gender_mismatch(self):
++        spec = InventoryFilter(genders=("male",))
++        rec = _make_record(gender="female")
++        assert matches_filter(rec, spec) is False
++
++    def test_filter_by_status(self):
++        spec = InventoryFilter(statuses=("installed",))
++        rec = _make_record(status="installed")
++        assert matches_filter(rec, spec) is True
++
++    def test_filter_by_quality(self):
++        spec = InventoryFilter(qualities=("fp16",))
++        rec = _make_record(quality="fp16")
++        assert matches_filter(rec, spec) is True
++
++    def test_filter_no_criteria_matches_all(self):
++        spec = InventoryFilter()
++        rec = _make_record()
++        assert matches_filter(rec, spec) is True
++
++
++# ---------------------------------------------------------------------------
++# Update comparison tests
++# ---------------------------------------------------------------------------
++
++
++class TestUpdateComparison:
++    def _installation(self, artifacts):
++        return Installation(
++            system="test",
++            id="one",
++            kind="model",
++            path=Path("/tmp"),
++            artifacts=tuple(artifacts),
++        )
++
++    def _catalog_item(self, artifacts):
++        return CatalogItem(
++            system="test",
++            id="one",
++            kind="model",
++            artifacts=tuple(artifacts),
++        )
++
++    def test_current_sha256_match(self):
++        inst = self._installation(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = self._catalog_item(
++            [
++                Artifact("model", "a.onnx", sha256="abc123", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++    def test_update_available_sha256_differs(self):
++        inst = self._installation(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = self._catalog_item(
++            [
++                Artifact("model", "a.onnx", sha256="def456", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++        assert "model" in result.changed_roles
++
++    def test_current_size_match_no_sha(self):
++        inst = self._installation(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = self._catalog_item(
++            [
++                Artifact("model", "a.onnx", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++    def test_update_available_size_differs_no_sha(self):
++        inst = self._installation(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = self._catalog_item(
++            [
++                Artifact("model", "a.onnx", size=200),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++
++    def test_unknown_no_identity(self):
++        inst = self._installation(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = self._catalog_item(
++            [
++                Artifact("model", "a.onnx"),  # No sha256, no size
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "unknown"
++
++    def test_update_available_artifact_added(self):
++        inst = self._installation(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = self._catalog_item(
++            [
++                Artifact("model", "a.onnx", sha256="abc123", size=100),
++                Artifact("config", "b.json", sha256="xyz", size=50),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++
++    def test_current_catalog_revision_changes_but_artifacts_match(self):
++        """Unrelated catalog source revision changes should NOT cause false positive."""
++        inst = self._installation(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = self._catalog_item(
++            [
++                Artifact("model", "a.onnx", sha256="abc123", size=100),
++            ]
++        )
++        # Even if the catalog item has different metadata, artifacts match
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++
++# ---------------------------------------------------------------------------
++# Inventory record creation tests
++# ---------------------------------------------------------------------------
++
++
++class TestInventoryRecordCreation:
++    def test_record_from_installation(self):
++        inst = Installation(
++            system="piper",
++            id="test-voice",
++            kind="voice",
++            path=Path("/tmp"),
++            artifacts=(InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "sha", 100),),
++            metadata={"language": {"code": "en_US"}, "gender": "male"},
++        )
++        rec = inventory_record_from_installation(inst)
++        assert rec.system == "piper"
++        assert rec.kind == "voice"
++        assert rec.language_codes == ("en-US",)
++        assert rec.gender == "male"
++        assert rec.installed is True
++        assert rec.size_bytes == 100
++
++    def test_record_from_catalog(self):
++        item = CatalogItem(
++            system="piper",
++            id="test-voice",
++            kind="voice",
++            artifacts=(Artifact("model", "a.onnx", size=100),),
++            metadata={"language": {"code": "en_US"}},
++        )
++        rec = inventory_record_from_catalog(item)
++        assert rec.system == "piper"
++        assert rec.status == "available"
++        assert rec.gender == "unknown"  # No gender in metadata
++
++    def test_external_installation_has_local_status(self):
++        inst = Installation(
++            system="test",
++            id="local",
++            kind="external",
++            path=Path("/tmp"),
++            artifacts=(),
++            metadata={"external": True},
++        )
++        rec = inventory_record_from_installation(inst)
++        assert rec.status == "local"
++
++
++# ---------------------------------------------------------------------------
++# Merge inventory tests
++# ---------------------------------------------------------------------------
++
++
++class TestMergeInventory:
++    def test_installed_and_catalog_merged(self):
++        inst = Installation(
++            system="piper",
++            id="voice-a",
++            kind="voice",
++            path=Path("/tmp"),
++            artifacts=(InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "sha", 100),),
++            metadata={"language": {"code": "en_US"}},
++        )
++        cat_installed = CatalogItem(
++            system="piper",
++            id="voice-a",
++            kind="voice",
++            artifacts=(Artifact("model", "a.onnx", sha256="sha", size=100),),
++            metadata={"language": {"code": "en_US"}},
++        )
++        cat_available = CatalogItem(
++            system="piper",
++            id="voice-b",
++            kind="voice",
++            artifacts=(Artifact("model", "b.onnx", size=200),),
++            metadata={"language": {"code": "en_US"}},
++        )
++        records = merge_inventory([inst], [cat_installed, cat_available])
++        assert len(records) == 2
++        by_ref = {r.ref: r for r in records}
++        assert by_ref["piper:voice-a"].installed is True
++        assert by_ref["piper:voice-b"].installed is False
++
++    def test_query_inventory_with_filter(self):
++        inst_en = Installation(
++            system="piper",
++            id="en-voice",
++            kind="voice",
++            path=Path("/tmp"),
++            artifacts=(InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "sha", 100),),
++            metadata={"language": {"code": "en_US"}},
++        )
++        inst_de = Installation(
++            system="piper",
++            id="de-voice",
++            kind="voice",
++            path=Path("/tmp"),
++            artifacts=(InstalledArtifact("model", "b.onnx", Path("/tmp/b.onnx"), "sha", 200),),
++            metadata={"language": {"code": "de_DE"}},
++        )
++        spec = InventoryFilter(languages=("en",))
++        records = query_inventory([inst_en, inst_de], None, spec=spec)
++        assert len(records) == 1
++        assert records[0].id == "en-voice"
+diff --git a/tests/test_store.py b/tests/test_store.py
+index cb65218..daaf6af 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -54,7 +54,8 @@ def test_remove_then_gc(tmp_path):
+     store = AssetStore(tmp_path / "cache")
+     store.install(item)
+     store.remove("test", "one")
+-    assert store.gc() == 1
++    report = store.gc()
++    assert report.removed_blobs == 1
+
+
+ def test_install_falls_back_to_copy_when_os_link_is_unavailable(tmp_path, monkeypatch):
+diff --git a/tests/test_updates.py b/tests/test_updates.py
+new file mode 100644
+index 0000000..af195e0
+--- /dev/null
++++ b/tests/test_updates.py
+@@ -0,0 +1,322 @@
++"""Tests for update detection: all comparison scenarios."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from onnxvoice.inventory import (
++    UpdateComparison,
++    compare_installation_to_catalog,
++    catalog_content_fingerprint,
++)
++from onnxvoice.types import Artifact, CatalogItem, InstalledArtifact, Installation
++
++
++def _inst(artifacts):
++    """Helper to create a test Installation."""
++    return Installation(
++        system="test",
++        id="one",
++        kind="model",
++        path=Path("/tmp"),
++        artifacts=tuple(artifacts),
++    )
++
++
++def _item(artifacts, **extra_meta):
++    """Helper to create a test CatalogItem."""
++    return CatalogItem(
++        system="test",
++        id="one",
++        kind="model",
++        artifacts=tuple(artifacts),
++        metadata=dict(extra_meta),
++    )
++
++
++# ---------------------------------------------------------------------------
++# SHA-256 comparison
++# ---------------------------------------------------------------------------
++
++
++class TestSha256Comparison:
++    def test_current_when_sha256_matches(self):
++        """Case 1: current SHA-256 matches => 'current'."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "a.onnx", sha256="abc123", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++    def test_update_when_sha256_differs(self):
++        """Case 2: SHA-256 differs => 'update_available'."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "a.onnx", sha256="def456", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++        assert "model" in result.changed_roles
++
++
++# ---------------------------------------------------------------------------
++# MD5 comparison
++# ---------------------------------------------------------------------------
++
++
++class TestMd5Comparison:
++    def test_current_when_md5_matches_size(self):
++        """Case 3: catalog has MD5, installed has SHA-256, size matches => 'current'."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "a.onnx", md5="md5hash", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++    def test_update_when_md5_differs_size(self):
++        """Case 4: MD5 present but size differs => 'update_available'."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "a.onnx", md5="md5hash", size=200),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++
++
++# ---------------------------------------------------------------------------
++# Catalog revision vs artifact identity
++# ---------------------------------------------------------------------------
++
++
++class TestCatalogRevisionIndependence:
++    def test_current_when_revision_changes_but_artifacts_match(self):
++        """Case 5: unrelated catalog source revision changes but artifacts match => 'current'."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "a.onnx", sha256="abc123", size=100),
++            ],
++            source_revision="new-revision-xyz",
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++    def test_update_when_artifacts_change(self):
++        """Case 6: artifact set changes => 'update_available'."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "a.onnx", sha256="abc123", size=100),
++                Artifact("config", "config.json", sha256="new123", size=50),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++
++
++# ---------------------------------------------------------------------------
++# Insufficient identity
++# ---------------------------------------------------------------------------
++
++
++class TestInsufficientIdentity:
++    def test_unknown_when_no_identity_info(self):
++        """Case 7: insufficient digest identity => 'unknown'."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "a.onnx", Path("/tmp/a.onnx"), "abc123", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "a.onnx"),  # No sha256, no md5, no size
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "unknown"
++        assert result.reason is not None
++
++
++# ---------------------------------------------------------------------------
++# External / imported installations
++# ---------------------------------------------------------------------------
++
++
++class TestExternalInstallations:
++    def test_not_applicable_for_local_import(self):
++        """Case 8: imported/local installation with no catalog entry => 'not_applicable'.
++
++        This is handled at the merge level, not in compare_installation_to_catalog,
++        but we can test the comparison returns unknown when artifacts don't match.
++        """
++        inst = _inst(
++            [
++                InstalledArtifact("model", "local.onnx", Path("/tmp/local.onnx"), "sha", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "remote.onnx", sha256="sha", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        # Different filenames mean different identity keys, so the installed artifact
++        # has no matching catalog artifact
++        assert result.status == "update_available"
++
++
++# ---------------------------------------------------------------------------
++# Kokoro quality/distribution matching
++# ---------------------------------------------------------------------------
++
++
++class TestKokoroSelection:
++    def test_current_when_quality_matches(self):
++        """Case 9: explicit Kokoro quality compared against same quality."""
++        inst = _inst(
++            [
++                InstalledArtifact(
++                    "model", "model.onnx", Path("/tmp/model.onnx"), "abc", 100, quality="fp16"
++                ),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "model.onnx", sha256="abc", size=100, quality="fp16"),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++    def test_current_when_distribution_matches(self):
++        """Case 10: explicit distribution compared against same distribution."""
++        inst = _inst(
++            [
++                InstalledArtifact("model", "model.onnx", Path("/tmp/model.onnx"), "abc", 100),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "model.onnx", sha256="abc", size=100),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++
++# ---------------------------------------------------------------------------
++# Multiple artifacts
++# ---------------------------------------------------------------------------
++
++
++class TestMultipleArtifacts:
++    def test_current_all_artifacts_match(self):
++        inst = _inst(
++            [
++                InstalledArtifact("model", "model.onnx", Path("/tmp/model.onnx"), "abc", 100),
++                InstalledArtifact("config", "config.json", Path("/tmp/config.json"), "def", 50),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "model.onnx", sha256="abc", size=100),
++                Artifact("config", "config.json", sha256="def", size=50),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "current"
++
++    def test_update_one_artifact_changed(self):
++        inst = _inst(
++            [
++                InstalledArtifact("model", "model.onnx", Path("/tmp/model.onnx"), "abc", 100),
++                InstalledArtifact("config", "config.json", Path("/tmp/config.json"), "def", 50),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "model.onnx", sha256="abc", size=100),
++                Artifact("config", "config.json", sha256="newhash", size=50),
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++        assert "config" in result.changed_roles
++
++    def test_update_artifact_removed_from_catalog(self):
++        inst = _inst(
++            [
++                InstalledArtifact("model", "model.onnx", Path("/tmp/model.onnx"), "abc", 100),
++                InstalledArtifact("config", "config.json", Path("/tmp/config.json"), "def", 50),
++            ]
++        )
++        item = _item(
++            [
++                Artifact("model", "model.onnx", sha256="abc", size=100),
++                # config removed from catalog
++            ]
++        )
++        result = compare_installation_to_catalog(inst, item)
++        assert result.status == "update_available"
++
++
++# ---------------------------------------------------------------------------
++# Catalog content fingerprint
++# ---------------------------------------------------------------------------
++
++
++class TestCatalogContentFingerprint:
++    def test_deterministic(self):
++        item = _item(
++            [
++                Artifact("model", "a.onnx", sha256="abc123", size=100),
++            ]
++        )
++        fp1 = catalog_content_fingerprint(item)
++        fp2 = catalog_content_fingerprint(item)
++        assert fp1 == fp2
++
++    def test_changes_when_artifacts_change(self):
++        item1 = _item([Artifact("model", "a.onnx", sha256="abc123", size=100)])
++        item2 = _item([Artifact("model", "a.onnx", sha256="def456", size=100)])
++        assert catalog_content_fingerprint(item1) != catalog_content_fingerprint(item2)
++
++    def test_starts_with_sha256_prefix(self):
++        item = _item([Artifact("model", "a.onnx", sha256="abc123", size=100)])
++        assert catalog_content_fingerprint(item).startswith("sha256:")
