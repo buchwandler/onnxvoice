@@ -6,6 +6,7 @@ import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
 from .catalog import CatalogClient, filter_items, parse_ref
 from .checksums import digest_file
 from .errors import AssetNotFoundError, NotInstalledError
