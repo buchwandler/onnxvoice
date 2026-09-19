@@ -83,24 +83,124 @@ A local path or HTTP(S) URL is accepted.
 
 ## CLI
 
-```bash
-onnxvoice list --system piper --language de
-onnxvoice list --system kokoro --quality fp16
+### Inventory and discovery
 
+```bash
+# Everything installed locally
+onnxvoice installed
+
+# Installed US English voices
+onnxvoice installed --kind voice --lang en-US
+
+# Installed male US English voices
+onnxvoice installed --kind voice --lang en-US --gender male
+
+# Installed + available male US English voices (merged inventory)
+onnxvoice list --kind voice --lang en-US --gender male
+
+# Only available (not installed) entries
+onnxvoice list --status available
+
+# JSON output for scripting
+onnxvoice installed --format json
+```
+
+### Updates
+
+```bash
+# Check what's outdated (refreshes catalogs by default)
+onnxvoice updates
+
+# Check against cached catalogs only
+onnxvoice updates --cached
+
+# Update one asset (preserves quality/distribution selection)
+onnxvoice update piper:en_US-lessac-medium
+
+# Update all outdated assets
+onnxvoice update --all
+```
+
+### Storage
+
+```bash
+# Show cache usage with byte totals
+onnxvoice cache info
+
+# Show cache usage as JSON
+onnxvoice cache info --format json
+
+# Show what GC would remove
+onnxvoice cache gc --dry-run
+
+# Remove orphaned blobs
+onnxvoice cache gc
+```
+
+### Removal
+
+```bash
+# Show what would be removed (dry run)
+onnxvoice remove piper:en_US-lessac-medium --dry-run
+
+# Remove one asset
+onnxvoice remove piper:en_US-lessac-medium
+
+# Remove and clean up orphaned blobs
+onnxvoice remove piper:en_US-lessac-medium --gc
+
+# Remove multiple assets
+onnxvoice remove piper:en_US-lessac-medium kokoro:v1.0
+
+# Remove all variants of a ref
+onnxvoice remove kokoro:v1.0 --all-variants --yes
+```
+
+### Info
+
+```bash
+# Detailed info about an installed asset
+onnxvoice info piper:en_US-lessac-medium
+
+# Info with update check
+onnxvoice info piper:en_US-lessac-medium --check-updates
+```
+
+### Install and verify
+
+```bash
 onnxvoice install piper:en_US-lessac-medium
 onnxvoice install kokoro:v1.0 --quality fp16
-
-onnxvoice list --system piper --installed
 onnxvoice path piper:en_US-lessac-medium
 onnxvoice verify piper:en_US-lessac-medium
 onnxvoice show piper:en_US-lessac-medium
+```
 
-onnxvoice cache info
-onnxvoice cache gc
+### Catalog management
 
+```bash
 onnxvoice catalog piper build --output catalog/voices.json --source-output catalog/source.json
 onnxvoice catalog piper verify --catalog catalog/voices.json --source catalog/source.json
 ```
+
+### Filter flags
+
+Common flags for `list`, `installed`, and `updates`:
+
+| Flag                  | Description                             |
+| --------------------- | --------------------------------------- | ------- | ---------------------------- | ---------------- |
+| `--system piper       | kokoro                                  | pocket` | Filter by system             |
+| `--kind voice         | model                                   | bundle` | Filter by kind               |
+| `--lang / --language` | Filter by language (e.g. `en`, `en-US`) |
+| `--gender male        | female                                  | neutral | unknown`                     | Filter by gender |
+| `--quality`           | Filter by quality                       |
+| `--distribution`      | Filter by distribution                  |
+| `--status installed   | available                               | local`  | Filter by status (list only) |
+| `--format table       | plain                                   | json    | tsv`                         | Output format    |
+
+**Note on gender**: Gender metadata depends on authoritative catalog sources. If the catalog does not supply a gender field, entries default to `unknown`. The CLI never infers gender from voice names or IDs.
+
+**Note on installed vs cached blobs**: After `onnxvoice remove REF`, the installation is gone but content-addressed blobs may remain until `onnxvoice cache gc` is run. Use `cache info` to see reclaimable space.
 
 Kokoro has multiple ONNX model qualities in one distribution. `onnxvoice install kokoro:v1.0` selects `fp32` by default rather than downloading all model variants. Non-model runtime artifacts from the selected distribution are installed with it.
 

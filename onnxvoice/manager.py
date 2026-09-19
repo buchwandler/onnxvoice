@@ -45,8 +45,22 @@ class OnnxVoice:
         refresh: bool = False,
         progress: ProgressCallback | None = None,
     ) -> CatalogResults:
+        from .inventory import matches_language
+
         if installed:
-            return self.store.installed(system)
+            installations = self.store.installed(system)
+            result: list[Installation] = installations
+            if language:
+                result = [inst for inst in result if matches_language(inst.metadata, language)]
+            if quality:
+                result = [
+                    inst
+                    for inst in result
+                    if inst.metadata.get("selected_quality") == quality
+                    or inst.metadata.get("quality") == quality
+                    or any(a.quality == quality for a in inst.artifacts)
+                ]
+            return result
         if system is None:
             raise ValueError("system is required unless installed=True")
         return filter_items(
@@ -255,6 +269,143 @@ class OnnxVoice:
 
     def installed(self, system: str | None = None) -> Installations:
         return self.store.installed(system)
+
+    def find_installed(self, ref: str) -> list[Installation]:
+        """Find all installed variants matching a canonical ref.
+
+        Returns installations whose system and canonical id match.
+        """
+        from .catalog import parse_ref
+
+        system, item_id = parse_ref(ref)
+        result = []
+        for inst in self.store.installed(system):
+            if inst.id == item_id:
+                result.append(inst)
+        return result
+
+    def inventory(
+        self,
+        *,
+        system: str | None = None,
+        language: str | None = None,
+        gender: str | None = None,
+        kind: str | None = None,
+        quality: str | None = None,
+        distribution: str | None = None,
+        status: str | None = None,
+        installed_only: bool = False,
+        refresh: bool = False,
+        check_updates: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> list[InventoryRecord]:
+        """Query merged inventory with optional filtering and update checking."""
+        from .inventory import InventoryFilter, query_inventory
+
+        installations = self.store.installed(system)
+        catalog_items = None
+        if not installed_only:
+            try:
+                if system:
+                    catalog_items = self.catalog.list(system, refresh=refresh, progress=progress)
+                else:
+                    all_items = []
+                    for sys in self.catalog.systems():
+                        try:
+                            all_items.extend(
+                                self.catalog.list(sys, refresh=refresh, progress=progress)
+                            )
+                        except Exception:
+                            pass  # Partial catalog failure is OK
+                    catalog_items = all_items
+            except Exception:
+                if installed_only:
+                    catalog_items = []
+                else:
+                    raise
+
+        if catalog_items is None:
+            catalog_items = []
+
+        # Build filter spec
+        statuses = ()
+        if status:
+            statuses = (status,)
+
+        spec = InventoryFilter(
+            systems=(system,) if system else (),
+            kinds=(kind,) if kind else (),
+            languages=(language,) if language else (),
+            genders=(gender,) if gender else (),
+            qualities=(quality,) if quality else (),
+            distributions=(distribution,) if distribution else (),
+            statuses=statuses,
+        )
+
+        return query_inventory(
+            installations,
+            catalog_items,
+            spec=spec,
+            check_updates=check_updates,
+        )
+
+    def check_updates(
+        self,
+        *,
+        system: str | None = None,
+        language: str | None = None,
+        kind: str | None = None,
+        refresh: bool = True,
+        progress: ProgressCallback | None = None,
+    ) -> list[InventoryRecord]:
+        """Check for available updates. Refreshes catalogs by default."""
+        return self.inventory(
+            system=system,
+            language=language,
+            kind=kind,
+            refresh=refresh,
+            check_updates=True,
+            progress=progress,
+        )
+
+    def update(
+        self,
+        ref: str,
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
+        force: bool = False,
+        refresh: bool = True,
+        progress: ProgressCallback | None = None,
+    ) -> Installation:
+        """Update an existing installation with fresh catalog data.
+
+        Preserves the current effective quality/distribution selection.
+        Atomically replaces the installation.
+        """
+        # Find existing installation
+        existing = self.resolve(ref, quality=quality, distribution=distribution)
+
+        # Preserve existing selection
+        eff_quality = quality or existing.metadata.get("selected_quality")
+        eff_distribution = distribution or existing.metadata.get("selected_distribution")
+
+        # Resolve fresh catalog entry with same selection
+        item = self.catalog.resolve(
+            ref,
+            refresh=refresh,
+            quality=eff_quality,
+            distribution=eff_distribution,
+            progress=progress,
+        )
+        item = self._with_selection_identity(
+            item,
+            quality=eff_quality,
+            distribution=eff_distribution,
+        )
+
+        # Atomic replace
+        return self.store.replace(existing, item, progress=progress)
 
     def where(
         self,

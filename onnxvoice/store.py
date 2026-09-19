@@ -345,20 +345,185 @@ class AssetStore:
                 raise IntegrityError(f"Missing installed artifact: {path}")
             verify_file(path, expected_size=artifact.size, sha256=artifact.sha256)
 
-    def gc(self) -> int:
-        """Remove blobs no longer referenced by any install manifest."""
+    def gc(self) -> GcReport:
+        """Remove blobs no longer referenced by any install manifest.
+
+        Returns a GcReport with count and bytes of removed blobs.
+        """
+        from .types import GcReport
+
         with FileLock(self._gc_lock_path()):
             referenced = {
                 artifact.sha256
                 for installation in self.installed()
                 for artifact in installation.artifacts
             }
-            removed = 0
+            removed_count = 0
+            removed_bytes = 0
             for blob in self.blobs.glob("*/*"):
                 if blob.is_file() and blob.name not in referenced:
+                    removed_bytes += blob.stat().st_size
                     blob.unlink()
-                    removed += 1
-            return removed
+                    removed_count += 1
+            return GcReport(removed_blobs=removed_count, removed_bytes=removed_bytes)
+
+    def usage(self) -> CacheUsage:
+        """Compute cache storage usage statistics.
+
+        Uses inode-based unique file accounting to avoid double-counting
+        hard-linked files.
+        """
+        from .types import CacheUsage
+
+        installations = self.installed()
+
+        # Install logical bytes
+        install_logical = sum(
+            artifact.size for inst in installations for artifact in inst.artifacts
+        )
+
+        # Catalog bytes
+        catalog_bytes = 0
+        if self.root.joinpath("catalogs").is_dir():
+            for f in self.root.joinpath("catalogs").iterdir():
+                if f.is_file():
+                    catalog_bytes += f.stat().st_size
+
+        # Unique file bytes (inode-based dedup)
+        seen_inodes: set[tuple[int, int]] = set()
+        unique_bytes = 0
+
+        # Walk blob store
+        blob_apparent = 0
+        if self.blobs.is_dir():
+            for blob in self.blobs.glob("*/*"):
+                if blob.is_file():
+                    st = blob.stat()
+                    blob_apparent += st.st_size
+                    inode_key = (st.st_dev, st.st_ino)
+                    if inode_key not in seen_inodes:
+                        seen_inodes.add(inode_key)
+                        unique_bytes += st.st_size
+
+        # Walk installs (skip manifest.json from unique count since it's not a blob)
+        for inst in installations:
+            for artifact in inst.artifacts:
+                path = artifact.path
+                if path.is_file():
+                    st = path.stat()
+                    inode_key = (st.st_dev, st.st_ino)
+                    if inode_key not in seen_inodes:
+                        seen_inodes.add(inode_key)
+                        unique_bytes += st.st_size
+
+        # Orphan blobs
+        referenced = {artifact.sha256 for inst in installations for artifact in inst.artifacts}
+        orphan_count = 0
+        orphan_bytes = 0
+        if self.blobs.is_dir():
+            for blob in self.blobs.glob("*/*"):
+                if blob.is_file() and blob.name not in referenced:
+                    orphan_count += 1
+                    orphan_bytes += blob.stat().st_size
+
+        return CacheUsage(
+            root=self.root,
+            installation_count=len(installations),
+            install_logical_bytes=install_logical,
+            blob_apparent_bytes=blob_apparent,
+            catalog_bytes=catalog_bytes,
+            unique_file_bytes=unique_bytes,
+            orphan_blob_count=orphan_count,
+            orphan_blob_bytes=orphan_bytes,
+        )
+
+    def replace(
+        self,
+        existing: Installation,
+        item: CatalogItem,
+        *,
+        progress: ProgressCallback | None = None,
+    ) -> Installation:
+        """Atomically replace an existing installation with a new catalog item.
+
+        Reuses the same storage path. Old data is removed after the new
+        installation is verified.
+        """
+        storage_id = existing.storage_id or existing.id
+        system = existing.system
+        target = self.install_path(system, storage_id)
+
+        with FileLock(self._install_lock_path(system, storage_id)):
+            # Use the same staging + atomic replace workflow as install
+            staging_path = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
+            self._emit(progress, AssetProgress("install_started", item.ref, target=str(target)))
+            try:
+                installed: list[InstalledArtifact] = []
+                with FileLock(self._gc_lock_path()):
+                    for artifact in item.artifacts:
+                        artifact_target = str(target / artifact.filename)
+                        blob, sha256 = self._materialize_artifact(
+                            artifact,
+                            ref=item.ref,
+                            progress=progress,
+                            target=artifact_target,
+                        )
+                        destination = staging_path / artifact.filename
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        self._link_or_copy(blob, destination)
+                        installed.append(
+                            InstalledArtifact(
+                                role=artifact.role,
+                                filename=artifact.filename,
+                                path=destination,
+                                sha256=sha256,
+                                size=destination.stat().st_size,
+                                quality=artifact.quality,
+                                component=artifact.component,
+                                format=artifact.format,
+                                metadata=dict(artifact.metadata),
+                            )
+                        )
+                    manifest_data = {
+                        "schema": MANIFEST_SCHEMA_VERSION,
+                        "system": item.system,
+                        "id": item.id,
+                        "storage_id": storage_id,
+                        "kind": item.kind,
+                        "sample_rate": item.sample_rate,
+                        "voices": list(item.voices),
+                        "default_voice": item.default_voice,
+                        "metadata": item.metadata,
+                        "artifacts": [
+                            {
+                                "role": a.role,
+                                "filename": a.filename,
+                                "sha256": a.sha256,
+                                "size": a.size,
+                                "quality": a.quality,
+                                "component": a.component,
+                                "format": a.format,
+                                "metadata": dict(a.metadata),
+                            }
+                            for a in installed
+                        ],
+                    }
+                    (staging_path / "manifest.json").write_text(
+                        json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                    )
+                    # Atomic replace
+                    if target.exists():
+                        shutil.rmtree(target)
+                    os.replace(staging_path, target)
+                installation = self.get(system, storage_id)
+                self._emit(
+                    progress, AssetProgress("install_completed", item.ref, target=str(target))
+                )
+                return installation
+            except Exception:
+                shutil.rmtree(staging_path, ignore_errors=True)
+                self._emit(progress, AssetProgress("install_failed", item.ref, target=str(target)))
+                raise
 
     def _materialize_artifact(
         self,

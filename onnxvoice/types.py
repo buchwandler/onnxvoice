@@ -296,6 +296,30 @@ class InferenceResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CacheUsage:
+    """Report of cache storage usage."""
+
+    root: Path
+    installation_count: int
+
+    install_logical_bytes: int
+    blob_apparent_bytes: int
+    catalog_bytes: int
+
+    unique_file_bytes: int
+    orphan_blob_count: int
+    orphan_blob_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class GcReport:
+    """Result of garbage collection."""
+
+    removed_blobs: int
+    removed_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class AssetProgress:
     phase: str
     ref: str | None = None

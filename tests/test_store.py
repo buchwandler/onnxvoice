@@ -54,7 +54,8 @@ def test_remove_then_gc(tmp_path):
     store = AssetStore(tmp_path / "cache")
     store.install(item)
     store.remove("test", "one")
-    assert store.gc() == 1
+    report = store.gc()
+    assert report.removed_blobs == 1
 
 
 def test_install_falls_back_to_copy_when_os_link_is_unavailable(tmp_path, monkeypatch):

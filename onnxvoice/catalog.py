@@ -254,6 +254,7 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
                     "language": language,
                     "quality": entry.get("quality"),
                     "name": entry.get("name"),
+                    "gender": entry.get("gender"),
                     "num_speakers": entry.get("num_speakers"),
                     "speaker_id_map": entry.get("speaker_id_map") or {},
                     "source_revision": source.get("revision"),
@@ -466,21 +467,11 @@ def filter_items(
     language: str | None = None,
     quality: str | None = None,
 ) -> list[CatalogItem]:
+    from .inventory import language_codes_from_metadata, matches_language
+
     result = list(items)
     if language:
-        lang = language.lower().replace("-", "_")
-        result = [
-            item
-            for item in result
-            if str((item.metadata.get("language") or {}).get("code", ""))
-            .lower()
-            .replace("-", "_")
-            .startswith(lang)
-            or any(
-                str(code).lower().replace("-", "_").startswith(lang)
-                for code in item.metadata.get("language_codes", ())
-            )
-        ]
+        result = [item for item in result if matches_language(item.metadata, language)]
     if quality:
         result = [
             item
