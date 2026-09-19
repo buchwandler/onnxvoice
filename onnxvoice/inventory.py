@@ -8,15 +8,11 @@ and artifact-level update comparison.
 from __future__ import annotations
 
 import hashlib
-import json
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
-from pathlib import Path
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
-from .catalog import CatalogClient, filter_items as catalog_filter_items
-from .types import CatalogItem, Installation, InstalledArtifact, Artifact
-
+from .types import Artifact, CatalogItem, Installation, InstalledArtifact
 
 # ---------------------------------------------------------------------------
 # Language normalization
@@ -94,9 +90,7 @@ def _match_code(pattern: str, code: str) -> bool:
         return True
     # Pattern "en" matches "en-US", "en-GB", etc.
     # But pattern "en-US" should NOT match "en-GB"
-    if "-" not in pattern and code.startswith(pattern + "-"):
-        return True
-    return False
+    return "-" not in pattern and code.startswith(pattern + "-")
 
 
 def matches_language(metadata: Mapping[str, Any], language_filter: str) -> bool:
@@ -331,15 +325,13 @@ def matches_filter(record: InventoryRecord, spec: InventoryFilter) -> bool:
             return False
     if spec.genders and record.gender not in spec.genders:
         return False
-    if spec.qualities:
-        if record.quality is None or record.quality not in spec.qualities:
-            return False
-    if spec.distributions:
-        if record.distribution is None or record.distribution not in spec.distributions:
-            return False
-    if spec.statuses and record.status not in spec.statuses:
+    if spec.qualities and (record.quality is None or record.quality not in spec.qualities):
         return False
-    return True
+    if spec.distributions and (
+        record.distribution is None or record.distribution not in spec.distributions
+    ):
+        return False
+    return not (spec.statuses and record.status not in spec.statuses)
 
 
 # ---------------------------------------------------------------------------
@@ -374,9 +366,9 @@ def compare_installation_to_catalog(
         installed_by_key[key] = artifact
 
     catalog_by_key: dict[str, Artifact] = {}
-    for artifact in item.artifacts:
-        key = _artifact_identity_key(artifact)
-        catalog_by_key[key] = artifact
+    for cat_art in item.artifacts:
+        key = _artifact_identity_key(cat_art)
+        catalog_by_key[key] = cat_art
 
     # If no catalog artifacts match at all, it might be a different selection
     if not installed_by_key and not catalog_by_key:

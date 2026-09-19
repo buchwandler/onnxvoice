@@ -211,7 +211,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _cmd_list(args: argparse.Namespace) -> int:
     from ._table import format_bytes, render_inventory
-    from .inventory import InventoryRecord
 
     manager = _manager(args)
 
@@ -424,12 +423,12 @@ def _cmd_info(args: argparse.Namespace) -> int:
         return 2
 
     from .inventory import (
-        language_codes_from_metadata,
-        gender_from_metadata,
-        effective_quality,
         effective_distribution,
-        version_label,
+        effective_quality,
+        gender_from_metadata,
+        language_codes_from_metadata,
         logical_size_bytes,
+        version_label,
     )
 
     meta = installation.metadata
@@ -586,7 +585,7 @@ def _cmd_remove(args: argparse.Namespace) -> int:
 
 
 def _cmd_cache_info(args: argparse.Namespace) -> int:
-    from ._table import format_bytes, render_inventory
+    from ._table import format_bytes
 
     manager = _manager(args)
     usage = manager.store.usage()

@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from onnxvoice.inventory import (
     InventoryFilter,
     InventoryRecord,
-    _display_code,
     _match_code,
-    catalog_content_fingerprint,
     catalog_size_bytes,
     compare_installation_to_catalog,
     effective_distribution,
@@ -30,8 +26,7 @@ from onnxvoice.inventory import (
     query_inventory,
     version_label,
 )
-from onnxvoice.types import Artifact, CatalogItem, InstalledArtifact, Installation
-
+from onnxvoice.types import Artifact, CatalogItem, Installation, InstalledArtifact
 
 # ---------------------------------------------------------------------------
 # Language normalization tests
@@ -292,22 +287,22 @@ class TestSizeHelpers:
 
 def _make_record(**kwargs) -> InventoryRecord:
     """Helper to create InventoryRecord with defaults."""
-    defaults = dict(
-        system="piper",
-        id="test",
-        kind="voice",
-        language_codes=("en-US",),
-        gender="unknown",
-        quality=None,
-        distribution=None,
-        version=None,
-        installed=False,
-        installation=None,
-        catalog_item=None,
-        size_bytes=100,
-        status="available",
-        update_status="not_checked",
-    )
+    defaults = {
+        "system": "piper",
+        "id": "test",
+        "kind": "voice",
+        "language_codes": ("en-US",),
+        "gender": "unknown",
+        "quality": None,
+        "distribution": None,
+        "version": None,
+        "installed": False,
+        "installation": None,
+        "catalog_item": None,
+        "size_bytes": 100,
+        "status": "available",
+        "update_status": "not_checked",
+    }
     defaults.update(kwargs)
     return InventoryRecord(**defaults)
 

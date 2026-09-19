@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import json
 from io import StringIO
-from pathlib import Path
 
-import pytest
-
-from onnxvoice._table import format_bytes, render_json, render_table, render_inventory
-
+from onnxvoice._table import format_bytes, render_inventory, render_json, render_table
 
 # ---------------------------------------------------------------------------
 # format_bytes tests

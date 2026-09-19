@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import warnings
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from .catalog import CatalogClient, filter_items, parse_ref
 from .checksums import digest_file
 from .errors import AssetNotFoundError, NotInstalledError
+from .inventory import InventoryRecord
 from .store import AssetStore, ProgressCallback
 from .systems import get_adapter
 from .types import CatalogItem, Installation, InstalledArtifact
@@ -270,7 +273,7 @@ class OnnxVoice:
     def installed(self, system: str | None = None) -> Installations:
         return self.store.installed(system)
 
-    def find_installed(self, ref: str) -> list[Installation]:
+    def find_installed(self, ref: str) -> builtins.list[Installation]:
         """Find all installed variants matching a canonical ref.
 
         Returns installations whose system and canonical id match.
@@ -298,7 +301,7 @@ class OnnxVoice:
         refresh: bool = False,
         check_updates: bool = False,
         progress: ProgressCallback | None = None,
-    ) -> list[InventoryRecord]:
+    ) -> builtins.list[InventoryRecord]:
         """Query merged inventory with optional filtering and update checking."""
         from .inventory import InventoryFilter, query_inventory
 
@@ -311,12 +314,10 @@ class OnnxVoice:
                 else:
                     all_items = []
                     for sys in self.catalog.systems():
-                        try:
+                        with suppress(Exception):
                             all_items.extend(
                                 self.catalog.list(sys, refresh=refresh, progress=progress)
-                            )
-                        except Exception:
-                            pass  # Partial catalog failure is OK
+                            )  # Partial catalog failure is OK
                     catalog_items = all_items
             except Exception:
                 if installed_only:
@@ -328,7 +329,7 @@ class OnnxVoice:
             catalog_items = []
 
         # Build filter spec
-        statuses = ()
+        statuses: tuple[str, ...] = ()
         if status:
             statuses = (status,)
 
@@ -357,7 +358,7 @@ class OnnxVoice:
         kind: str | None = None,
         refresh: bool = True,
         progress: ProgressCallback | None = None,
-    ) -> list[InventoryRecord]:
+    ) -> builtins.list[InventoryRecord]:
         """Check for available updates. Refreshes catalogs by default."""
         return self.inventory(
             system=system,

@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from onnxvoice.inventory import (
-    UpdateComparison,
-    compare_installation_to_catalog,
     catalog_content_fingerprint,
+    compare_installation_to_catalog,
 )
-from onnxvoice.types import Artifact, CatalogItem, InstalledArtifact, Installation
+from onnxvoice.types import Artifact, CatalogItem, Installation, InstalledArtifact
 
 
 def _inst(artifacts):

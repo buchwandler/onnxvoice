@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import os
-from pathlib import Path
-
-import pytest
 
 from onnxvoice.store import AssetStore
 from onnxvoice.types import Artifact, CatalogItem
-
 
 # ---------------------------------------------------------------------------
 # Cache usage tests
@@ -24,7 +19,7 @@ class TestCacheUsage:
             system=system,
             id=item_id,
             kind="model",
-            artifacts=(Artifact("model", "model.onnx", f"file:///dev/null", len(content), sha),),
+            artifacts=(Artifact("model", "model.onnx", "file:///dev/null", len(content), sha),),
         )
 
     def test_empty_cache_usage(self, tmp_path):

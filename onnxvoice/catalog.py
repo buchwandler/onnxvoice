@@ -467,7 +467,7 @@ def filter_items(
     language: str | None = None,
     quality: str | None = None,
 ) -> list[CatalogItem]:
-    from .inventory import language_codes_from_metadata, matches_language
+    from .inventory import matches_language
 
     result = list(items)
     if language:
