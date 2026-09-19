@@ -199,6 +199,7 @@ class CatalogClient:
             default_voice=item.default_voice,
             metadata={**item.metadata, "selected_quality": selected_quality},
         )
+
     @staticmethod
     def _emit(progress: ProgressCallback | None, event: AssetProgress) -> None:
         if progress is not None:
@@ -351,6 +352,7 @@ def _kokoro_models(data: dict[str, Any]) -> dict[str, Mapping[str, Any]]:
     if not isinstance(models, dict):
         raise CatalogError("Kokoro catalog is missing the 'models' mapping")
     return models
+
 
 def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
     bundles = data.get("bundles")

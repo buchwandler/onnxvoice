@@ -140,6 +140,7 @@ class CatalogItem:
             )
         return candidates[0]
 
+
 @dataclass(frozen=True, slots=True)
 class InstalledArtifact:
     role: str
@@ -182,6 +183,7 @@ class Installation:
         """The explicit quality selector, if any."""
         value = self.metadata.get("selected_quality")
         return value if isinstance(value, str) else None
+
     def artifacts_for(
         self,
         role: str | None = None,
@@ -246,9 +248,8 @@ class Installation:
         quality: str | None = None,
     ) -> Path:
         """Convenience: return the filesystem path for a single artifact."""
-        return self.artifact(
-            role, component=component, quality=quality
-        ).path
+        return self.artifact(role, component=component, quality=quality).path
+
 
 @dataclass(frozen=True, slots=True)
 class SessionDiagnostic:

@@ -78,6 +78,7 @@ def where(ref: str, **kwargs):
 def remove(ref: str, **kwargs):
     return _manager().remove(ref, **kwargs)
 
+
 __all__ = [
     "__version__",
     "OnnxVoice",

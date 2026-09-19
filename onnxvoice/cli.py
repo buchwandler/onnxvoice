@@ -198,11 +198,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "path":
-            print(manager.where(
-                args.ref,
-                quality=getattr(args, "quality", None),
-                distribution=getattr(args, "distribution", None),
-            ))
+            print(
+                manager.where(
+                    args.ref,
+                    quality=getattr(args, "quality", None),
+                    distribution=getattr(args, "distribution", None),
+                )
+            )
             return 0
 
         if args.command == "show":

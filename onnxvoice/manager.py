@@ -224,9 +224,7 @@ class OnnxVoice:
         if progress is not None:
             raise ValueError("resolve() is local-only and does not accept progress callbacks")
         system, item_id = parse_ref(ref)
-        storage_id = self._selection_storage_id(
-            item_id, quality=quality, distribution=distribution
-        )
+        storage_id = self._selection_storage_id(item_id, quality=quality, distribution=distribution)
         try:
             installation = self.store.get(system, storage_id)
         except AssetNotFoundError as exc:
@@ -265,9 +263,7 @@ class OnnxVoice:
         distribution: str | None = None,
     ) -> Path:
         """Return the installation path for a selected installation."""
-        return self.resolve(
-            ref, quality=quality, distribution=distribution
-        ).path
+        return self.resolve(ref, quality=quality, distribution=distribution).path
 
     def remove(
         self,
@@ -278,9 +274,7 @@ class OnnxVoice:
     ) -> None:
         """Remove a selected installation."""
         system, item_id = parse_ref(ref)
-        storage_id = self._selection_storage_id(
-            item_id, quality=quality, distribution=distribution
-        )
+        storage_id = self._selection_storage_id(item_id, quality=quality, distribution=distribution)
         self.store.remove(system, storage_id)
 
     def verify(
@@ -291,9 +285,7 @@ class OnnxVoice:
         distribution: str | None = None,
     ) -> None:
         """Verify checksums for a selected installation."""
-        installation = self.resolve(
-            ref, quality=quality, distribution=distribution
-        )
+        installation = self.resolve(ref, quality=quality, distribution=distribution)
         self.store.verify(installation)
 
     def show(
@@ -304,9 +296,8 @@ class OnnxVoice:
         distribution: str | None = None,
     ) -> Installation:
         """Return a selected installation (resolves and verifies)."""
-        return self.resolve(
-            ref, quality=quality, distribution=distribution
-        )
+        return self.resolve(ref, quality=quality, distribution=distribution)
+
     def import_model(
         self,
         *,
@@ -436,9 +427,7 @@ class OnnxVoice:
             metadata["selected_distribution"] = distribution
         if quality is not None:
             metadata["selected_quality"] = quality
-        storage_id = cls._selection_storage_id(
-            item.id, quality=quality, distribution=distribution
-        )
+        storage_id = cls._selection_storage_id(item.id, quality=quality, distribution=distribution)
         if storage_id != item.id:
             metadata["cache_id"] = storage_id
         return CatalogItem(

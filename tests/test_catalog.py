@@ -136,9 +136,7 @@ def test_kokoro_distribution_selection_is_scoped_to_requested_model(tmp_path):
                 "distributions": [
                     {
                         "id": "dist-v1",
-                        "artifacts": [
-                            {"role": "model", "id": "v1.onnx", "url": "x"}
-                        ],
+                        "artifacts": [{"role": "model", "id": "v1.onnx", "url": "x"}],
                     }
                 ],
             },
@@ -146,9 +144,7 @@ def test_kokoro_distribution_selection_is_scoped_to_requested_model(tmp_path):
                 "distributions": [
                     {
                         "id": "dist-zh",
-                        "artifacts": [
-                            {"role": "model", "id": "zh.onnx", "url": "x"}
-                        ],
+                        "artifacts": [{"role": "model", "id": "zh.onnx", "url": "x"}],
                     }
                 ],
             },
@@ -210,7 +206,10 @@ def test_kokoro_list_uses_each_models_own_default_distribution(tmp_path):
             },
             "v1.1-zh": {
                 "distributions": [
-                    {"id": "dist-zh", "artifacts": [{"role": "model", "id": "zh.onnx", "url": "x"}]},
+                    {
+                        "id": "dist-zh",
+                        "artifacts": [{"role": "model", "id": "zh.onnx", "url": "x"}],
+                    },
                 ],
             },
         }

@@ -66,8 +66,6 @@ def test_schema_one_manifest_remains_readable(tmp_path):
     assert migrated.artifact("model").metadata == {}
 
 
-
-
 def test_schema_two_still_loads(tmp_path):
     """Schema 2 manifests remain readable after the bump to schema 3."""
     source = tmp_path / "voice.onnx"
@@ -138,6 +136,8 @@ def test_legacy_distribution_cache_manifest_recovers_canonical_id(tmp_path):
     migrated = store.get("test", "voice--dist-abcd1234ef015678")
     assert migrated.id == "voice"
     assert migrated.storage_id == "voice--dist-abcd1234ef015678"
+
+
 def test_install_rejects_unsafe_paths(tmp_path):
     source = tmp_path / "voice.onnx"
     source.write_bytes(b"model")
