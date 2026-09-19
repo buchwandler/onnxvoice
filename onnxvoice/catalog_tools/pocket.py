@@ -266,7 +266,7 @@ def _parse_bundle_entry(
         if isinstance(artifact_info, dict):
             filename = artifact_info.get("filename")
             upstream_path = artifact_info.get("path") or f"onnx/{bundle_id}/{filename}"
-            quality = artifact_info.get("quality")
+            quality: str | None = artifact_info.get("quality")
             size = artifact_info.get("size")
             sha256 = artifact_info.get("sha256")
         elif isinstance(artifact_info, str):
@@ -282,7 +282,7 @@ def _parse_bundle_entry(
             isinstance(filename, str) and bool(filename),
             f"{bundle_id}: invalid filename for {role!r}",
         )
-
+        assert isinstance(filename, str)
         # Check for duplicate (role, quality) pairs
         role_quality = (role, quality)
         _require(
@@ -461,6 +461,7 @@ def verify_catalog(catalog: dict[str, Any]) -> None:
     # Verify bundles
     bundles = catalog.get("bundles")
     _require(isinstance(bundles, list), "Catalog bundles must be a list")
+    assert isinstance(bundles, list)
     _require(
         len(bundles) == bundle_count,
         f"Bundle count mismatch: expected {bundle_count}, got {len(bundles)}",
@@ -475,13 +476,14 @@ def verify_catalog(catalog: dict[str, Any]) -> None:
 
         bundle_id = bundle.get("id")
         _require(isinstance(bundle_id, str) and bool(bundle_id), "Bundle must have a non-empty id")
+        assert isinstance(bundle_id, str)
         _safe_name(bundle_id, f"bundle {bundle_id}")
-
         aliases = bundle.get("aliases", [])
         _require(
             isinstance(aliases, list) and all(isinstance(a, str) for a in aliases),
             f"{bundle_id}: aliases must be strings",
         )
+        assert isinstance(aliases, list)
 
         # Check alias uniqueness
         for alias in aliases:
@@ -498,7 +500,7 @@ def verify_catalog(catalog: dict[str, Any]) -> None:
 
         artifacts = bundle.get("artifacts")
         _require(isinstance(artifacts, list), f"{bundle_id}: artifacts must be a list")
-
+        assert isinstance(artifacts, list)
         # Track roles in this bundle
         seen_static: set[str] = set()
         seen_role_quality: set[tuple[str, str | None]] = set()
@@ -509,17 +511,17 @@ def verify_catalog(catalog: dict[str, Any]) -> None:
 
             role = artifact.get("role")
             _require(role in VALID_ROLES, f"{bundle_id}: invalid role {role!r}")
-
+            assert isinstance(role, str)
             filename = artifact.get("filename")
             _require(
                 isinstance(filename, str) and bool(filename),
                 f"{bundle_id}/{role}: invalid filename",
             )
+            assert isinstance(filename, str)
             _safe_name(filename, f"{bundle_id}/{role}: filename")
-
             url = artifact.get("url")
             _require(isinstance(url, str) and bool(url), f"{bundle_id}/{role}: invalid url")
-
+            assert isinstance(url, str)
             # Check URL matches repository/revision
             expected_prefix = f"https://huggingface.co/{repository}/resolve/{revision}/"
             _require(
@@ -528,7 +530,7 @@ def verify_catalog(catalog: dict[str, Any]) -> None:
             )
 
             # Track role/quality pairs
-            quality = artifact.get("quality")
+            quality: str | None = artifact.get("quality")
             role_quality = (role, quality)
             _require(
                 role_quality not in seen_role_quality,

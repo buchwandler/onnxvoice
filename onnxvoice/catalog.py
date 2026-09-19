@@ -167,6 +167,7 @@ class CatalogClient:
                     break
             if item is None:
                 raise AssetNotFoundError(f"Unknown catalog item: {ref}")
+        assert item is not None
         if item.system == "pocket":
             return _select_pocket_profile(item, quality)
         selected_quality = quality
