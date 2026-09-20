@@ -5,7 +5,7 @@ versioning:
   schema_version: 1
   revision: 1
 entry_id: entry-0002
-release_version: v0.1.7
+release_version: v0.1.8
 kind: changed
 summary:
   Assigned stable selectors to the 27 currently supported en-US Kokoro voices
@@ -24,5 +24,5 @@ sources: []
 contributors: []
 breaking: false
 internal: false
-order: 2
+order: 1
 ---
