@@ -1,0 +1,30 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 192,
+      "deletions": 7,
+      "patch_file": "f5730c1.patch",
+      "patch_sha256": "228c2ad9766b150cddc6e2ac7d6dfa83b613c3ddd45925110e3fc54dcde6631c",
+      "paths": [
+        "onnxvoice/catalog.py",
+        "onnxvoice/systems/kokoro.py",
+        "onnxvoice/types.py",
+        "tests/test_catalog.py",
+        "tests/test_kokoro_contract.py",
+        "tests/test_store.py"
+      ],
+      "sha": "f5730c1a808a4595ef5c852f16fc73aba24db1b9",
+      "short_sha": "f5730c1",
+      "source_ref": "git:f5730c1a808a4595ef5c852f16fc73aba24db1b9"
+    }
+  ],
+  "git_base_ref": "15f06de4fa3e9bd42a3c2cca27d7aefbb28e77c7",
+  "git_base_sha": "15f06de4fa3e9bd42a3c2cca27d7aefbb28e77c7",
+  "git_head_ref": "f5730c1a808a4595ef5c852f16fc73aba24db1b9",
+  "git_head_sha": "f5730c1a808a4595ef5c852f16fc73aba24db1b9",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.1.7",
+  "schema_version": 1
+}

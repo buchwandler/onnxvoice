@@ -1,0 +1,309 @@
+ onnxvoice/catalog.py          | 37 ++++++++++++++++-
+ onnxvoice/systems/kokoro.py   |  7 ++--
+ onnxvoice/types.py            | 18 +++++++++
+ tests/test_catalog.py         | 92 +++++++++++++++++++++++++++++++++++++++++++
+ tests/test_kokoro_contract.py | 18 ++++++++-
+ tests/test_store.py           | 27 +++++++++++++
+ 6 files changed, 192 insertions(+), 7 deletions(-)
+
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index 32583ee..62bccae 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -266,6 +266,40 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
+     return result
+
+
++def _normalize_kokoro_runtime(
++    entry: Mapping[str, Any],
++) -> tuple[dict[str, Any], dict[str, Any]]:
++    """Copy and normalize Kokoro runtime and ONNX contract metadata."""
++    raw_runtime = entry.get("runtime") or {}
++    if not isinstance(raw_runtime, Mapping):
++        raise CatalogError("Kokoro runtime metadata must be an object")
++    runtime = dict(raw_runtime)
++    raw_contract = entry.get("onnx_contract") or {}
++    if not isinstance(raw_contract, Mapping):
++        raise CatalogError("Kokoro ONNX contract metadata must be an object")
++    onnx_contract = dict(raw_contract)
++    raw_timing = onnx_contract.get("timing") or {}
++    if not isinstance(raw_timing, Mapping):
++        raise CatalogError("Kokoro ONNX timing metadata must be an object")
++    runtime_output = runtime.get("timings_output")
++    contract_output = raw_timing.get("output")
++    if (
++        isinstance(runtime_output, str)
++        and runtime_output
++        and isinstance(contract_output, str)
++        and contract_output
++        and runtime_output != contract_output
++    ):
++        raise CatalogError(
++            "Conflicting Kokoro timing declarations: "
++            f"runtime.timings_output={runtime_output!r} conflicts with "
++            f"onnx_contract.timing.output={contract_output!r}"
++        )
++    if isinstance(contract_output, str) and contract_output:
++        runtime["timings_output"] = contract_output
++    return runtime, onnx_contract
++
++
+ def _parse_kokoro_entry(
+     model_id: str,
+     entry: Mapping[str, Any],
+@@ -315,12 +349,13 @@ def _parse_kokoro_entry(
+                 },
+             )
+         )
+-    runtime = entry.get("runtime") or {}
++    runtime, onnx_contract = _normalize_kokoro_runtime(entry)
+     metadata = {
+         "model_version": entry.get("model_version"),
+         "frontend": entry.get("frontend"),
+         "language_codes": entry.get("language_codes") or [],
+         "runtime": runtime,
++        "onnx_contract": onnx_contract,
+         "distribution_id": selected.get("id"),
+         "distribution_choices": choices,
+         "release_tag": selected.get("release_tag"),
+diff --git a/onnxvoice/systems/kokoro.py b/onnxvoice/systems/kokoro.py
+index be2cd6c..04a8010 100644
+--- a/onnxvoice/systems/kokoro.py
++++ b/onnxvoice/systems/kokoro.py
+@@ -161,11 +161,10 @@ class KokoroAdapter(SystemAdapter):
+             )
+
+     def _select_timings(self, auxiliary: dict[str, np.ndarray]) -> np.ndarray | None:
+-        runtime = self.installation.metadata.get("runtime") or {}
+-        declared = runtime.get("timings_output")
+-        if isinstance(declared, str) and declared in auxiliary:
++        declared = self.installation.timing_output
++        if declared and declared in auxiliary:
+             return auxiliary[declared]
+-        for name in ("pred_dur", "duration", "timing", "timestamp"):
++        for name in ("pred_dur", "duration", "durations", "timing", "timestamp"):
+             if name in auxiliary:
+                 return auxiliary[name]
+         for prefix in ("duration", "timing", "timestamp"):
+diff --git a/onnxvoice/types.py b/onnxvoice/types.py
+index 0095fd6..c971f55 100644
+--- a/onnxvoice/types.py
++++ b/onnxvoice/types.py
+@@ -82,6 +82,15 @@ class CatalogItem:
+     default_voice: str | None = None
+     metadata: dict[str, Any] = field(default_factory=dict)
+
++    @property
++    def timing_output(self) -> str | None:
++        """Return the declared auxiliary timing output, if valid."""
++        runtime = self.metadata.get("runtime")
++        if not isinstance(runtime, Mapping):
++            return None
++        value = runtime.get("timings_output")
++        return value if isinstance(value, str) and value else None
++
+     @property
+     def ref(self) -> str:
+         return f"{self.system}:{self.id}"
+@@ -232,6 +241,15 @@ class Installation:
+     metadata: dict[str, Any] = field(default_factory=dict)
+     storage_id: str | None = None
+
++    @property
++    def timing_output(self) -> str | None:
++        """Return the declared auxiliary timing output, if valid."""
++        runtime = self.metadata.get("runtime")
++        if not isinstance(runtime, Mapping):
++            return None
++        value = runtime.get("timings_output")
++        return value if isinstance(value, str) and value else None
++
+     @property
+     def ref(self) -> str:
+         """Canonical catalog reference (system:id), never the physical storage key."""
+diff --git a/tests/test_catalog.py b/tests/test_catalog.py
+index 1b8d435..45f8ea6 100644
+--- a/tests/test_catalog.py
++++ b/tests/test_catalog.py
+@@ -6,6 +6,7 @@ import pytest
+
+ from onnxvoice.catalog import CatalogClient
+ from onnxvoice.errors import CatalogError
++from onnxvoice.types import CatalogItem
+
+
+ def test_piper_catalog_is_normalized(tmp_path):
+@@ -223,3 +224,94 @@ def test_kokoro_list_uses_each_models_own_default_distribution(tmp_path):
+     by_id = {item.id: item for item in items}
+     assert by_id["v1.0"].metadata["distribution_id"] == "dist-a"
+     assert by_id["v1.1-zh"].metadata["distribution_id"] == "dist-zh"
++
++
++def test_kokoro_timing_contract_is_normalized(tmp_path):
++    raw = {
++        "models": {
++            "v1.0": {
++                "runtime": {"layout": "single-onnx-v1"},
++                "onnx_contract": {
++                    "outputs": {"waveform": "float32", "durations": "float32"},
++                    "timing": {
++                        "kind": "token-duration-v1",
++                        "output": "durations",
++                        "unit": "frame",
++                        "samples_per_frame": 600,
++                        "includes_boundary_tokens": True,
++                    },
++                },
++                "distributions": [
++                    {"id": "dist", "artifacts": [{"role": "model", "id": "model.onnx"}]}
++                ],
++            }
++        }
++    }
++    source = tmp_path / "kokoro.json"
++    source.write_text(json.dumps(raw), encoding="utf-8")
++    item = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}).resolve(
++        "kokoro:v1.0"
++    )
++
++    assert item.metadata["runtime"]["timings_output"] == "durations"
++    assert item.metadata["onnx_contract"] == raw["models"]["v1.0"]["onnx_contract"]
++    assert item.metadata["onnx_contract"]["timing"]["output"] == "durations"
++    assert item.timing_output == "durations"
++    assert "timings_output" not in raw["models"]["v1.0"]["runtime"]
++
++
++def test_kokoro_matching_timing_declarations_are_accepted(tmp_path):
++    raw = {
++        "models": {
++            "v1.0": {
++                "runtime": {"timings_output": "durations"},
++                "onnx_contract": {"timing": {"output": "durations"}},
++                "distributions": [
++                    {"id": "dist", "artifacts": [{"role": "model", "id": "model.onnx"}]}
++                ],
++            }
++        }
++    }
++    source = tmp_path / "kokoro.json"
++    source.write_text(json.dumps(raw), encoding="utf-8")
++    item = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}).resolve(
++        "kokoro:v1.0"
++    )
++    assert item.timing_output == "durations"
++
++
++def test_kokoro_conflicting_timing_declarations_fail(tmp_path):
++    raw = {
++        "models": {
++            "v1.0": {
++                "runtime": {"timings_output": "pred_dur"},
++                "onnx_contract": {"timing": {"output": "durations"}},
++                "distributions": [
++                    {"id": "dist", "artifacts": [{"role": "model", "id": "model.onnx"}]}
++                ],
++            }
++        }
++    }
++    source = tmp_path / "kokoro.json"
++    source.write_text(json.dumps(raw), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
++
++    with pytest.raises(
++        CatalogError,
++        match="runtime.timings_output='pred_dur'.*onnx_contract.timing.output='durations'",
++    ):
++        client.resolve("kokoro:v1.0")
++
++
++@pytest.mark.parametrize(
++    "metadata",
++    [
++        {},
++        {"runtime": None},
++        {"runtime": {"timings_output": ""}},
++        {"runtime": {"timings_output": 1}},
++    ],
++)
++def test_catalog_item_timing_output_tolerates_malformed_metadata(metadata):
++    item = CatalogItem("kokoro", "v1.0", "model", (), metadata=metadata)
++    assert item.timing_output is None
+diff --git a/tests/test_kokoro_contract.py b/tests/test_kokoro_contract.py
+index 5183e0a..ad8efe5 100644
+--- a/tests/test_kokoro_contract.py
++++ b/tests/test_kokoro_contract.py
+@@ -28,7 +28,7 @@ class ContractSession:
+         pass
+
+
+-def _installation(tmp_path, *, split=False):
++def _installation(tmp_path, *, split=False, metadata=None):
+     model = tmp_path / "model.onnx"
+     model.write_bytes(b"model")
+     artifacts = [InstalledArtifact("model", model.name, model, "0" * 64, model.stat().st_size)]
+@@ -45,11 +45,14 @@ def _installation(tmp_path, *, split=False):
+         tmp_path,
+         tuple(artifacts),
+         sample_rate=24000,
++        metadata=metadata or {},
+     )
+
+
+ def test_kokoro_accepts_explicit_style_and_named_timing_outputs(tmp_path):
+-    adapter = KokoroAdapter(_installation(tmp_path))
++    adapter = KokoroAdapter(
++        _installation(tmp_path, metadata={"runtime": {"timings_output": "durations"}})
++    )
+     fake = ContractSession()
+     adapter._session = fake  # type: ignore[assignment]
+
+@@ -84,3 +87,14 @@ def test_kokoro_rejects_split_layout(tmp_path):
+
+     with pytest.raises(CapabilityError, match="Split"):
+         _ = adapter.session
++
++
++def test_installation_timing_output_tolerates_missing_metadata(tmp_path):
++    assert _installation(tmp_path).timing_output is None
++    assert (
++        _installation(tmp_path, metadata={"runtime": {"timings_output": "durations"}}).timing_output
++        == "durations"
++    )
++    assert (
++        _installation(tmp_path, metadata={"runtime": {"timings_output": 1}}).timing_output is None
++    )
+diff --git a/tests/test_store.py b/tests/test_store.py
+index daaf6af..5c1449d 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -112,3 +112,30 @@ def test_install_falls_back_when_hard_link_operation_is_unsupported(
+
+     assert installation.artifact("model").path.read_bytes() == payload
+     store.verify(installation)
++
++
++def test_new_install_persists_timing_metadata(tmp_path):
++    payload = b"model-with-timing"
++    source = tmp_path / "timed.onnx"
++    source.write_bytes(payload)
++    item = CatalogItem(
++        system="kokoro",
++        id="v1.0",
++        kind="model",
++        artifacts=(
++            Artifact(
++                "model",
++                source.name,
++                source.as_uri(),
++                len(payload),
++                hashlib.sha256(payload).hexdigest(),
++            ),
++        ),
++        metadata={"runtime": {"timings_output": "durations"}},
++    )
++    store = AssetStore(tmp_path / "cache")
++
++    store.install(item)
++    reloaded = store.get("kokoro", "v1.0")
++
++    assert reloaded.timing_output == "durations"

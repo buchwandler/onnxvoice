@@ -1,0 +1,17 @@
+rows:
+  - sha: f5730c1a808a4595ef5c852f16fc73aba24db1b9
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_kokoro_contract.py
+      - tests/test_store.py
+    observed_behavior: "Kokoro catalog metadata now preserves the ONNX timing contract and normalizes its declared auxiliary output; the adapter uses that declaration with compatible fallbacks, and installations retain the timing metadata. Tests cover normalization, conflict rejection, malformed metadata, adapter selection, and persistence."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed the implementation and focused regression tests in the listed paths."
+    stale: false

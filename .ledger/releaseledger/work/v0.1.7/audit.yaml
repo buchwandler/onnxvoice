@@ -1,0 +1,34 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.1.7
+git_base_ref: v0.1.6
+git_base_sha: 15f06de4fa3e9bd42a3c2cca27d7aefbb28e77c7
+git_head_ref: HEAD
+git_head_sha: f5730c1a808a4595ef5c852f16fc73aba24db1b9
+git_range: 15f06de4fa3e9bd42a3c2cca27d7aefbb28e77c7..f5730c1a808a4595ef5c852f16fc73aba24db1b9
+commit_count: 1
+rows:
+  - sha: f5730c1a808a4595ef5c852f16fc73aba24db1b9
+    source_ref: git:f5730c1a808a4595ef5c852f16fc73aba24db1b9
+    short_sha: f5730c1
+    changed_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_kokoro_contract.py
+      - tests/test_store.py
+    stats:
+      files_changed: 6
+      insertions: 192
+      deletions: 7
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: timespamp output for kokoro model"

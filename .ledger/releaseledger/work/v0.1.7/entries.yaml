@@ -1,0 +1,29 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.1.7
+git_base_ref: 15f06de4fa3e9bd42a3c2cca27d7aefbb28e77c7
+git_base_sha: 15f06de4fa3e9bd42a3c2cca27d7aefbb28e77c7
+git_head_ref: f5730c1a808a4595ef5c852f16fc73aba24db1b9
+git_head_sha: f5730c1a808a4595ef5c852f16fc73aba24db1b9
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added contract-aware Kokoro timing metadata and auxiliary output selection"
+    status: accepted
+    source_refs:
+      - git:f5730c1a808a4595ef5c852f16fc73aba24db1b9
+    paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/types.py
+      - tests/test_catalog.py
+      - tests/test_kokoro_contract.py
+      - tests/test_store.py
+    sources:
+      - git:f5730c1a808a4595ef5c852f16fc73aba24db1b9
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
