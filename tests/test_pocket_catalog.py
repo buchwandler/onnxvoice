@@ -400,3 +400,13 @@ def test_canonical_object_map_rejects_key_id_mismatch() -> None:
     entry = {**SAMPLE_CATALOG["bundles"][0], "id": "other"}
     with pytest.raises(CatalogError, match="does not match"):
         _parse_pocket({"bundles": {"english_2026-04": entry}})
+
+
+def test_canonical_kind_rejects_list_and_wrong_kind() -> None:
+    entry = SAMPLE_CATALOG["bundles"][0]
+    with pytest.raises(CatalogError, match="must be a mapping"):
+        _parse_pocket({"schema": 1, "kind": "pocket-onnx-bundle-catalog", "bundles": [entry]})
+    with pytest.raises(CatalogError, match="Unexpected Pocket catalog kind"):
+        _parse_pocket(
+            {"schema": 1, "kind": "pocket-bundle-catalog", "bundles": {entry["id"]: entry}}
+        )

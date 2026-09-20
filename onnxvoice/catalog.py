@@ -393,9 +393,15 @@ def _kokoro_models(data: dict[str, Any]) -> dict[str, Mapping[str, Any]]:
 
 
 def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+    if "schema" in data and data["schema"] != 1:
+        raise CatalogError("Pocket catalog schema must be 1")
+    if "kind" in data and data["kind"] != "pocket-onnx-bundle-catalog":
+        raise CatalogError(f"Unexpected Pocket catalog kind: {data['kind']!r}")
     bundles = data.get("bundles")
     if not isinstance(bundles, (dict, list)):
         raise CatalogError("Pocket catalog is missing the 'bundles' list or mapping")
+    if data.get("kind") == "pocket-onnx-bundle-catalog" and not isinstance(bundles, dict):
+        raise CatalogError("Canonical Pocket catalog bundles must be a mapping")
     source = data.get("source") or {}
     if not isinstance(source, Mapping):
         raise CatalogError("Pocket catalog source metadata must be an object")
@@ -413,6 +419,13 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             raise CatalogError(
                 f"Pocket bundle map key {map_id!r} does not match entry id {entry.get('id')!r}"
             )
+        aliases = entry.get("aliases") or []
+        if not isinstance(aliases, Sequence) or isinstance(aliases, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: aliases must be a sequence")
+        for alias in aliases:
+            if not isinstance(alias, str):
+                raise CatalogError(f"{bundle_id}: aliases must be strings")
+            _require_pocket_safe_id(alias, f"{bundle_id} alias")
         raw_artifacts = entry.get("artifacts", ())
         if isinstance(raw_artifacts, Mapping):
             raw_artifacts = raw_artifacts.values()
@@ -429,6 +442,7 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             filename = raw.get("filename") or (Path(str(raw_path)).name if raw_path else None)
             if not isinstance(filename, str) or not filename:
                 raise CatalogError(f"{bundle_id}/{role}: artifact filename is required")
+            _require_pocket_safe_id(filename, f"{bundle_id}/{role} filename")
             metadata = dict(raw.get("metadata") or {})
             if raw_path is not None:
                 metadata.setdefault("path", raw_path)
@@ -465,7 +479,7 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
                 id=bundle_id,
                 kind="bundle",
                 artifacts=tuple(artifacts),
-                aliases=tuple(entry.get("aliases") or ()),
+                aliases=tuple(aliases),
                 sample_rate=entry.get("sample_rate"),
                 metadata=metadata,
             )

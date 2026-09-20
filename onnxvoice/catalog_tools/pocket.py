@@ -8,7 +8,6 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,7 +16,7 @@ DEFAULT_REVISION = "main"
 USER_AGENT = "onnxvoice/0.1.0"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_SAFE_NAME_RE = re.compile(r"^[^\W_][\w.-]*$", re.UNICODE)
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 REQUIRED_ONNX_ROLES = frozenset(
     {"flow_lm_main", "flow_lm_flow", "mimi_decoder", "mimi_encoder", "text_conditioner"}
@@ -50,18 +49,18 @@ def _safe_name(value: Any, label: str) -> None:
         raise CatalogError(f"{label}: must be a non-empty string")
     _require("/" not in value and "\\" not in value, f"{label}: path separators are forbidden")
     _require(value not in {".", ".."}, f"{label}: dot segments are forbidden")
-    _require(not Path(value).is_absolute(), f"{label}: absolute paths are forbidden")
+    _require(not any(char.isspace() for char in value), f"{label}: whitespace is forbidden")
     _require(_SAFE_NAME_RE.fullmatch(value) is not None, f"{label}: unsafe name")
 
 
 def _safe_relative_path(value: Any, label: str) -> str:
     _require(isinstance(value, str) and bool(value), f"{label}: path is required")
-    path = Path(value)
-    _require(not path.is_absolute(), f"{label}: absolute paths are forbidden")
+    _require(not value.startswith("/"), f"{label}: absolute paths are forbidden")
     _require(
-        "\\" not in value and all(part not in {"", ".", ".."} for part in path.parts),
+        "\\" not in value and all(part not in {"", ".", ".."} for part in value.split("/")),
         f"{label}: unsafe path",
     )
+    _require(not re.match(r"^[A-Za-z]:", value), f"{label}: absolute paths are forbidden")
     return value
 
 
@@ -120,23 +119,155 @@ def _fetch_bundle_json(
     return data, hashlib.sha256(payload).hexdigest()
 
 
+def _tree_url(repository: str, revision: str) -> str:
+    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
+    rev = urllib.parse.quote(revision, safe="")
+    return f"https://huggingface.co/api/models/{repo}/tree/{rev}?recursive=true&expand=true"
+
+
+def _repository_tree(repository: str, revision: str) -> list[dict[str, Any]]:
+    url = _tree_url(repository, revision)
+    entries: list[dict[str, Any]] = []
+    while url:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = response.read()
+                next_link = response.headers.get("Link")
+        except (OSError, urllib.error.URLError) as exc:
+            raise CatalogError(f"Unable to fetch repository tree for {revision}") from exc
+        try:
+            tree = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CatalogError("Unable to parse repository tree") from exc
+        _require(isinstance(tree, list), "Repository tree must be a list")
+        entries.extend(item for item in tree if isinstance(item, dict))
+        match = re.search(r"<([^>]+)>;\s*rel=\"next\"", next_link or "")
+        url = match.group(1) if match else ""
+    return entries
+
+
 def _list_bundle_paths(repository: str, revision: str) -> list[str]:
-    """List all bundle.json paths in the repository at the given revision."""
-    payload = _read_url(f"{huggingface_api_url(repository, revision)}/tree/main")
-    try:
-        tree = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise CatalogError("Unable to parse repository tree") from exc
-    _require(isinstance(tree, list), "Repository tree must be a list")
+    """List all bundle.json paths in the repository at the exact revision."""
     bundle_paths = [
         item["path"]
-        for item in tree
-        if isinstance(item, dict)
-        and isinstance(item.get("path"), str)
+        for item in _repository_tree(repository, revision)
+        if isinstance(item.get("path"), str)
         and item["path"].startswith("onnx/")
         and item["path"].endswith("/bundle.json")
     ]
     return sorted(bundle_paths)
+
+
+def _file_integrity(
+    repository: str,
+    revision: str,
+    path: str,
+    metadata: dict[str, Any],
+    known_sha256: str | None = None,
+) -> tuple[int, str]:
+    size = metadata.get("size")
+    _require(
+        isinstance(size, int) and not isinstance(size, bool) and size > 0,
+        f"{path}: upstream metadata has no positive size",
+    )
+    assert isinstance(size, int)
+    sha256 = known_sha256 or (metadata.get("lfs") or {}).get("oid")
+    if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256.lower()) is None:
+        sha256 = hashlib.sha256(
+            _read_url(huggingface_resolve_url(repository, revision, path))
+        ).hexdigest()
+    _require(
+        _SHA256_RE.fullmatch(sha256.lower()) is not None, f"{path}: unable to determine SHA-256"
+    )
+    return size, sha256.lower()
+
+
+def _discover_artifacts(
+    repository: str,
+    revision: str,
+    bundle_id: str,
+    bundle_data: dict[str, Any],
+    bundle_sha256: str,
+    tree: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Derive stable role/quality entries from one upstream bundle directory."""
+    base = f"onnx/{bundle_id}/"
+    files = {
+        item["path"]: item
+        for item in tree
+        if isinstance(item.get("path"), str) and item["path"].startswith(base)
+    }
+    static_files = {
+        "bundle_metadata": "bundle.json",
+        "tokenizer": str(bundle_data.get("tokenizer_file") or "tokenizer.model"),
+        "bos_conditioning": str(bundle_data.get("bos_before_voice_file") or "bos_before_voice.npy"),
+    }
+    artifacts: dict[str, dict[str, Any]] = {}
+    for role, filename in static_files.items():
+        path = f"{base}{filename}"
+        _require(path in files, f"{bundle_id}: missing upstream artifact {path}")
+        size, sha256 = _file_integrity(
+            repository,
+            revision,
+            path,
+            files[path],
+            bundle_sha256 if role == "bundle_metadata" else None,
+        )
+        artifacts[role] = {
+            "role": role,
+            "filename": filename,
+            "path": path,
+            "format": _infer_format(filename, None),
+            "size": size,
+            "sha256": sha256,
+        }
+    onnx_pattern = re.compile(
+        r"^(flow_lm_main|flow_lm_flow|mimi_decoder|mimi_encoder|text_conditioner)(?:_(int8))?\.onnx$"
+    )
+    for path, metadata in sorted(files.items()):
+        filename = path.removeprefix(base)
+        match = onnx_pattern.fullmatch(filename)
+        if match is None:
+            continue
+        role, quantized = match.groups()
+        quality = "int8" if quantized else "fp32"
+        key = f"{role}:{quality}"
+        _require(key not in artifacts, f"{bundle_id}: duplicate graph variant {key}")
+        size, sha256 = _file_integrity(repository, revision, path, metadata)
+        artifacts[key] = {
+            "role": role,
+            "filename": filename,
+            "path": path,
+            "format": "onnx",
+            "quality": quality,
+            "size": size,
+            "sha256": sha256,
+        }
+    return list(artifacts.values())
+
+
+def _profiles_for_artifacts(
+    artifacts: list[dict[str, Any]], bundle_id: str
+) -> dict[str, dict[str, str]]:
+    available = {(entry["role"], entry.get("quality")) for entry in artifacts if "role" in entry}
+    profiles = {
+        "fp32": dict.fromkeys(sorted(REQUIRED_ONNX_ROLES), "fp32"),
+        "int8": {
+            "flow_lm_main": "int8",
+            "flow_lm_flow": "int8",
+            "mimi_decoder": "int8",
+            "mimi_encoder": "fp32",
+            "text_conditioner": "fp32",
+        },
+    }
+    for profile_name, profile in profiles.items():
+        for role, quality in profile.items():
+            _require(
+                (role, quality) in available,
+                f"{bundle_id}: cannot build {profile_name} profile; missing ({role!r}, {quality!r})",
+            )
+    return profiles
 
 
 def _extract_bundle_id(bundle_path: str) -> str:
@@ -146,6 +277,43 @@ def _extract_bundle_id(bundle_path: str) -> str:
         f"Invalid bundle path: {bundle_path}",
     )
     return parts[1]
+
+
+_LANGUAGE_CODES = {
+    "english": "en",
+    "french": "fr",
+    "german": "de",
+    "italian": "it",
+    "portuguese": "pt",
+    "spanish": "es",
+}
+
+
+def _normalize_bundle_metadata(bundle_id: str, bundle_data: dict[str, Any]) -> dict[str, Any]:
+    """Add stable consumer metadata absent from the upstream bundle manifest."""
+    data = dict(bundle_data)
+    language_name = bundle_id.split("_", 1)[0]
+    language = _LANGUAGE_CODES.get(language_name, language_name)
+    data["language"] = language
+    if not data.get("aliases"):
+        if bundle_id == "english_2026-04":
+            data["aliases"] = ["english", "en", "english_2026_04"]
+        elif bundle_id == "french_24l":
+            data["aliases"] = ["french", "fr"]
+        elif bundle_id.endswith("_24l"):
+            data["aliases"] = [f"{language}_24l"]
+        else:
+            data["aliases"] = [language, f"{language_name}_6l"]
+    data["predefined_voice_names"] = list(data.get("predefined_voices") or [])
+    metadata = dict(data.get("metadata") or {})
+    for key in ("conditioning_dim", "frame_rate", "latent_dim", "samples_per_frame"):
+        if key in data:
+            metadata[key] = data[key]
+    metadata.setdefault("predefined_voice_states_bundled", False)
+    metadata.setdefault("supports_voice_cloning", True)
+    metadata.setdefault("upstream_bundle_dir", f"onnx/{bundle_id}")
+    data["metadata"] = metadata
+    return data
 
 
 def _validate_artifact_role(role: str, bundle_id: str) -> None:
@@ -214,7 +382,6 @@ def _parse_bundle_entry(
     bundle_data: dict[str, Any],
     repository: str,
     revision: str,
-    bundle_path: str,
 ) -> dict[str, Any]:
     """Parse a single upstream bundle.json into a normalized catalog entry."""
     _require(isinstance(bundle_data, dict), f"{bundle_id}: bundle must be a JSON object")
@@ -223,6 +390,16 @@ def _parse_bundle_entry(
     sample_rate = bundle_data.get("sample_rate")
     _require(isinstance(sample_rate, int) and sample_rate > 0, f"{bundle_id}: invalid sample_rate")
     layers = bundle_data.get("layers")
+    if not isinstance(layers, int):
+        manifest = bundle_data.get("flow_lm_state_manifest") or []
+        layer_numbers = [
+            int(match.group(1))
+            for item in manifest
+            if isinstance(item, dict)
+            for match in [re.search(r"transformer\.layers\.(\d+)", str(item.get("module")))]
+            if match is not None
+        ]
+        layers = max(layer_numbers, default=-1) + 1
     _require(isinstance(layers, int) and layers > 0, f"{bundle_id}: invalid layers")
     bundle_schema = bundle_data.get("schema_version")
     _require(
@@ -234,6 +411,8 @@ def _parse_bundle_entry(
         isinstance(aliases, list) and all(isinstance(alias, str) for alias in aliases),
         f"{bundle_id}: aliases must be strings",
     )
+    for alias in aliases:
+        _safe_name(alias, f"{bundle_id} alias")
     profiles = bundle_data.get("profiles") or {}
     _require(isinstance(profiles, dict), f"{bundle_id}: profiles must be a dict")
     artifacts: list[dict[str, Any]] = []
@@ -293,10 +472,21 @@ def _parse_bundle_entry(
             any(artifact["role"] == role for artifact in artifacts),
             f"{bundle_id}: no quality variant for role {role!r}",
         )
+    _require(set(profiles) >= {"int8", "fp32"}, f"{bundle_id}: profiles must include int8 and fp32")
     for profile_name, profile_roles in profiles.items():
+        _safe_name(profile_name, f"{bundle_id} profile")
         _require(
             isinstance(profile_roles, dict), f"{bundle_id}: profile {profile_name!r} must be a dict"
         )
+        for role, quality in profile_roles.items():
+            _require(
+                role in REQUIRED_ONNX_ROLES,
+                f"{bundle_id}: profile {profile_name!r} references unknown role {role!r}",
+            )
+            _require(
+                quality in {"fp32", "int8"},
+                f"{bundle_id}: profile {profile_name!r} has invalid quality {quality!r}",
+            )
         for role in REQUIRED_ONNX_ROLES:
             _require(
                 role in profile_roles,
@@ -322,6 +512,8 @@ def _parse_bundle_entry(
                 artifact["quality"] or "",
             ),
         ),
+        "predefined_voice_names": bundle_data.get("predefined_voice_names") or [],
+        "metadata": bundle_data.get("metadata") or {},
     }
     for key in (
         "max_token_per_chunk",
@@ -349,16 +541,26 @@ def build_catalog(
     bundle_paths = _list_bundle_paths(repository, actual_revision)
     _require(len(bundle_paths) > 0, "No bundles found in repository")
     bundles: dict[str, dict[str, Any]] = {}
+    tree: list[dict[str, Any]] | None = None
     for bundle_path in bundle_paths:
         bundle_id = _extract_bundle_id(bundle_path)
         _safe_name(bundle_id, "bundle id")
-        bundle_data, _ = _fetch_bundle_json(repository, actual_revision, bundle_path)
+        bundle_data, bundle_sha256 = _fetch_bundle_json(repository, actual_revision, bundle_path)
+        bundle_data = _normalize_bundle_metadata(bundle_id, bundle_data)
+        if not bundle_data.get("artifacts"):
+            if tree is None:
+                tree = _repository_tree(repository, actual_revision)
+            discovered = _discover_artifacts(
+                repository, actual_revision, bundle_id, bundle_data, bundle_sha256, tree
+            )
+            bundle_data = dict(bundle_data)
+            bundle_data["artifacts"] = discovered
+            bundle_data["profiles"] = _profiles_for_artifacts(discovered, bundle_id)
         bundles[bundle_id] = _parse_bundle_entry(
             bundle_id=bundle_id,
             bundle_data=bundle_data,
             repository=repository,
             revision=actual_revision,
-            bundle_path=bundle_path,
         )
     sorted_bundles = {bundle_id: bundles[bundle_id] for bundle_id in sorted(bundles)}
     return {
@@ -388,6 +590,19 @@ def _verify_artifact(
     _safe_name(artifact["filename"], f"{bundle_id}/{role}: filename")
     path = _safe_relative_path(artifact["path"], f"{bundle_id}/{role}: path")
     _require(
+        path.startswith(f"onnx/{bundle_id}/"),
+        f"{bundle_id}/{role}: path is outside the bundle directory",
+    )
+    _require(
+        Path(path).name == artifact["filename"],
+        f"{bundle_id}/{role}: filename does not match path",
+    )
+    quality = artifact["quality"]
+    if role in STATIC_ROLES:
+        _require(quality is None, f"{bundle_id}/{role}: static artifacts cannot have quality")
+    else:
+        _require(quality in {"fp32", "int8"}, f"{bundle_id}/{role}: invalid quality")
+    _require(
         isinstance(artifact["format"], str) and bool(artifact["format"]),
         f"{bundle_id}/{role}: invalid format",
     )
@@ -398,63 +613,20 @@ def _verify_artifact(
     )
     size = artifact["size"]
     _require(
-        size is None or (isinstance(size, int) and not isinstance(size, bool) and size > 0),
+        isinstance(size, int) and not isinstance(size, bool) and size > 0,
         f"{bundle_id}/{role}: invalid size",
     )
     sha256 = artifact["sha256"]
     _require(
-        sha256 is None or (isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256) is not None),
+        isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256) is not None,
         f"{bundle_id}/{role}: invalid sha256",
     )
-    return role, artifact["quality"]
-
-
-def _legacy_catalog_view(catalog: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Normalize the old private list catalog for temporary compatibility."""
-    if catalog.get("kind") != "pocket-bundle-catalog" or not isinstance(
-        catalog.get("bundles"), list
-    ):
-        return catalog, False
-    legacy = deepcopy(catalog)
-    source = dict(legacy.get("source") or {})
-    revision = str(source.get("revision") or "0" * 40)
-    source.setdefault("bundle_root", "onnx")
-    source.setdefault("license", "cc-by-4.0")
-    source.setdefault("snapshot_note", None)
-    legacy["source"] = source
-    normalized: dict[str, dict[str, Any]] = {}
-    for raw_bundle in legacy["bundles"]:
-        if not isinstance(raw_bundle, dict):
-            continue
-        bundle_id = raw_bundle.get("id")
-        if not isinstance(bundle_id, str):
-            continue
-        bundle = dict(raw_bundle)
-        artifacts: list[dict[str, Any]] = []
-        for raw_artifact in bundle.get("artifacts") or []:
-            if not isinstance(raw_artifact, dict):
-                continue
-            artifact = dict(raw_artifact)
-            filename = artifact.get("filename") or "artifact.bin"
-            path = artifact.get("path") or f"onnx/{bundle_id}/{filename}"
-            artifact.setdefault("quality", None)
-            artifact.setdefault("format", _infer_format(str(filename), None))
-            artifact["path"] = path
-            artifact["url"] = huggingface_resolve_url(str(source.get("repository")), revision, path)
-            artifact.setdefault("size", None)
-            artifact.setdefault("sha256", None)
-            artifacts.append(artifact)
-        bundle["artifacts"] = artifacts
-        normalized[bundle_id] = bundle
-    legacy["kind"] = "pocket-onnx-bundle-catalog"
-    legacy["bundles"] = {key: normalized[key] for key in sorted(normalized)}
-    return legacy, True
+    return role, quality
 
 
 def verify_catalog(catalog: Any) -> None:
     """Verify the canonical Pocket catalog contract."""
     _require(isinstance(catalog, dict), "Catalog must be an object")
-    catalog, _legacy = _legacy_catalog_view(catalog)
     _require(
         set(catalog) == {"schema", "kind", "source", "bundles"},
         "Catalog must have exactly schema, kind, source, bundles",
@@ -522,6 +694,20 @@ def verify_catalog(catalog: Any) -> None:
     for map_id, raw_bundle in bundles.items():
         _require(isinstance(raw_bundle, dict), f"{map_id}: bundle must be an object")
         bundle = cast(dict[str, Any], raw_bundle)
+        for field in ("language", "layers", "bundle_schema", "profiles", "artifacts"):
+            _require(field in bundle, f"{map_id}: missing required field {field!r}")
+        _require(
+            isinstance(bundle.get("language"), str) and bundle["language"],
+            f"{map_id}: invalid language",
+        )
+        _require(
+            isinstance(bundle.get("layers"), int) and bundle["layers"] > 0,
+            f"{map_id}: invalid layers",
+        )
+        _require(
+            isinstance(bundle.get("bundle_schema"), int) and bundle["bundle_schema"] > 0,
+            f"{map_id}: invalid bundle_schema",
+        )
         _require(
             bundle.get("id") == map_id,
             f"Bundle map key {map_id!r} does not match id {bundle.get('id')!r}",
@@ -533,6 +719,11 @@ def verify_catalog(catalog: Any) -> None:
             f"{map_id}: aliases must be strings",
         )
         for alias in aliases:
+            _safe_name(alias, f"{map_id} alias")
+            _require(
+                alias not in bundles,
+                f"Alias {alias!r} conflicts with a bundle id",
+            )
             _require(
                 alias not in all_aliases or all_aliases[alias] == map_id,
                 f"Alias {alias!r} is ambiguous",
@@ -567,15 +758,23 @@ def verify_catalog(catalog: Any) -> None:
             )
         profiles = bundle.get("profiles", {})
         _require(isinstance(profiles, dict), f"{map_id}: profiles must be a dict")
+        _require(
+            set(profiles) >= {"int8", "fp32"}, f"{map_id}: profiles must include int8 and fp32"
+        )
         for profile_name, profile_roles in profiles.items():
+            _safe_name(profile_name, f"{map_id} profile")
             _require(
                 isinstance(profile_roles, dict),
                 f"{map_id}: profile {profile_name!r} must be a dict",
             )
-            for role in profile_roles:
+            for role, quality in profile_roles.items():
                 _require(
                     role in REQUIRED_ONNX_ROLES,
                     f"{map_id}: profile {profile_name!r} references unknown role {role!r}",
+                )
+                _require(
+                    quality in {"fp32", "int8"},
+                    f"{map_id}: profile {profile_name!r} has invalid quality {quality!r}",
                 )
             for role in REQUIRED_ONNX_ROLES:
                 _require(
