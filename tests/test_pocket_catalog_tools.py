@@ -351,8 +351,9 @@ class TestBuildCatalog:
         assert result1 == result2
 
         assert result1["schema"] == 1
-        assert result1["kind"] == "pocket-bundle-catalog"
+        assert result1["kind"] == "pocket-onnx-bundle-catalog"
         assert result1["source"]["revision"] == "a" * 40
+        verify_catalog(result1)
         assert len(result1["bundles"]) == 1
 
     @patch("onnxvoice.catalog_tools.pocket._list_bundle_paths")

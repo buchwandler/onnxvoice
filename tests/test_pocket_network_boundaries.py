@@ -251,11 +251,9 @@ class TestFakeSessionWiring:
 
         # Check that voice state was wired to the correct sessions
         assert "flow_lm_main" in captured_inputs
-        assert "hidden_state" in captured_inputs["flow_lm_main"]
-        assert np.array_equal(
-            captured_inputs["flow_lm_main"]["hidden_state"],
-            np.ones((1, 10, 64), dtype=np.float32),
-        )
+        # Voice embeddings are a separate contract and must not be merged into KV state.
+        assert "hidden_state" not in captured_inputs["flow_lm_main"]
+        assert "encoder_state" not in captured_inputs["flow_lm_main"]
 
         # Check result is valid
         assert result.sample_rate == 24000

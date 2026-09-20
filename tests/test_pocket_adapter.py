@@ -528,3 +528,75 @@ class TestPocketAdapterInitializeState:
 
         state = adapter._initialize_state({}, batch_size=1)
         assert state == {}
+
+
+@patch("onnxvoice.systems.pocket.OnnxSession")
+def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
+    mock_session_cls: MagicMock, tmp_path: Path
+) -> None:
+    sessions: dict[str, MagicMock] = {}
+    main_calls = 0
+
+    def create_session(path: Any, **kwargs: Any) -> MagicMock:
+        nonlocal main_calls
+        role = kwargs["component"]
+        session = MagicMock()
+        if role == "text_conditioner":
+            session.input_names = ("token_ids",)
+            session.output_names = ("embeddings",)
+            session.run.return_value = [np.ones((1, 2, 4), dtype=np.float32)]
+        elif role == "flow_lm_main":
+            session.input_names = ("sequence", "text_embeddings")
+            session.output_names = ("conditioning", "eos")
+
+            def main_run(inputs: dict[str, Any]) -> list[np.ndarray]:
+                nonlocal main_calls
+                main_calls += 1
+                eos = np.asarray([1.0 if main_calls == 4 else 0.0], dtype=np.float32)
+                return [np.ones((1, 1, 3), dtype=np.float32), eos]
+
+            session.run.side_effect = main_run
+        elif role == "flow_lm_flow":
+            session.input_names = ("c", "s", "t", "x")
+            session.output_names = ("velocity",)
+            session.run.return_value = [np.zeros((1, 1, 3), dtype=np.float32)]
+        elif role == "mimi_decoder":
+            session.input_names = ("latent",)
+            session.output_names = ("audio",)
+            session.run.return_value = [np.ones((1, 1, 8), dtype=np.float32)]
+        sessions[role] = session
+        return session
+
+    mock_session_cls.side_effect = create_session
+
+    artifacts: dict[str, Path] = {}
+    for role in ("text_conditioner", "flow_lm_main", "flow_lm_flow", "mimi_decoder"):
+        path = tmp_path / f"{role}.onnx"
+        path.write_bytes(b"dummy")
+        artifacts[role] = path
+    bos = tmp_path / "bos.npy"
+    np.save(bos, np.zeros((1, 1, 4), dtype=np.float32))
+    artifacts["bos_conditioning"] = bos
+    metadata = {
+        "schema_version": 2,
+        "sample_rate": 24000,
+        "samples_per_frame": 1,
+        "latent_dim": 3,
+        "conditioning_dim": 4,
+        "flow_lm_state_manifest": [],
+        "mimi_state_manifest": [],
+        "insert_bos_before_voice": False,
+        "bos_before_voice_file": "bos",
+        "decoder_chunk_frames": 1,
+    }
+    adapter = PocketAdapter(_make_installation(artifacts=artifacts, metadata={"runtime": metadata}))
+    voice = PocketVoiceState(np.zeros((1, 1, 4), dtype=np.float32), 24000)
+    result = adapter.infer([1, 2], voice_state=voice, max_frames=5, frames_after_eos=0)
+
+    assert result.audio.shape == (16,)
+    assert result.sample_rate == 24000
+    assert main_calls == 4  # two prefix calls plus two generated frames
+    assert sessions["flow_lm_flow"].run.call_count == 2
+    assert sessions["mimi_decoder"].run.call_count == 2
+    assert "token_ids" in sessions["text_conditioner"].run.call_args.args[0]
+    assert set(sessions["flow_lm_flow"].run.call_args.args[0]) == {"c", "s", "t", "x"}

@@ -370,3 +370,33 @@ class TestSelectPocketProfile:
         item = self._get_item()
         selected = _select_pocket_profile(item, "int8")
         assert selected.aliases == ("english", "en")
+
+
+def test_canonical_object_map_parses_and_resolves_profile() -> None:
+    entry = SAMPLE_CATALOG["bundles"][0]
+    catalog = {
+        "schema": 1,
+        "kind": "pocket-onnx-bundle-catalog",
+        "source": SAMPLE_CATALOG["source"],
+        "bundles": {entry["id"]: entry},
+    }
+    items = _parse_pocket(catalog)
+    assert len(items) == 1
+    selected = _select_pocket_profile(items[0], "int8")
+    assert selected.metadata["selected_quality"] == "int8"
+    assert [artifact.role for artifact in selected.artifacts] == [
+        "bundle_metadata",
+        "tokenizer",
+        "bos_conditioning",
+        "flow_lm_main",
+        "flow_lm_flow",
+        "mimi_decoder",
+        "mimi_encoder",
+        "text_conditioner",
+    ]
+
+
+def test_canonical_object_map_rejects_key_id_mismatch() -> None:
+    entry = {**SAMPLE_CATALOG["bundles"][0], "id": "other"}
+    with pytest.raises(CatalogError, match="does not match"):
+        _parse_pocket({"bundles": {"english_2026-04": entry}})

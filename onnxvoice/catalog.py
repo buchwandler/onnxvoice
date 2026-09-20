@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.request
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -393,39 +394,59 @@ def _kokoro_models(data: dict[str, Any]) -> dict[str, Mapping[str, Any]]:
 
 def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
     bundles = data.get("bundles")
-    if not isinstance(bundles, list):
-        raise CatalogError("Pocket catalog is missing the 'bundles' list")
+    if not isinstance(bundles, (dict, list)):
+        raise CatalogError("Pocket catalog is missing the 'bundles' list or mapping")
     source = data.get("source") or {}
-    if not isinstance(source, dict):
+    if not isinstance(source, Mapping):
         raise CatalogError("Pocket catalog source metadata must be an object")
     result: list[CatalogItem] = []
-    for entry in bundles:
-        if not isinstance(entry, dict):
-            continue
-        bundle_id = entry.get("id")
-        if not bundle_id:
+    entries = bundles.items() if isinstance(bundles, dict) else ((None, entry) for entry in bundles)
+    for map_id, raw_entry in entries:
+        if not isinstance(raw_entry, Mapping):
+            raise CatalogError("Pocket bundle entry must be an object")
+        entry = raw_entry
+        bundle_id = entry.get("id") if map_id is None else map_id
+        if not isinstance(bundle_id, str) or not bundle_id:
             raise CatalogError("Pocket bundle entry is missing 'id'")
+        _require_pocket_safe_id(bundle_id, "Pocket bundle id")
+        if map_id is not None and entry.get("id") != map_id:
+            raise CatalogError(
+                f"Pocket bundle map key {map_id!r} does not match entry id {entry.get('id')!r}"
+            )
+        raw_artifacts = entry.get("artifacts", ())
+        if isinstance(raw_artifacts, Mapping):
+            raw_artifacts = raw_artifacts.values()
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: artifacts must be a sequence")
         artifacts: list[Artifact] = []
-        for raw in entry.get("artifacts", ()):
-            if not isinstance(raw, dict):
-                continue
-            role = str(raw.get("role") or "")
+        for raw in raw_artifacts:
+            if not isinstance(raw, Mapping):
+                raise CatalogError(f"{bundle_id}: artifact must be an object")
+            role = raw.get("role")
             if role not in POCKET_ARTIFACT_ROLES:
                 raise CatalogError(f"Unknown Pocket artifact role: {role!r}")
+            raw_path = raw.get("path")
+            filename = raw.get("filename") or (Path(str(raw_path)).name if raw_path else None)
+            if not isinstance(filename, str) or not filename:
+                raise CatalogError(f"{bundle_id}/{role}: artifact filename is required")
+            metadata = dict(raw.get("metadata") or {})
+            if raw_path is not None:
+                metadata.setdefault("path", raw_path)
             artifacts.append(
                 Artifact(
-                    role=role,
-                    filename=str(raw.get("filename") or Path(str(raw.get("url", ""))).name),
+                    role=str(role),
+                    filename=filename,
                     url=raw.get("url"),
                     size=raw.get("size"),
                     sha256=raw.get("sha256"),
                     quality=raw.get("quality"),
                     component=raw.get("component"),
                     format=raw.get("format"),
-                    metadata=raw.get("metadata") or {},
+                    metadata=metadata,
                 )
             )
         metadata = {
+            **(entry.get("metadata") or {}),
             "language": entry.get("language"),
             "layers": entry.get("layers"),
             "bundle_schema": entry.get("bundle_schema"),
@@ -437,12 +458,11 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             "model_recommended_frames_after_eos": entry.get("model_recommended_frames_after_eos"),
             "remove_semicolons": entry.get("remove_semicolons"),
             "pad_with_spaces_for_short_inputs": entry.get("pad_with_spaces_for_short_inputs"),
-            **(entry.get("metadata") or {}),
         }
         result.append(
             CatalogItem(
                 system="pocket",
-                id=str(bundle_id),
+                id=bundle_id,
                 kind="bundle",
                 artifacts=tuple(artifacts),
                 aliases=tuple(entry.get("aliases") or ()),
@@ -453,46 +473,86 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
     return result
 
 
+def _require_pocket_safe_id(value: str, label: str) -> None:
+    if (
+        value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value)
+    ):
+        raise CatalogError(f"{label} is unsafe: {value!r}")
+
+
 def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
-    """Select Pocket artifacts based on quality profile."""
+    """Select exactly one deterministic artifact for each Pocket profile role."""
     profiles = item.metadata.get("profiles") or {}
+    if not isinstance(profiles, Mapping):
+        raise CatalogError(f"Pocket bundle {item.id!r} has invalid profiles metadata")
     selected_quality = quality or "int8"
-    if selected_quality not in profiles and selected_quality != "int8":
-        available = ", ".join(sorted(profiles.keys())) if profiles else "none"
+    profile = profiles.get(selected_quality)
+    if not isinstance(profile, Mapping):
+        available = ", ".join(sorted(str(name) for name in profiles)) or "none"
         raise CatalogError(
-            f"Unknown Pocket profile {selected_quality!r} for {item.id!r}; "
-            f"available profiles: {available}"
+            f"Unknown Pocket profile {selected_quality!r} for {item.id!r}; available profiles: {available}"
         )
-    profile = profiles.get(selected_quality) or {}
-    result_artifacts: list[Artifact] = []
+    missing_roles = [role for role in POCKET_QUALIFIED_ROLES if role not in profile]
+    if missing_roles:
+        raise CatalogError(
+            f"Profile {selected_quality!r} does not specify required roles: {', '.join(sorted(missing_roles))}"
+        )
+    static: dict[str, list[Artifact]] = {
+        role: [] for role in ("bundle_metadata", "tokenizer", "bos_conditioning")
+    }
     for artifact in item.artifacts:
-        if artifact.role not in POCKET_QUALIFIED_ROLES:
-            result_artifacts.append(artifact)
-            continue
-        target_quality = profile.get(artifact.role)
-        if target_quality is None:
+        if artifact.role in static:
+            static[artifact.role].append(artifact)
+    for role, matches in static.items():
+        if len(matches) != 1:
             raise CatalogError(
-                f"Profile {selected_quality!r} does not specify quality for role {artifact.role!r}"
+                f"Pocket bundle {item.id!r} must contain exactly one static artifact for {role!r}"
             )
-        matching = [
-            a for a in item.artifacts if a.role == artifact.role and a.quality == target_quality
+    selected: list[Artifact] = [
+        static[role][0] for role in ("bundle_metadata", "tokenizer", "bos_conditioning")
+    ]
+    for role in (
+        "flow_lm_main",
+        "flow_lm_flow",
+        "mimi_decoder",
+        "mimi_encoder",
+        "text_conditioner",
+    ):
+        target_quality = profile[role]
+        matches = [
+            artifact
+            for artifact in item.artifacts
+            if artifact.role == role and artifact.quality == target_quality
         ]
-        if not matching:
-            raise AssetNotFoundError(
-                f"{item.ref} has no {artifact.role} artifact with quality={target_quality!r}"
+        if len(matches) != 1:
+            raise CatalogError(
+                f"Profile {selected_quality!r} requires exactly one {role!r} artifact with "
+                f"quality={target_quality!r}; found {len(matches)}"
             )
-        if not any(a.role == artifact.role for a in result_artifacts):
-            result_artifacts.append(matching[0])
+        selected.append(matches[0])
     return CatalogItem(
         system=item.system,
         id=item.id,
         kind=item.kind,
-        artifacts=tuple(result_artifacts),
+        artifacts=tuple(selected),
         aliases=item.aliases,
         sample_rate=item.sample_rate,
         voices=item.voices,
         default_voice=item.default_voice,
         metadata={**item.metadata, "selected_quality": selected_quality},
+    )
+
+
+def _item_supports_quality(item: CatalogItem, quality: str) -> bool:
+    if item.system == "pocket":
+        profiles = item.metadata.get("profiles") or {}
+        return isinstance(profiles, Mapping) and quality in profiles
+    return bool(
+        item.metadata.get("quality") == quality
+        or any(a.role == "model" and a.quality == quality for a in item.artifacts)
     )
 
 
@@ -508,10 +568,5 @@ def filter_items(
     if language:
         result = [item for item in result if matches_language(item.metadata, language)]
     if quality:
-        result = [
-            item
-            for item in result
-            if item.metadata.get("quality") == quality
-            or any(a.role == "model" and a.quality == quality for a in item.artifacts)
-        ]
+        result = [item for item in result if _item_supports_quality(item, quality)]
     return result

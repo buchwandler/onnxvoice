@@ -281,6 +281,51 @@ print(result.audio.shape, result.sample_rate)
 runtime.close()
 ```
 
+### Pocket inference
+
+Pocket bundles use the canonical `pocket-onnx-bundles` catalog and select a complete quality profile, including the mixed-precision `int8` profile:
+
+```python
+import numpy as np
+from onnxvoice import OnnxVoice
+
+ov = OnnxVoice()
+installation = ov.install("pocket:english_2026-04", quality="int8")
+with ov.open(installation, provider="cpu") as runtime:
+    voice = runtime.prepare_voice(reference_audio, sample_rate=24000)
+    result = runtime.infer(
+        token_ids,
+        voice_state=voice,
+        temperature=0.7,
+        lsd_steps=1,
+        max_frames=200,
+    )
+```
+
+`prepare_voice()` runs the Mimi encoder once and returns reusable voice embeddings. Each `infer()` call creates fresh Flow-LM and Mimi recurrent state. `max_frames` is a generation-frame limit, not a token or sample limit; `frames_after_eos` can request bounded post-EOS frames. Runtime opening validates the named graph inputs, outputs, and state manifests before inference.
+
+For explicit local files, use the existing unmanaged boundary without catalog or HTTP access:
+
+```python
+with OnnxVoice.open_local(
+    system="pocket",
+    files={
+        "bundle_metadata": "bundle.json",
+        "bos_conditioning": "bos_before_voice.npy",
+        "mimi_encoder": "mimi_encoder.onnx",
+        "text_conditioner": "text_conditioner.onnx",
+        "flow_lm_main": "flow_lm_main.onnx",
+        "flow_lm_flow": "flow_lm_flow.onnx",
+        "mimi_decoder": "mimi_decoder.onnx",
+    },
+    metadata=bundle_metadata,
+    sample_rate=24000,
+    provider="cpu",
+) as runtime:
+    result = runtime.infer(token_ids, voice_state=runtime.prepare_voice(audio, sample_rate=24000))
+```
+
+The optional real-bundle smoke test is enabled by setting `ONNXVOICE_POCKET_BUNDLE_DIR` to a checked-out pinned bundle directory; otherwise it is skipped while fake-session contract tests remain mandatory.
 The same call works for the catalog's `split-onnx-v1` layout. The frontend still supplies token IDs and a complete style row; OnnxVoice does not select voices or phonemize text.
 
 ### Local split Kokoro

@@ -8,6 +8,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,28 +19,21 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME_RE = re.compile(r"^[^\W_][\w.-]*$", re.UNICODE)
 
-# Required ONNX component roles that must have at least one quality variant
 REQUIRED_ONNX_ROLES = frozenset(
-    {
-        "flow_lm_main",
-        "flow_lm_flow",
-        "mimi_decoder",
-        "mimi_encoder",
-        "text_conditioner",
-    }
+    {"flow_lm_main", "flow_lm_flow", "mimi_decoder", "mimi_encoder", "text_conditioner"}
 )
-
-# Static roles that must have exactly one artifact
-STATIC_ROLES = frozenset(
-    {
-        "bundle_metadata",
-        "tokenizer",
-        "bos_conditioning",
-    }
-)
-
-# All valid artifact roles
+STATIC_ROLES = frozenset({"bundle_metadata", "tokenizer", "bos_conditioning"})
 VALID_ROLES = REQUIRED_ONNX_ROLES | STATIC_ROLES
+_ARTIFACT_ORDER = (
+    "bundle_metadata",
+    "tokenizer",
+    "bos_conditioning",
+    "flow_lm_main",
+    "flow_lm_flow",
+    "mimi_decoder",
+    "mimi_encoder",
+    "text_conditioner",
+)
 
 
 class CatalogError(ValueError):
@@ -54,13 +48,21 @@ def _require(condition: bool, message: str) -> None:
 def _safe_name(value: Any, label: str) -> None:
     if not isinstance(value, str) or not value:
         raise CatalogError(f"{label}: must be a non-empty string")
-    _require(
-        "/" not in value and "\\" not in value,
-        f"{label}: path separators are forbidden",
-    )
+    _require("/" not in value and "\\" not in value, f"{label}: path separators are forbidden")
     _require(value not in {".", ".."}, f"{label}: dot segments are forbidden")
     _require(not Path(value).is_absolute(), f"{label}: absolute paths are forbidden")
     _require(_SAFE_NAME_RE.fullmatch(value) is not None, f"{label}: unsafe name")
+
+
+def _safe_relative_path(value: Any, label: str) -> str:
+    _require(isinstance(value, str) and bool(value), f"{label}: path is required")
+    path = Path(value)
+    _require(not path.is_absolute(), f"{label}: absolute paths are forbidden")
+    _require(
+        "\\" not in value and all(part not in {"", ".", ".."} for part in path.parts),
+        f"{label}: unsafe path",
+    )
+    return value
 
 
 def _canonical_json(data: Any) -> bytes:
@@ -105,11 +107,9 @@ def resolve_revision(repository: str, revision: str = DEFAULT_REVISION) -> str:
 
 
 def _fetch_bundle_json(
-    repository: str,
-    revision: str,
-    bundle_path: str,
+    repository: str, revision: str, bundle_path: str
 ) -> tuple[dict[str, Any], str]:
-    """Fetch a single bundle.json and return data + SHA-256."""
+    """Fetch a single bundle.json and return data plus its SHA-256."""
     url = huggingface_resolve_url(repository, revision, bundle_path)
     payload = _read_url(url)
     try:
@@ -120,34 +120,26 @@ def _fetch_bundle_json(
     return data, hashlib.sha256(payload).hexdigest()
 
 
-def _list_bundle_paths(
-    repository: str,
-    revision: str,
-) -> list[str]:
+def _list_bundle_paths(repository: str, revision: str) -> list[str]:
     """List all bundle.json paths in the repository at the given revision."""
-    # Use the Hugging Face API to list files
-    api_url = f"{huggingface_api_url(repository, revision)}/tree/main"
-    payload = _read_url(api_url)
+    payload = _read_url(f"{huggingface_api_url(repository, revision)}/tree/main")
     try:
         tree = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CatalogError("Unable to parse repository tree") from exc
-
     _require(isinstance(tree, list), "Repository tree must be a list")
-
-    bundle_paths: list[str] = []
-    for item in tree:
-        if not isinstance(item, dict):
-            continue
-        path = item.get("path", "")
-        if path.startswith("onnx/") and path.endswith("/bundle.json"):
-            bundle_paths.append(path)
-
+    bundle_paths = [
+        item["path"]
+        for item in tree
+        if isinstance(item, dict)
+        and isinstance(item.get("path"), str)
+        and item["path"].startswith("onnx/")
+        and item["path"].endswith("/bundle.json")
+    ]
     return sorted(bundle_paths)
 
 
 def _extract_bundle_id(bundle_path: str) -> str:
-    """Extract bundle ID from path like 'onnx/english_2026-04/bundle.json'."""
     parts = bundle_path.split("/")
     _require(
         len(parts) == 3 and parts[0] == "onnx" and parts[2] == "bundle.json",
@@ -157,8 +149,14 @@ def _extract_bundle_id(bundle_path: str) -> str:
 
 
 def _validate_artifact_role(role: str, bundle_id: str) -> None:
-    """Validate that artifact role is known."""
     _require(role in VALID_ROLES, f"{bundle_id}: unknown artifact role {role!r}")
+
+
+def _infer_format(filename: str, value: Any) -> str:
+    if isinstance(value, str) and value:
+        return value
+    suffix = Path(filename).suffix.lower().lstrip(".")
+    return suffix or "binary"
 
 
 def _build_artifact(
@@ -168,39 +166,47 @@ def _build_artifact(
     repository: str,
     revision: str,
     upstream_path: str,
+    format: str | None = None,
     size: int | None = None,
     sha256: str | None = None,
     quality: str | None = None,
 ) -> dict[str, Any]:
-    """Build a normalized artifact entry."""
+    """Build a normalized artifact entry with an explicit public shape."""
     _safe_name(filename, f"artifact {role} filename")
-
-    url = huggingface_resolve_url(repository, revision, upstream_path)
-
-    artifact: dict[str, Any] = {
-        "role": role,
-        "filename": filename,
-        "url": url,
-    }
-
+    _safe_relative_path(upstream_path, f"artifact {role} path")
     if size is not None:
         _require(
             isinstance(size, int) and not isinstance(size, bool) and size > 0,
             f"artifact {role}: invalid size",
         )
-        artifact["size"] = size
-
     if sha256 is not None:
         _require(
-            isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256) is not None,
+            isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256.lower()) is not None,
             f"artifact {role}: invalid sha256",
         )
-        artifact["sha256"] = sha256
+        sha256 = sha256.lower()
+    return {
+        "role": role,
+        "quality": quality,
+        "format": _infer_format(filename, format),
+        "filename": filename,
+        "path": upstream_path,
+        "url": huggingface_resolve_url(repository, revision, upstream_path),
+        "size": size,
+        "sha256": sha256,
+    }
 
-    if quality is not None:
-        artifact["quality"] = quality
 
-    return artifact
+def _artifact_entries(raw: Any) -> list[tuple[str, Any]]:
+    if isinstance(raw, dict):
+        return list(raw.items())
+    if isinstance(raw, list):
+        result: list[tuple[str, Any]] = []
+        for entry in raw:
+            _require(isinstance(entry, dict), "Artifact list entries must be objects")
+            result.append((str(entry.get("role") or ""), entry))
+        return result
+    raise CatalogError("artifacts must be a mapping or list")
 
 
 def _parse_bundle_entry(
@@ -210,19 +216,14 @@ def _parse_bundle_entry(
     revision: str,
     bundle_path: str,
 ) -> dict[str, Any]:
-    """Parse a single bundle.json into a normalized catalog entry."""
+    """Parse a single upstream bundle.json into a normalized catalog entry."""
     _require(isinstance(bundle_data, dict), f"{bundle_id}: bundle must be a JSON object")
-
-    # Extract basic metadata
     language = bundle_data.get("language")
     _require(isinstance(language, str) and bool(language), f"{bundle_id}: invalid language")
-
     sample_rate = bundle_data.get("sample_rate")
     _require(isinstance(sample_rate, int) and sample_rate > 0, f"{bundle_id}: invalid sample_rate")
-
     layers = bundle_data.get("layers")
     _require(isinstance(layers, int) and layers > 0, f"{bundle_id}: invalid layers")
-
     bundle_schema = bundle_data.get("schema_version")
     _require(
         isinstance(bundle_schema, int) and bundle_schema > 0, f"{bundle_id}: invalid schema_version"
@@ -230,129 +231,107 @@ def _parse_bundle_entry(
 
     aliases = bundle_data.get("aliases") or []
     _require(
-        isinstance(aliases, list) and all(isinstance(a, str) for a in aliases),
+        isinstance(aliases, list) and all(isinstance(alias, str) for alias in aliases),
         f"{bundle_id}: aliases must be strings",
     )
-
-    # Extract runtime metadata
-    max_token_per_chunk = bundle_data.get("max_token_per_chunk")
-    model_recommended_frames_after_eos = bundle_data.get("model_recommended_frames_after_eos")
-    remove_semicolons = bundle_data.get("remove_semicolons")
-    pad_with_spaces_for_short_inputs = bundle_data.get("pad_with_spaces_for_short_inputs")
-
-    # Extract profiles
     profiles = bundle_data.get("profiles") or {}
     _require(isinstance(profiles, dict), f"{bundle_id}: profiles must be a dict")
-
-    # Build artifacts list
     artifacts: list[dict[str, Any]] = []
-
-    # Static artifacts from bundle.json
-    static_artifacts = bundle_data.get("artifacts") or {}
-    _require(isinstance(static_artifacts, dict), f"{bundle_id}: artifacts must be a dict")
-
-    # Track which roles we've seen
-    seen_roles: set[str] = set()
     seen_role_quality: set[tuple[str, str | None]] = set()
 
-    for role, artifact_info in static_artifacts.items():
+    for role, artifact_info in _artifact_entries(bundle_data.get("artifacts") or {}):
         _validate_artifact_role(role, bundle_id)
-        _require(
-            role not in seen_roles or role in REQUIRED_ONNX_ROLES,
-            f"{bundle_id}: duplicate static role {role!r}",
-        )
-        seen_roles.add(role)
-
         if isinstance(artifact_info, dict):
             filename = artifact_info.get("filename")
-            upstream_path = artifact_info.get("path") or f"onnx/{bundle_id}/{filename}"
-            quality: str | None = artifact_info.get("quality")
+            raw_path = artifact_info.get("path")
+            quality = artifact_info.get("quality")
+            format = artifact_info.get("format")
             size = artifact_info.get("size")
             sha256 = artifact_info.get("sha256")
         elif isinstance(artifact_info, str):
             filename = artifact_info
-            upstream_path = f"onnx/{bundle_id}/{filename}"
+            raw_path = None
             quality = None
+            format = None
             size = None
             sha256 = None
         else:
             raise CatalogError(f"{bundle_id}: invalid artifact info for {role!r}")
-
-        _require(
-            isinstance(filename, str) and bool(filename),
-            f"{bundle_id}: invalid filename for {role!r}",
-        )
-        assert isinstance(filename, str)
-        # Check for duplicate (role, quality) pairs
+        if not isinstance(filename, str) or not filename:
+            if isinstance(raw_path, str) and raw_path:
+                filename = Path(raw_path).name
+            else:
+                raise CatalogError(f"{bundle_id}: invalid filename for {role!r}")
+        upstream_path = raw_path or f"onnx/{bundle_id}/{filename}"
         role_quality = (role, quality)
         _require(
             role_quality not in seen_role_quality,
             f"{bundle_id}: duplicate (role, quality) pair: {role_quality}",
         )
         seen_role_quality.add(role_quality)
-
-        artifact = _build_artifact(
-            role=role,
-            filename=filename,
-            repository=repository,
-            revision=revision,
-            upstream_path=upstream_path,
-            size=size,
-            sha256=sha256,
-            quality=quality,
+        artifacts.append(
+            _build_artifact(
+                role=role,
+                filename=filename,
+                repository=repository,
+                revision=revision,
+                upstream_path=upstream_path,
+                format=format,
+                size=size,
+                sha256=sha256,
+                quality=quality,
+            )
         )
-        artifacts.append(artifact)
 
-    # Check required static roles
     for role in STATIC_ROLES:
-        _require(role in seen_roles, f"{bundle_id}: missing required static role {role!r}")
-
-    # Check at least one quality for each required ONNX role
+        _require(
+            sum(artifact["role"] == role for artifact in artifacts) == 1,
+            f"{bundle_id}: missing or duplicate static role {role!r}",
+        )
     for role in REQUIRED_ONNX_ROLES:
-        qualities = {q for r, q in seen_role_quality if r == role}
-        _require(len(qualities) > 0, f"{bundle_id}: no quality variant for required role {role!r}")
-
-    # Validate profiles reference existing (role, quality) pairs
+        _require(
+            any(artifact["role"] == role for artifact in artifacts),
+            f"{bundle_id}: no quality variant for role {role!r}",
+        )
     for profile_name, profile_roles in profiles.items():
         _require(
             isinstance(profile_roles, dict), f"{bundle_id}: profile {profile_name!r} must be a dict"
         )
-        for role, quality in profile_roles.items():
+        for role in REQUIRED_ONNX_ROLES:
             _require(
-                role in REQUIRED_ONNX_ROLES,
-                f"{bundle_id}: profile {profile_name!r} references unknown role {role!r}",
+                role in profile_roles,
+                f"{bundle_id}: profile {profile_name!r} omits required role {role!r}",
             )
             _require(
-                (role, quality) in seen_role_quality,
-                f"{bundle_id}: profile {profile_name!r} references missing ({role!r}, {quality!r})",
+                (role, profile_roles[role]) in seen_role_quality,
+                f"{bundle_id}: profile {profile_name!r} references missing ({role!r}, {profile_roles[role]!r})",
             )
 
-    # Build metadata
-    metadata: dict[str, Any] = {
+    entry: dict[str, Any] = {
+        "id": bundle_id,
+        "aliases": aliases,
+        "sample_rate": sample_rate,
         "language": language,
         "layers": layers,
         "bundle_schema": bundle_schema,
         "profiles": profiles,
-        "source_revision": revision,
-        "source_repository": repository,
+        "artifacts": sorted(
+            artifacts,
+            key=lambda artifact: (
+                _ARTIFACT_ORDER.index(artifact["role"]),
+                artifact["quality"] or "",
+            ),
+        ),
     }
-
-    if max_token_per_chunk is not None:
-        metadata["max_token_per_chunk"] = max_token_per_chunk
-    if model_recommended_frames_after_eos is not None:
-        metadata["model_recommended_frames_after_eos"] = model_recommended_frames_after_eos
-    if remove_semicolons is not None:
-        metadata["remove_semicolons"] = remove_semicolons
-    if pad_with_spaces_for_short_inputs is not None:
-        metadata["pad_with_spaces_for_short_inputs"] = pad_with_spaces_for_short_inputs
-
-    return {
-        "id": bundle_id,
-        "aliases": aliases,
-        "sample_rate": sample_rate,
-        "artifacts": artifacts,
-        **metadata,
-    }
+    for key in (
+        "max_token_per_chunk",
+        "model_recommended_frames_after_eos",
+        "remove_semicolons",
+        "pad_with_spaces_for_short_inputs",
+    ):
+        if key in bundle_data:
+            entry[key] = bundle_data[key]
+    return entry
 
 
 def build_catalog(
@@ -361,213 +340,251 @@ def build_catalog(
     revision: str = DEFAULT_REVISION,
     resolved_revision: str | None = None,
 ) -> dict[str, Any]:
-    """Build Pocket catalog from upstream repository.
-
-    Returns deterministic catalog for the same upstream revision.
-    """
-    actual_revision = resolved_revision or resolve_revision(repository, revision)
-
-    # List all bundle paths
+    """Build a deterministic Pocket catalog for one exact upstream revision."""
+    actual_revision = (resolved_revision or resolve_revision(repository, revision)).lower()
+    _require(
+        _SHA_RE.fullmatch(actual_revision) is not None,
+        "resolved_revision must be a 40-character SHA",
+    )
     bundle_paths = _list_bundle_paths(repository, actual_revision)
     _require(len(bundle_paths) > 0, "No bundles found in repository")
-
-    # Parse each bundle
-    bundles: list[dict[str, Any]] = []
+    bundles: dict[str, dict[str, Any]] = {}
     for bundle_path in bundle_paths:
         bundle_id = _extract_bundle_id(bundle_path)
         _safe_name(bundle_id, "bundle id")
-
         bundle_data, _ = _fetch_bundle_json(repository, actual_revision, bundle_path)
-
-        entry = _parse_bundle_entry(
+        bundles[bundle_id] = _parse_bundle_entry(
             bundle_id=bundle_id,
             bundle_data=bundle_data,
             repository=repository,
             revision=actual_revision,
             bundle_path=bundle_path,
         )
-        bundles.append(entry)
-
-    # Sort by bundle ID for deterministic output
-    bundles.sort(key=lambda b: b["id"])
-
+    sorted_bundles = {bundle_id: bundles[bundle_id] for bundle_id in sorted(bundles)}
     return {
         "schema": 1,
-        "kind": "pocket-bundle-catalog",
+        "kind": "pocket-onnx-bundle-catalog",
         "source": {
             "provider": "huggingface",
             "repository": repository,
             "requested_revision": revision,
             "revision": actual_revision,
-            "bundle_count": len(bundles),
+            "bundle_root": "onnx",
+            "bundle_count": len(sorted_bundles),
+            "license": "cc-by-4.0",
+            "snapshot_note": None,
         },
-        "bundles": bundles,
+        "bundles": sorted_bundles,
     }
 
 
+def _verify_artifact(
+    artifact: dict[str, Any], bundle_id: str, repository: str, revision: str
+) -> tuple[str, str | None]:
+    required = {"role", "quality", "format", "filename", "path", "url", "size", "sha256"}
+    _require(set(artifact) == required, f"{bundle_id}: artifact fields must be exactly {required}")
+    role = artifact["role"]
+    _require(role in VALID_ROLES, f"{bundle_id}: invalid role {role!r}")
+    _safe_name(artifact["filename"], f"{bundle_id}/{role}: filename")
+    path = _safe_relative_path(artifact["path"], f"{bundle_id}/{role}: path")
+    _require(
+        isinstance(artifact["format"], str) and bool(artifact["format"]),
+        f"{bundle_id}/{role}: invalid format",
+    )
+    url = artifact["url"]
+    _require(
+        isinstance(url, str) and url == huggingface_resolve_url(repository, revision, path),
+        f"{bundle_id}/{role}: URL does not match repository/revision/path",
+    )
+    size = artifact["size"]
+    _require(
+        size is None or (isinstance(size, int) and not isinstance(size, bool) and size > 0),
+        f"{bundle_id}/{role}: invalid size",
+    )
+    sha256 = artifact["sha256"]
+    _require(
+        sha256 is None or (isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256) is not None),
+        f"{bundle_id}/{role}: invalid sha256",
+    )
+    return role, artifact["quality"]
+
+
+def _legacy_catalog_view(catalog: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Normalize the old private list catalog for temporary compatibility."""
+    if catalog.get("kind") != "pocket-bundle-catalog" or not isinstance(
+        catalog.get("bundles"), list
+    ):
+        return catalog, False
+    legacy = deepcopy(catalog)
+    source = dict(legacy.get("source") or {})
+    revision = str(source.get("revision") or "0" * 40)
+    source.setdefault("bundle_root", "onnx")
+    source.setdefault("license", "cc-by-4.0")
+    source.setdefault("snapshot_note", None)
+    legacy["source"] = source
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_bundle in legacy["bundles"]:
+        if not isinstance(raw_bundle, dict):
+            continue
+        bundle_id = raw_bundle.get("id")
+        if not isinstance(bundle_id, str):
+            continue
+        bundle = dict(raw_bundle)
+        artifacts: list[dict[str, Any]] = []
+        for raw_artifact in bundle.get("artifacts") or []:
+            if not isinstance(raw_artifact, dict):
+                continue
+            artifact = dict(raw_artifact)
+            filename = artifact.get("filename") or "artifact.bin"
+            path = artifact.get("path") or f"onnx/{bundle_id}/{filename}"
+            artifact.setdefault("quality", None)
+            artifact.setdefault("format", _infer_format(str(filename), None))
+            artifact["path"] = path
+            artifact["url"] = huggingface_resolve_url(str(source.get("repository")), revision, path)
+            artifact.setdefault("size", None)
+            artifact.setdefault("sha256", None)
+            artifacts.append(artifact)
+        bundle["artifacts"] = artifacts
+        normalized[bundle_id] = bundle
+    legacy["kind"] = "pocket-onnx-bundle-catalog"
+    legacy["bundles"] = {key: normalized[key] for key in sorted(normalized)}
+    return legacy, True
+
+
 def verify_catalog(catalog: Any) -> None:
-    """Verify a Pocket catalog against the contract."""
+    """Verify the canonical Pocket catalog contract."""
     _require(isinstance(catalog, dict), "Catalog must be an object")
-
-    # Check top-level fields
-    required_fields = {"schema", "kind", "source", "bundles"}
-    _require(set(catalog.keys()) == required_fields, f"Catalog must have exactly {required_fields}")
-
+    catalog, _legacy = _legacy_catalog_view(catalog)
+    _require(
+        set(catalog) == {"schema", "kind", "source", "bundles"},
+        "Catalog must have exactly schema, kind, source, bundles",
+    )
     _require(catalog.get("schema") == 1, "Catalog schema must be 1")
     _require(
-        catalog.get("kind") == "pocket-bundle-catalog",
+        catalog.get("kind") == "pocket-onnx-bundle-catalog",
         f"Unexpected catalog kind: {catalog.get('kind')!r}",
     )
 
-    # Verify source
     source = catalog.get("source")
     _require(isinstance(source, dict), "Catalog source must be an object")
     source = cast(dict[str, Any], source)
-
-    required_source_fields = {
+    required_source = {
         "provider",
         "repository",
         "requested_revision",
         "revision",
+        "bundle_root",
         "bundle_count",
+        "license",
+        "snapshot_note",
     }
-    _require(
-        set(source.keys()) == required_source_fields,
-        f"Catalog source must have exactly {required_source_fields}",
-    )
-
+    _require(set(source) == required_source, f"Catalog source must have exactly {required_source}")
     _require(source.get("provider") == "huggingface", "Catalog source provider must be huggingface")
-
     repository = source.get("repository")
     _require(
         isinstance(repository, str) and re.fullmatch(r"[^/\\ ]+/[^/\\ ]+", repository) is not None,
         "Invalid source repository",
     )
-
+    assert isinstance(repository, str)
+    requested_revision = source.get("requested_revision")
     _require(
-        isinstance(source.get("requested_revision"), str) and bool(source["requested_revision"]),
+        isinstance(requested_revision, str) and bool(requested_revision),
         "Invalid requested revision",
     )
-
     revision = source.get("revision")
     _require(
         isinstance(revision, str) and _SHA_RE.fullmatch(revision) is not None,
         "Source revision must be a lowercase 40-character SHA",
     )
+    assert isinstance(revision, str)
+    _require(source.get("bundle_root") == "onnx", "Catalog bundle_root must be onnx")
+    _require(
+        isinstance(source.get("license"), str) and bool(source["license"]),
+        "Catalog license is required",
+    )
+    _require(
+        source.get("snapshot_note") is None or isinstance(source["snapshot_note"], str),
+        "Invalid snapshot_note",
+    )
 
+    bundles = catalog.get("bundles")
+    _require(isinstance(bundles, dict), "Catalog bundles must be a mapping")
+    bundles = cast(dict[str, Any], bundles)
     bundle_count = source.get("bundle_count")
     _require(isinstance(bundle_count, int) and bundle_count > 0, "Invalid bundle count")
-
-    # Verify bundles
-    bundles = catalog.get("bundles")
-    _require(isinstance(bundles, list), "Catalog bundles must be a list")
-    assert isinstance(bundles, list)
     _require(
         len(bundles) == bundle_count,
         f"Bundle count mismatch: expected {bundle_count}, got {len(bundles)}",
     )
+    _require(list(bundles) == sorted(bundles), "Catalog bundles must be sorted by id")
 
-    # Track aliases globally
     all_aliases: dict[str, str] = {}
-
-    for bundle in bundles:
-        _require(isinstance(bundle, dict), "Bundle must be an object")
-        bundle = cast(dict[str, Any], bundle)
-
-        bundle_id = bundle.get("id")
-        _require(isinstance(bundle_id, str) and bool(bundle_id), "Bundle must have a non-empty id")
-        assert isinstance(bundle_id, str)
-        _safe_name(bundle_id, f"bundle {bundle_id}")
+    for map_id, raw_bundle in bundles.items():
+        _require(isinstance(raw_bundle, dict), f"{map_id}: bundle must be an object")
+        bundle = cast(dict[str, Any], raw_bundle)
+        _require(
+            bundle.get("id") == map_id,
+            f"Bundle map key {map_id!r} does not match id {bundle.get('id')!r}",
+        )
+        _safe_name(map_id, f"bundle {map_id}")
         aliases = bundle.get("aliases", [])
         _require(
-            isinstance(aliases, list) and all(isinstance(a, str) for a in aliases),
-            f"{bundle_id}: aliases must be strings",
+            isinstance(aliases, list) and all(isinstance(alias, str) for alias in aliases),
+            f"{map_id}: aliases must be strings",
         )
-        assert isinstance(aliases, list)
-
-        # Check alias uniqueness
         for alias in aliases:
             _require(
-                alias not in all_aliases or all_aliases[alias] == bundle_id,
-                f"Alias {alias!r} is ambiguous: {all_aliases.get(alias)} vs {bundle_id}",
+                alias not in all_aliases or all_aliases[alias] == map_id,
+                f"Alias {alias!r} is ambiguous",
             )
-            all_aliases[alias] = bundle_id
-
+            all_aliases[alias] = map_id
         sample_rate = bundle.get("sample_rate")
-        _require(
-            isinstance(sample_rate, int) and sample_rate > 0, f"{bundle_id}: invalid sample_rate"
-        )
-
+        _require(isinstance(sample_rate, int) and sample_rate > 0, f"{map_id}: invalid sample_rate")
         artifacts = bundle.get("artifacts")
-        _require(isinstance(artifacts, list), f"{bundle_id}: artifacts must be a list")
-        assert isinstance(artifacts, list)
-        # Track roles in this bundle
+        _require(isinstance(artifacts, list), f"{map_id}: artifacts must be a list")
+        artifacts = cast(list[Any], artifacts)
         seen_static: set[str] = set()
         seen_role_quality: set[tuple[str, str | None]] = set()
-
-        for artifact in artifacts:
-            _require(isinstance(artifact, dict), f"{bundle_id}: artifact must be an object")
-            artifact = cast(dict[str, Any], artifact)
-
-            role = artifact.get("role")
-            _require(role in VALID_ROLES, f"{bundle_id}: invalid role {role!r}")
-            assert isinstance(role, str)
-            filename = artifact.get("filename")
-            _require(
-                isinstance(filename, str) and bool(filename),
-                f"{bundle_id}/{role}: invalid filename",
+        for raw_artifact in artifacts:
+            _require(isinstance(raw_artifact, dict), f"{map_id}: artifact must be an object")
+            role, quality = _verify_artifact(
+                cast(dict[str, Any], raw_artifact), map_id, repository, revision
             )
-            assert isinstance(filename, str)
-            _safe_name(filename, f"{bundle_id}/{role}: filename")
-            url = artifact.get("url")
-            _require(isinstance(url, str) and bool(url), f"{bundle_id}/{role}: invalid url")
-            assert isinstance(url, str)
-            # Check URL matches repository/revision
-            expected_prefix = f"https://huggingface.co/{repository}/resolve/{revision}/"
+            pair = (role, quality)
             _require(
-                url.startswith(expected_prefix),
-                f"{bundle_id}/{role}: URL does not match repository/revision",
+                pair not in seen_role_quality, f"{map_id}: duplicate (role, quality) pair: {pair}"
             )
-
-            # Track role/quality pairs
-            quality: str | None = artifact.get("quality")
-            role_quality = (role, quality)
-            _require(
-                role_quality not in seen_role_quality,
-                f"{bundle_id}: duplicate (role, quality) pair: {role_quality}",
-            )
-            seen_role_quality.add(role_quality)
-
+            seen_role_quality.add(pair)
             if role in STATIC_ROLES:
-                _require(role not in seen_static, f"{bundle_id}: duplicate static role {role!r}")
+                _require(role not in seen_static, f"{map_id}: duplicate static role {role!r}")
                 seen_static.add(role)
-
-        # Check required static roles
         for role in STATIC_ROLES:
-            _require(role in seen_static, f"{bundle_id}: missing static role {role!r}")
-
-        # Check at least one quality for each required ONNX role
+            _require(role in seen_static, f"{map_id}: missing static role {role!r}")
         for role in REQUIRED_ONNX_ROLES:
-            qualities = {q for r, q in seen_role_quality if r == role}
-            _require(len(qualities) > 0, f"{bundle_id}: no quality variant for role {role!r}")
-
-        # Verify profiles
+            _require(
+                any(pair[0] == role for pair in seen_role_quality),
+                f"{map_id}: no quality variant for role {role!r}",
+            )
         profiles = bundle.get("profiles", {})
-        _require(isinstance(profiles, dict), f"{bundle_id}: profiles must be a dict")
-
+        _require(isinstance(profiles, dict), f"{map_id}: profiles must be a dict")
         for profile_name, profile_roles in profiles.items():
             _require(
                 isinstance(profile_roles, dict),
-                f"{bundle_id}: profile {profile_name!r} must be a dict",
+                f"{map_id}: profile {profile_name!r} must be a dict",
             )
-            for role, quality in profile_roles.items():
+            for role in profile_roles:
                 _require(
                     role in REQUIRED_ONNX_ROLES,
-                    f"{bundle_id}: profile {profile_name!r} references unknown role {role!r}",
+                    f"{map_id}: profile {profile_name!r} references unknown role {role!r}",
+                )
+            for role in REQUIRED_ONNX_ROLES:
+                _require(
+                    role in profile_roles,
+                    f"{map_id}: profile {profile_name!r} omits required role {role!r}",
                 )
                 _require(
-                    (role, quality) in seen_role_quality,
-                    f"{bundle_id}: profile {profile_name!r} references missing ({role!r}, {quality!r})",
+                    (role, profile_roles[role]) in seen_role_quality,
+                    f"{map_id}: profile {profile_name!r} references missing ({role!r}, {profile_roles[role]!r})",
                 )
 
 
