@@ -1,0 +1,28 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.1.9
+git_base_ref: 7c72953807b60e1df5014f5cb854811fb958e817
+git_base_sha: 7c72953807b60e1df5014f5cb854811fb958e817
+git_head_ref: 5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+git_head_sha: 5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+include_merges: nontrivial
+entries:
+  - kind: changed
+    summary: "Changed Pocket catalog handling to enforce canonical schema and validate discovered artifacts"
+    status: accepted
+    source_refs:
+      - git:5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+    paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/pocket.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_pocket_repository_contract.py
+    sources:
+      - git:5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

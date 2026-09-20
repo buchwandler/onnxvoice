@@ -1,0 +1,16 @@
+rows:
+  - sha: 5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/pocket.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_pocket_repository_contract.py
+    observed_behavior: "Pocket catalog parsing and verification now require the canonical object-map schema, validate aliases and artifact paths and integrity metadata, and catalog generation discovers upstream files and builds deterministic profiles when metadata is absent."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed the implementation and regression tests for canonical Pocket catalog validation and repository discovery."
+    stale: false

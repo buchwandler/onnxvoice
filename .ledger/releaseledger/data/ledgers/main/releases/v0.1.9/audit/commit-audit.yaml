@@ -1,0 +1,46 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 3
+release_version: v0.1.9
+git_base_ref: v0.1.8
+git_base_sha: 7c72953807b60e1df5014f5cb854811fb958e817
+git_head_ref: HEAD
+git_head_sha: 5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+git_range: 7c72953807b60e1df5014f5cb854811fb958e817..5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+commit_count: 1
+rows:
+  - sha: 5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+    source_ref: git:5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d
+    short_sha: 5ef09c9
+    changed_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/pocket.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_pocket_repository_contract.py
+    stats:
+      files_changed: 5
+      insertions: 541
+      deletions: 363
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/pocket.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_pocket_repository_contract.py
+    observed_behavior:
+      Pocket catalog parsing and verification now require the canonical
+      object-map schema, validate aliases and artifact paths and integrity metadata,
+      and catalog generation discovers upstream files and builds deterministic profiles
+      when metadata is absent.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: add pocket"
+    target_entry_id: entry-0001
+    notes:
+      Reviewed the implementation and regression tests for canonical Pocket catalog
+      validation and repository discovery.

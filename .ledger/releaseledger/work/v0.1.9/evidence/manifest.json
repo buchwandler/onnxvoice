@@ -1,0 +1,29 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 541,
+      "deletions": 363,
+      "patch_file": "5ef09c9.patch",
+      "patch_sha256": "8b8feb79d80ed6b3e3b3aa5b7c97e361d50193111167b8e7ada46a6df5f47001",
+      "paths": [
+        "onnxvoice/catalog.py",
+        "onnxvoice/catalog_tools/pocket.py",
+        "tests/test_pocket_catalog.py",
+        "tests/test_pocket_catalog_tools.py",
+        "tests/test_pocket_repository_contract.py"
+      ],
+      "sha": "5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d",
+      "short_sha": "5ef09c9",
+      "source_ref": "git:5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d"
+    }
+  ],
+  "git_base_ref": "7c72953807b60e1df5014f5cb854811fb958e817",
+  "git_base_sha": "7c72953807b60e1df5014f5cb854811fb958e817",
+  "git_head_ref": "5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d",
+  "git_head_sha": "5ef09c9a26b9ac51d7e08a9c786a10c5deccf15d",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.1.9",
+  "schema_version": 1
+}
