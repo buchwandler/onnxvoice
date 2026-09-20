@@ -71,6 +71,37 @@ def _kokoro_model(model_id: str, voices: tuple[str, ...]) -> CatalogItem:
     )
 
 
+EXPECTED_EN_US_KOKORO = [
+    ("en_us-ko-1", "v1.0", "af_alloy"),
+    ("en_us-ko-2", "v1.0", "af_aoede"),
+    ("en_us-ko-3", "v1.0", "af_bella"),
+    ("en_us-ko-4", "v1.0", "af_heart"),
+    ("en_us-ko-5", "v1.0", "af_jessica"),
+    ("en_us-ko-6", "v1.0", "af_kore"),
+    ("en_us-ko-7", "v1.0", "af_nicole"),
+    ("en_us-ko-8", "v1.0", "af_nova"),
+    ("en_us-ko-9", "v1.0", "af_river"),
+    ("en_us-ko-10", "v1.0", "af_sarah"),
+    ("en_us-ko-11", "v1.0", "af_sky"),
+    ("en_us-ko-12", "v1.0", "am_adam"),
+    ("en_us-ko-13", "v1.0", "am_echo"),
+    ("en_us-ko-14", "v1.0", "am_eric"),
+    ("en_us-ko-15", "v1.0", "am_fenrir"),
+    ("en_us-ko-16", "v1.0", "am_liam"),
+    ("en_us-ko-17", "v1.0", "am_michael"),
+    ("en_us-ko-18", "v1.0", "am_onyx"),
+    ("en_us-ko-19", "v1.0", "am_puck"),
+    ("en_us-ko-20", "v1.0", "am_santa"),
+    ("en_us-ko-21", "v1.0", "af_ameliaearhart"),
+    ("en_us-ko-22", "v1.0", "af_libritts5338"),
+    ("en_us-ko-23", "v1.0", "am_libritts1272"),
+    ("en_us-ko-24", "v1.0", "am_libritts6241"),
+    ("en_us-ko-25", "v1.0", "am_vincentprice"),
+    ("en_us-ko-26", "v1.1-zh", "af_maple"),
+    ("en_us-ko-27", "v1.1-zh", "af_sol"),
+]
+
+
 def test_canonical_selector_grammar():
     assert format_voice_selector("de", "ko", 1) == "de-ko-1"
     assert format_voice_selector("en_us", "pi", 12) == "en_us-pi-12"
@@ -83,6 +114,37 @@ def test_canonical_selector_grammar():
             parse_voice_selector(value)
 
 
+def test_packaged_registry_contains_all_en_us_kokoro_assignments():
+    registry = load_voice_selector_registry()
+    identities = registry.iter_identities(language="en_us", system="kokoro")
+    assert len(identities) == 27
+    assert [
+        (identity.selector, identity.asset_id, identity.voice_id) for identity in identities
+    ] == EXPECTED_EN_US_KOKORO
+    for selector, asset_id, voice_id in EXPECTED_EN_US_KOKORO:
+        identity = resolve_voice_selector(selector, registry=registry)
+        assert identity.system == "kokoro"
+        assert identity.asset_id == asset_id
+        assert identity.voice_id == voice_id
+        assert (
+            registry.selector_for_voice(system="kokoro", asset_id=asset_id, voice_id=voice_id)
+            == identity
+        )
+    assert resolve_voice_selector("en-us-ko-4", registry=registry).selector == "en_us-ko-4"
+    assert resolve_voice_selector("en_us-ko-4", registry=registry).asset_id == "v1.0"
+    assert resolve_voice_selector("en_us-ko-4", registry=registry).voice_id == "af_heart"
+    assert resolve_voice_selector("en_us-ko-26", registry=registry).canonical_key == (
+        "kokoro",
+        "v1.1-zh",
+        "af_maple",
+    )
+    assert resolve_voice_selector("en_us-ko-27", registry=registry).canonical_key == (
+        "kokoro",
+        "v1.1-zh",
+        "af_sol",
+    )
+
+
 def test_engine_codes_and_packaged_baseline():
     assert resolve_voice_selector("de-ko-1").system == "kokoro"
     assert resolve_voice_selector("de-ko-1").canonical_key == ("kokoro", "de-anna", "df_anna")
@@ -93,6 +155,19 @@ def test_engine_codes_and_packaged_baseline():
     )
     assert {identity.engine_code for identity in iter_voice_identities()} == {"ko", "pi"}
     assert load_voice_selector_registry().identities == iter_voice_identities()
+
+
+def test_packaged_german_selectors_remain_unchanged():
+    expected = [
+        ("de-ko-1", "de-anna", "df_anna"),
+        ("de-ko-2", "de-crane", "default"),
+        ("de-ko-3", "de-thorsten", "thorsten"),
+        ("de-ko-4", "v1.2-de-martin", "martin"),
+    ]
+    assert [
+        (identity.selector, identity.asset_id, identity.voice_id)
+        for identity in iter_voice_identities(language="de", system="kokoro")
+    ] == expected
 
 
 def test_registry_rejects_duplicate_slots_identity_and_mismatch():
@@ -189,11 +264,29 @@ def test_catalog_projection_reports_assigned_and_unassigned_voices():
     assert all(record.gender == "unknown" for record in projected)
 
 
+def test_current_en_us_kokoro_catalog_has_no_unassigned_voices():
+    catalog = [
+        _kokoro_model(
+            "v1.0",
+            tuple(
+                voice_id for _, asset_id, voice_id in EXPECTED_EN_US_KOKORO if asset_id == "v1.0"
+            ),
+        ),
+        _kokoro_model(
+            "v1.1-zh",
+            tuple(
+                voice_id for _, asset_id, voice_id in EXPECTED_EN_US_KOKORO if asset_id == "v1.1-zh"
+            ),
+        ),
+    ]
+    assert unassigned_catalog_voices(catalog) == ()
+
+
 def test_catalog_drift_check_reports_missing_and_unassigned():
     issues = check_registry_and_catalog([_piper_voice("de_DE-eva_k-x_low")])
     assert any("missing from catalog" in issue for issue in issues)
     assert not any("unassigned catalog voice" in issue for issue in issues)
-    assert len(missing_registry_voices([_piper_voice("de_DE-eva_k-x_low")])) == 13
+    assert len(missing_registry_voices([_piper_voice("de_DE-eva_k-x_low")])) == 40
 
 
 def test_cli_parser_and_json_projection():

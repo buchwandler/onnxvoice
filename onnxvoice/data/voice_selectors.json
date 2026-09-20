@@ -130,6 +130,249 @@
       "asset_id": "de_DE-thorsten_emotional-medium",
       "voice_id": "de_DE-thorsten_emotional-medium",
       "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_alloy",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_aoede",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_bella",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_heart",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 5,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_jessica",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 6,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_kore",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 7,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_nicole",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 8,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_nova",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 9,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_river",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 10,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_sarah",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 11,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_sky",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 12,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_adam",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 13,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_echo",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 14,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_eric",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 15,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_fenrir",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 16,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_liam",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 17,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_michael",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 18,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_onyx",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 19,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_puck",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 20,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_santa",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 21,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_ameliaearhart",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 22,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "af_libritts5338",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 23,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_libritts1272",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 24,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_libritts6241",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 25,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "am_vincentprice",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 26,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "af_maple",
+      "state": "active"
+    },
+    {
+      "language": "en_us",
+      "engine_code": "ko",
+      "slot": 27,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "af_sol",
+      "state": "active"
     }
   ]
 }

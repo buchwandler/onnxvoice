@@ -60,7 +60,16 @@ Short voice selectors are persisted identity aliases, not positions in the curre
 ```text
 de-ko-1       -> kokoro:de-anna, logical voice df_anna
 de-pi-1       -> piper:de_DE-eva_k-x_low
-en_us-ko-12   -> a future Kokoro registry identity
+en_us-ko-1    -> kokoro:v1.0, voice af_alloy
+en_us-ko-4    -> kokoro:v1.0, voice af_heart
+en_us-ko-26   -> kokoro:v1.1-zh, voice af_maple
+```
+
+For Kokoro catalog filtering, the input locale may use a hyphen, while the persisted selector uses the canonical underscore language key:
+
+```text
+language filter/input locale: en-us or en-US
+canonical selector language key: en_us
 ```
 
 `ko` is the permanent Kokoro code and `pi` is the permanent Piper code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Use the selector API to resolve the complete identity:

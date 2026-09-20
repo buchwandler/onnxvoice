@@ -60,3 +60,4 @@
 {"data":{"updated_rows":1},"event":"audit.updated","event_id":"event-0060","record_revisions":{"commit_audit_sheet":2},"release_version":"v0.1.7","schema_version":2}
 {"data":{"entry_ids":["entry-0001"],"synced_audit_rows":1},"event":"entry.batch_added","event_id":"event-0061","record_revisions":{"commit_audit_sheet":3,"entry:v0.1.7/entry-0001":1,"release:v0.1.7":3},"release_version":"v0.1.7","schema_version":2}
 {"data":{"released_at":"2026-09-19"},"event":"release.finalized","event_id":"event-0062","record_revisions":{"release:0.1.6":3},"release_version":"0.1.6","schema_version":2}
+{"data":{"kind":"changed","status":"accepted"},"entry_id":"entry-0002","event":"entry.added","event_id":"event-0063","record_revisions":{"entry:v0.1.7/entry-0002":1,"release:v0.1.7":4},"release_version":"v0.1.7","schema_version":2}
