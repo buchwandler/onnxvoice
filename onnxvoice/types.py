@@ -83,6 +83,15 @@ class CatalogItem:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
+    def timing_output(self) -> str | None:
+        """Return the declared auxiliary timing output, if valid."""
+        runtime = self.metadata.get("runtime")
+        if not isinstance(runtime, Mapping):
+            return None
+        value = runtime.get("timings_output")
+        return value if isinstance(value, str) and value else None
+
+    @property
     def ref(self) -> str:
         return f"{self.system}:{self.id}"
 
@@ -231,6 +240,15 @@ class Installation:
     default_voice: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     storage_id: str | None = None
+
+    @property
+    def timing_output(self) -> str | None:
+        """Return the declared auxiliary timing output, if valid."""
+        runtime = self.metadata.get("runtime")
+        if not isinstance(runtime, Mapping):
+            return None
+        value = runtime.get("timings_output")
+        return value if isinstance(value, str) and value else None
 
     @property
     def ref(self) -> str:

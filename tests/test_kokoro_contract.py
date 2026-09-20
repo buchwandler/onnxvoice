@@ -28,7 +28,7 @@ class ContractSession:
         pass
 
 
-def _installation(tmp_path, *, split=False):
+def _installation(tmp_path, *, split=False, metadata=None):
     model = tmp_path / "model.onnx"
     model.write_bytes(b"model")
     artifacts = [InstalledArtifact("model", model.name, model, "0" * 64, model.stat().st_size)]
@@ -45,11 +45,14 @@ def _installation(tmp_path, *, split=False):
         tmp_path,
         tuple(artifacts),
         sample_rate=24000,
+        metadata=metadata or {},
     )
 
 
 def test_kokoro_accepts_explicit_style_and_named_timing_outputs(tmp_path):
-    adapter = KokoroAdapter(_installation(tmp_path))
+    adapter = KokoroAdapter(
+        _installation(tmp_path, metadata={"runtime": {"timings_output": "durations"}})
+    )
     fake = ContractSession()
     adapter._session = fake  # type: ignore[assignment]
 
@@ -84,3 +87,14 @@ def test_kokoro_rejects_split_layout(tmp_path):
 
     with pytest.raises(CapabilityError, match="Split"):
         _ = adapter.session
+
+
+def test_installation_timing_output_tolerates_missing_metadata(tmp_path):
+    assert _installation(tmp_path).timing_output is None
+    assert (
+        _installation(tmp_path, metadata={"runtime": {"timings_output": "durations"}}).timing_output
+        == "durations"
+    )
+    assert (
+        _installation(tmp_path, metadata={"runtime": {"timings_output": 1}}).timing_output is None
+    )

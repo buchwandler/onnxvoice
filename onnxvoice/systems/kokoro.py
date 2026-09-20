@@ -161,11 +161,10 @@ class KokoroAdapter(SystemAdapter):
             )
 
     def _select_timings(self, auxiliary: dict[str, np.ndarray]) -> np.ndarray | None:
-        runtime = self.installation.metadata.get("runtime") or {}
-        declared = runtime.get("timings_output")
-        if isinstance(declared, str) and declared in auxiliary:
+        declared = self.installation.timing_output
+        if declared and declared in auxiliary:
             return auxiliary[declared]
-        for name in ("pred_dur", "duration", "timing", "timestamp"):
+        for name in ("pred_dur", "duration", "durations", "timing", "timestamp"):
             if name in auxiliary:
                 return auxiliary[name]
         for prefix in ("duration", "timing", "timestamp"):

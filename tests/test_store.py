@@ -112,3 +112,30 @@ def test_install_falls_back_when_hard_link_operation_is_unsupported(
 
     assert installation.artifact("model").path.read_bytes() == payload
     store.verify(installation)
+
+
+def test_new_install_persists_timing_metadata(tmp_path):
+    payload = b"model-with-timing"
+    source = tmp_path / "timed.onnx"
+    source.write_bytes(payload)
+    item = CatalogItem(
+        system="kokoro",
+        id="v1.0",
+        kind="model",
+        artifacts=(
+            Artifact(
+                "model",
+                source.name,
+                source.as_uri(),
+                len(payload),
+                hashlib.sha256(payload).hexdigest(),
+            ),
+        ),
+        metadata={"runtime": {"timings_output": "durations"}},
+    )
+    store = AssetStore(tmp_path / "cache")
+
+    store.install(item)
+    reloaded = store.get("kokoro", "v1.0")
+
+    assert reloaded.timing_output == "durations"

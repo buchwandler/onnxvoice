@@ -266,6 +266,40 @@ def _parse_piper(data: dict[str, Any]) -> list[CatalogItem]:
     return result
 
 
+def _normalize_kokoro_runtime(
+    entry: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Copy and normalize Kokoro runtime and ONNX contract metadata."""
+    raw_runtime = entry.get("runtime") or {}
+    if not isinstance(raw_runtime, Mapping):
+        raise CatalogError("Kokoro runtime metadata must be an object")
+    runtime = dict(raw_runtime)
+    raw_contract = entry.get("onnx_contract") or {}
+    if not isinstance(raw_contract, Mapping):
+        raise CatalogError("Kokoro ONNX contract metadata must be an object")
+    onnx_contract = dict(raw_contract)
+    raw_timing = onnx_contract.get("timing") or {}
+    if not isinstance(raw_timing, Mapping):
+        raise CatalogError("Kokoro ONNX timing metadata must be an object")
+    runtime_output = runtime.get("timings_output")
+    contract_output = raw_timing.get("output")
+    if (
+        isinstance(runtime_output, str)
+        and runtime_output
+        and isinstance(contract_output, str)
+        and contract_output
+        and runtime_output != contract_output
+    ):
+        raise CatalogError(
+            "Conflicting Kokoro timing declarations: "
+            f"runtime.timings_output={runtime_output!r} conflicts with "
+            f"onnx_contract.timing.output={contract_output!r}"
+        )
+    if isinstance(contract_output, str) and contract_output:
+        runtime["timings_output"] = contract_output
+    return runtime, onnx_contract
+
+
 def _parse_kokoro_entry(
     model_id: str,
     entry: Mapping[str, Any],
@@ -315,12 +349,13 @@ def _parse_kokoro_entry(
                 },
             )
         )
-    runtime = entry.get("runtime") or {}
+    runtime, onnx_contract = _normalize_kokoro_runtime(entry)
     metadata = {
         "model_version": entry.get("model_version"),
         "frontend": entry.get("frontend"),
         "language_codes": entry.get("language_codes") or [],
         "runtime": runtime,
+        "onnx_contract": onnx_contract,
         "distribution_id": selected.get("id"),
         "distribution_choices": choices,
         "release_tag": selected.get("release_tag"),
