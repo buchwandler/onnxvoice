@@ -234,6 +234,10 @@ class TestLoadCatalog:
 
 def test_build_catalog_from_explicit_fixture_is_deterministic() -> None:
     upstream = _upstream_bundle()
+    tree = [
+        {"path": artifact["path"], "size": artifact["size"], "lfs": {"oid": artifact["sha256"]}}
+        for artifact in _artifacts()
+    ]
     with (
         patch(
             "onnxvoice.catalog_tools.pocket._list_bundle_paths",
@@ -242,6 +246,7 @@ def test_build_catalog_from_explicit_fixture_is_deterministic() -> None:
         patch(
             "onnxvoice.catalog_tools.pocket._fetch_bundle_json", return_value=(upstream, "b" * 64)
         ),
+        patch("onnxvoice.catalog_tools.pocket._repository_tree", return_value=tree),
     ):
         result1 = build_catalog(resolved_revision=REVISION)
         result2 = build_catalog(resolved_revision=REVISION)
@@ -273,6 +278,70 @@ def test_build_catalog_discovers_upstream_files_and_metadata() -> None:
     entry = result["bundles"]["english_2026-04"]
     assert len(entry["artifacts"]) == 13
     assert entry["profiles"]["int8"]["mimi_encoder"] == "fp32"
+
+def test_build_catalog_normalizes_declared_missing_integrity() -> None:
+    upstream = _upstream_bundle()
+    for artifact in upstream["artifacts"]:
+        artifact["size"] = None
+        artifact["sha256"] = None
+    tree = [
+        {"path": artifact["path"], "size": artifact["size"], "lfs": {"oid": artifact["sha256"]}}
+        for artifact in _artifacts()
+    ]
+    with (
+        patch(
+            "onnxvoice.catalog_tools.pocket._list_bundle_paths",
+            return_value=[f"{BASE}/bundle.json"],
+        ),
+        patch(
+            "onnxvoice.catalog_tools.pocket._fetch_bundle_json", return_value=(upstream, "b" * 64)
+        ),
+        patch("onnxvoice.catalog_tools.pocket._repository_tree", return_value=tree),
+    ):
+        result = build_catalog(resolved_revision=REVISION)
+    verify_catalog(result)
+    artifacts = result["bundles"]["english_2026-04"]["artifacts"]
+    assert all(isinstance(artifact["size"], int) and artifact["size"] > 0 for artifact in artifacts)
+    assert all(len(artifact["sha256"]) == 64 for artifact in artifacts)
+
+def test_build_catalog_preserves_explicit_voice_state_contract() -> None:
+    upstream = _upstream_bundle()
+    state_path = f"{BASE}/alba.safetensors"
+    upstream["voice_states"] = [
+        {
+            "name": "alba",
+            "compatible_bundle": "english_2026-04",
+            "source": {
+                "provider": "huggingface",
+                "repository": REPOSITORY,
+                "revision": REVISION,
+                "path": state_path,
+            },
+            "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
+            "format": "safetensors",
+            "size": 123,
+            "sha256": "c" * 64,
+            "url": huggingface_resolve_url(REPOSITORY, REVISION, state_path),
+            "resolver": None,
+        }
+    ]
+    tree = [
+        {"path": artifact["path"], "size": artifact["size"], "lfs": {"oid": artifact["sha256"]}}
+        for artifact in _artifacts()
+    ]
+    with (
+        patch(
+            "onnxvoice.catalog_tools.pocket._list_bundle_paths",
+            return_value=[f"{BASE}/bundle.json"],
+        ),
+        patch(
+            "onnxvoice.catalog_tools.pocket._fetch_bundle_json", return_value=(upstream, "b" * 64)
+        ),
+        patch("onnxvoice.catalog_tools.pocket._repository_tree", return_value=tree),
+    ):
+        result = build_catalog(resolved_revision=REVISION)
+    verify_catalog(result)
+    assert result["bundles"]["english_2026-04"]["voice_states"][0]["name"] == "alba"
 
 
 def test_build_catalog_requires_bundles() -> None:

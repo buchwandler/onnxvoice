@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from onnxvoice.catalog import (
@@ -373,7 +375,9 @@ class TestSelectPocketProfile:
 
 
 def test_canonical_object_map_parses_and_resolves_profile() -> None:
-    entry = SAMPLE_CATALOG["bundles"][0]
+    entry = copy.deepcopy(SAMPLE_CATALOG["bundles"][0])
+    for artifact in entry["artifacts"]:
+        artifact["sha256"] = "a" * 64
     catalog = {
         "schema": 1,
         "kind": "pocket-onnx-bundle-catalog",
@@ -394,6 +398,55 @@ def test_canonical_object_map_parses_and_resolves_profile() -> None:
         "mimi_encoder",
         "text_conditioner",
     ]
+
+def test_canonical_catalog_rejects_missing_integrity() -> None:
+    entry = copy.deepcopy(SAMPLE_CATALOG["bundles"][0])
+    for artifact in entry["artifacts"]:
+        artifact["sha256"] = "a" * 64
+    entry["artifacts"][0]["size"] = None
+    catalog = {
+        "schema": 1,
+        "kind": "pocket-onnx-bundle-catalog",
+        "source": SAMPLE_CATALOG["source"],
+        "bundles": {entry["id"]: entry},
+    }
+    with pytest.raises(CatalogError, match="canonical artifact size"):
+        _parse_pocket(catalog)
+
+def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
+    entry = copy.deepcopy(SAMPLE_CATALOG["bundles"][0])
+    for artifact in entry["artifacts"]:
+        artifact["sha256"] = "a" * 64
+    entry["predefined_voice_names"] = ["alba"]
+    catalog = {
+        "schema": 1,
+        "kind": "pocket-onnx-bundle-catalog",
+        "source": SAMPLE_CATALOG["source"],
+        "bundles": {entry["id"]: entry},
+    }
+    item = _parse_pocket(catalog)[0]
+    assert item.voices == ()
+    entry["voice_states"] = [
+        {
+            "name": "alba",
+            "compatible_bundle": entry["id"],
+            "source": {
+                "provider": "huggingface",
+                "repository": SAMPLE_CATALOG["source"]["repository"],
+                "revision": SAMPLE_CATALOG["source"]["revision"],
+                "path": "onnx/english_2026-04/alba.safetensors",
+            },
+            "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
+            "format": "safetensors",
+            "size": 123,
+            "sha256": "b" * 64,
+            "url": "https://example.com/alba.safetensors",
+            "resolver": None,
+        }
+    ]
+    item = _parse_pocket(catalog)[0]
+    assert item.voices == ("alba",)
+    assert item.metadata["voice_states"][0]["access"]["gated"] is False
 
 
 def test_canonical_object_map_rejects_key_id_mismatch() -> None:

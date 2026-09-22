@@ -166,7 +166,12 @@ def _file_integrity(
     metadata: dict[str, Any],
     known_sha256: str | None = None,
 ) -> tuple[int, str]:
+    """Return positive size and SHA-256 for one pinned repository-tree item."""
+    payload: bytes | None = None
     size = metadata.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        payload = _read_url(huggingface_resolve_url(repository, revision, path))
+        size = len(payload)
     _require(
         isinstance(size, int) and not isinstance(size, bool) and size > 0,
         f"{path}: upstream metadata has no positive size",
@@ -174,9 +179,9 @@ def _file_integrity(
     assert isinstance(size, int)
     sha256 = known_sha256 or (metadata.get("lfs") or {}).get("oid")
     if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256.lower()) is None:
-        sha256 = hashlib.sha256(
-            _read_url(huggingface_resolve_url(repository, revision, path))
-        ).hexdigest()
+        if payload is None:
+            payload = _read_url(huggingface_resolve_url(repository, revision, path))
+        sha256 = hashlib.sha256(payload).hexdigest()
     _require(
         _SHA256_RE.fullmatch(sha256.lower()) is not None, f"{path}: unable to determine SHA-256"
     )
@@ -365,6 +370,131 @@ def _build_artifact(
     }
 
 
+def _normalize_voice_states(
+    bundle_id: str,
+    raw: Any,
+    repository: str,
+    revision: str,
+) -> list[dict[str, Any]]:
+    """Normalize explicitly declared predefined voice-state assets."""
+    if raw in (None, []):
+        return []
+    _require(isinstance(raw, list), f"{bundle_id}: voice_states must be a list")
+    normalized: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for index, value in enumerate(raw):
+        _require(
+            isinstance(value, dict),
+            f"{bundle_id}: voice state {index} must be an object",
+        )
+        name = value.get("name")
+        _safe_name(name, f"{bundle_id} voice state name")
+        assert isinstance(name, str)
+        _require(name not in names, f"{bundle_id}: duplicate voice state {name!r}")
+        names.add(name)
+        _require(
+            value.get("compatible_bundle") == bundle_id,
+            f"{bundle_id}/{name}: compatible_bundle must be {bundle_id!r}",
+        )
+        source = value.get("source")
+        _require(isinstance(source, dict), f"{bundle_id}/{name}: source must be an object")
+        _require(
+            set(source) == {"provider", "repository", "revision", "path"},
+            f"{bundle_id}/{name}: source has unexpected fields",
+        )
+        _require(source.get("provider") == "huggingface", f"{bundle_id}/{name}: source provider must be huggingface")
+        source_repository = source.get("repository")
+        _require(
+            isinstance(source_repository, str)
+            and re.fullmatch(r"[^/\\\\ ]+/[^/\\\\ ]+", source_repository) is not None,
+            f"{bundle_id}/{name}: invalid source repository",
+        )
+        _require(
+            source_repository == repository,
+            f"{bundle_id}/{name}: source repository is not the catalog repository",
+        )
+        source_revision = source.get("revision")
+        _require(
+            isinstance(source_revision, str) and _SHA_RE.fullmatch(source_revision) is not None,
+            f"{bundle_id}/{name}: source revision must be a 40-character SHA",
+        )
+        source_path = source.get("path")
+        _require(
+            isinstance(source_path, str) and source_path.startswith("onnx/"),
+            f"{bundle_id}/{name}: source path is required",
+        )
+        _safe_relative_path(source_path, f"{bundle_id}/{name}: source path")
+        _require(source_revision == revision, f"{bundle_id}/{name}: source revision is not pinned")
+        access = value.get("access")
+        _require(isinstance(access, dict), f"{bundle_id}/{name}: access must be an object")
+        _require(
+            isinstance(access.get("gated"), bool),
+            f"{bundle_id}/{name}: access.gated must be boolean",
+        )
+        _require(
+            isinstance(access.get("distributable"), bool),
+            f"{bundle_id}/{name}: access.distributable must be boolean",
+        )
+        _require(
+            isinstance(access.get("license"), str) and bool(access["license"]),
+            f"{bundle_id}/{name}: access.license is required",
+        )
+        format_name = value.get("format")
+        _require(
+            isinstance(format_name, str) and bool(format_name),
+            f"{bundle_id}/{name}: format is required",
+        )
+        size = value.get("size")
+        _require(
+            isinstance(size, int) and not isinstance(size, bool) and size > 0,
+            f"{bundle_id}/{name}: size must be positive",
+        )
+        sha256 = value.get("sha256")
+        _require(
+            isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256.lower()) is not None,
+            f"{bundle_id}/{name}: sha256 must be 64-character hex",
+        )
+        url = value.get("url")
+        if url is not None:
+            _require(
+                isinstance(url, str)
+                and url == huggingface_resolve_url(
+                    str(source_repository), str(source_revision), source_path
+                ),
+                f"{bundle_id}/{name}: url is not pinned to source",
+            )
+        resolver = value.get("resolver")
+        if resolver is not None:
+            _require(
+                isinstance(resolver, str) and bool(resolver),
+                f"{bundle_id}/{name}: resolver must be a non-empty string",
+            )
+        if access["distributable"]:
+            _require(
+                isinstance(url, str),
+                f"{bundle_id}/{name}: distributable state requires a pinned url",
+            )
+        else:
+            _require(
+                isinstance(url, str) or isinstance(resolver, str),
+                f"{bundle_id}/{name}: gated state requires a pinned resolver or url",
+            )
+        normalized.append(
+            {
+                "name": name,
+                "compatible_bundle": bundle_id,
+                "source": dict(source),
+                "access": dict(access),
+                "format": format_name,
+                "size": size,
+                "sha256": sha256.lower(),
+                "url": url,
+                "resolver": resolver,
+            }
+        )
+    return normalized
+
+
 def _artifact_entries(raw: Any) -> list[tuple[str, Any]]:
     if isinstance(raw, dict):
         return list(raw.items())
@@ -382,9 +512,15 @@ def _parse_bundle_entry(
     bundle_data: dict[str, Any],
     repository: str,
     revision: str,
+    tree: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Parse a single upstream bundle.json into a normalized catalog entry."""
     _require(isinstance(bundle_data, dict), f"{bundle_id}: bundle must be a JSON object")
+    tree_by_path = {
+        item["path"]: item
+        for item in tree
+        if isinstance(item.get("path"), str)
+    }
     language = bundle_data.get("language")
     _require(isinstance(language, str) and bool(language), f"{bundle_id}: invalid language")
     sample_rate = bundle_data.get("sample_rate")
@@ -442,6 +578,17 @@ def _parse_bundle_entry(
             else:
                 raise CatalogError(f"{bundle_id}: invalid filename for {role!r}")
         upstream_path = raw_path or f"onnx/{bundle_id}/{filename}"
+        tree_metadata = tree_by_path.get(upstream_path)
+        _require(
+            isinstance(tree_metadata, dict),
+            f"{bundle_id}/{role}: artifact path is not present in pinned tree: {upstream_path}",
+        )
+        size, sha256 = _file_integrity(
+            repository,
+            revision,
+            upstream_path,
+            tree_metadata,
+        )
         role_quality = (role, quality)
         _require(
             role_quality not in seen_role_quality,
@@ -497,6 +644,9 @@ def _parse_bundle_entry(
                 f"{bundle_id}: profile {profile_name!r} references missing ({role!r}, {profile_roles[role]!r})",
             )
 
+    voice_states = _normalize_voice_states(
+        bundle_id, bundle_data.get("voice_states"), repository, revision
+    )
     entry: dict[str, Any] = {
         "id": bundle_id,
         "aliases": aliases,
@@ -515,6 +665,8 @@ def _parse_bundle_entry(
         "predefined_voice_names": bundle_data.get("predefined_voice_names") or [],
         "metadata": bundle_data.get("metadata") or {},
     }
+    if voice_states:
+        entry["voice_states"] = voice_states
     for key in (
         "max_token_per_chunk",
         "model_recommended_frames_after_eos",
@@ -547,9 +699,9 @@ def build_catalog(
         _safe_name(bundle_id, "bundle id")
         bundle_data, bundle_sha256 = _fetch_bundle_json(repository, actual_revision, bundle_path)
         bundle_data = _normalize_bundle_metadata(bundle_id, bundle_data)
+        if tree is None:
+            tree = _repository_tree(repository, actual_revision)
         if not bundle_data.get("artifacts"):
-            if tree is None:
-                tree = _repository_tree(repository, actual_revision)
             discovered = _discover_artifacts(
                 repository, actual_revision, bundle_id, bundle_data, bundle_sha256, tree
             )
@@ -561,9 +713,10 @@ def build_catalog(
             bundle_data=bundle_data,
             repository=repository,
             revision=actual_revision,
+            tree=tree,
         )
     sorted_bundles = {bundle_id: bundles[bundle_id] for bundle_id in sorted(bundles)}
-    return {
+    catalog = {
         "schema": 1,
         "kind": "pocket-onnx-bundle-catalog",
         "source": {
@@ -578,6 +731,22 @@ def build_catalog(
         },
         "bundles": sorted_bundles,
     }
+    verify_catalog(catalog)
+    return catalog
+
+
+def _verify_voice_states(
+    bundle: dict[str, Any],
+    bundle_id: str,
+    repository: str,
+    revision: str,
+) -> None:
+    raw = bundle.get("voice_states", [])
+    normalized = _normalize_voice_states(bundle_id, raw, repository, revision)
+    _require(
+        raw == normalized,
+        f"{bundle_id}: voice_states must use the normalized record shape",
+    )
 
 
 def _verify_artifact(
@@ -694,6 +863,7 @@ def verify_catalog(catalog: Any) -> None:
     for map_id, raw_bundle in bundles.items():
         _require(isinstance(raw_bundle, dict), f"{map_id}: bundle must be an object")
         bundle = cast(dict[str, Any], raw_bundle)
+        _verify_voice_states(bundle, map_id, repository, revision)
         for field in ("language", "layers", "bundle_schema", "profiles", "artifacts"):
             _require(field in bundle, f"{map_id}: missing required field {field!r}")
         _require(

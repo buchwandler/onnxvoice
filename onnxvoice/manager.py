@@ -104,8 +104,8 @@ class OnnxVoice:
         from .inventory import language_codes_from_metadata, matches_language
         from .voice_selectors import get_voice_selector_registry
 
-        systems = (system.casefold(),) if system is not None else ("kokoro", "piper")
-        unsupported = set(systems) - {"kokoro", "piper"}
+        systems = (system.casefold(),) if system is not None else ("kokoro", "piper", "pocket")
+        unsupported = set(systems) - {"kokoro", "piper", "pocket"}
         if unsupported:
             raise ValueError(
                 f"voice selectors are not available for: {', '.join(sorted(unsupported))}"

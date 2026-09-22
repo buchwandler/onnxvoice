@@ -28,6 +28,7 @@ POCKET_ARTIFACT_ROLES = frozenset(
         "text_conditioner",
     }
 )
+_POCKET_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 POCKET_QUALIFIED_ROLES = frozenset(
     {
@@ -392,6 +393,83 @@ def _kokoro_models(data: dict[str, Any]) -> dict[str, Mapping[str, Any]]:
     return models
 
 
+def _validate_canonical_pocket_integrity(
+    raw: Mapping[str, Any],
+    bundle_id: str,
+    role: str,
+    *,
+    canonical: bool,
+) -> None:
+    if not canonical:
+        return
+    size = raw.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise CatalogError(f"{bundle_id}/{role}: canonical artifact size must be positive")
+    sha256 = raw.get("sha256")
+    if not isinstance(sha256, str) or _POCKET_SHA256_RE.fullmatch(sha256) is None:
+        raise CatalogError(f"{bundle_id}/{role}: canonical artifact sha256 must be lowercase hex")
+
+
+def _parse_pocket_voice_states(
+    entry: Mapping[str, Any],
+    bundle_id: str,
+) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    raw_states = entry.get("voice_states", [])
+    if raw_states in (None, []):
+        return (), []
+    if not isinstance(raw_states, Sequence) or isinstance(raw_states, (str, bytes)):
+        raise CatalogError(f"{bundle_id}: voice_states must be a sequence")
+    names: list[str] = []
+    records: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_states):
+        if not isinstance(raw, Mapping):
+            raise CatalogError(f"{bundle_id}: voice state {index} must be an object")
+        name = raw.get("name")
+        if not isinstance(name, str):
+            raise CatalogError(f"{bundle_id}: voice state {index} has no name")
+        _require_pocket_safe_id(name, f"{bundle_id} voice state name")
+        if name in names:
+            raise CatalogError(f"{bundle_id}: duplicate voice state {name!r}")
+        if raw.get("compatible_bundle") != bundle_id:
+            raise CatalogError(f"{bundle_id}/{name}: incompatible bundle")
+        source = raw.get("source")
+        if not isinstance(source, Mapping):
+            raise CatalogError(f"{bundle_id}/{name}: source must be an object")
+        for field in ("provider", "repository", "revision", "path"):
+            if not isinstance(source.get(field), str) or not source[field]:
+                raise CatalogError(f"{bundle_id}/{name}: source.{field} is required")
+        access = raw.get("access")
+        if not isinstance(access, Mapping):
+            raise CatalogError(f"{bundle_id}/{name}: access must be an object")
+        if not isinstance(access.get("gated"), bool) or not isinstance(
+            access.get("distributable"), bool
+        ):
+            raise CatalogError(f"{bundle_id}/{name}: access flags must be boolean")
+        if not isinstance(access.get("license"), str) or not access["license"]:
+            raise CatalogError(f"{bundle_id}/{name}: access.license is required")
+        if not isinstance(raw.get("format"), str) or not raw["format"]:
+            raise CatalogError(f"{bundle_id}/{name}: format is required")
+        size = raw.get("size")
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            raise CatalogError(f"{bundle_id}/{name}: size must be positive")
+        sha256 = raw.get("sha256")
+        if not isinstance(sha256, str) or _POCKET_SHA256_RE.fullmatch(sha256) is None:
+            raise CatalogError(f"{bundle_id}/{name}: sha256 must be lowercase hex")
+        url = raw.get("url")
+        resolver = raw.get("resolver")
+        if url is not None and (not isinstance(url, str) or not url):
+            raise CatalogError(f"{bundle_id}/{name}: url must be a non-empty string")
+        if resolver is not None and (not isinstance(resolver, str) or not resolver):
+            raise CatalogError(f"{bundle_id}/{name}: resolver must be a non-empty string")
+        if access["distributable"] and not isinstance(url, str):
+            raise CatalogError(f"{bundle_id}/{name}: distributable state requires a url")
+        if not access["distributable"] and not isinstance(url, str) and not isinstance(resolver, str):
+            raise CatalogError(f"{bundle_id}/{name}: state requires a resolver or url")
+        names.append(name)
+        records.append(dict(raw))
+    return tuple(names), records
+
+
 def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
     if "schema" in data and data["schema"] != 1:
         raise CatalogError("Pocket catalog schema must be 1")
@@ -402,6 +480,7 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
         raise CatalogError("Pocket catalog is missing the 'bundles' list or mapping")
     if data.get("kind") == "pocket-onnx-bundle-catalog" and not isinstance(bundles, dict):
         raise CatalogError("Canonical Pocket catalog bundles must be a mapping")
+    canonical = data.get("kind") == "pocket-onnx-bundle-catalog"
     source = data.get("source") or {}
     if not isinstance(source, Mapping):
         raise CatalogError("Pocket catalog source metadata must be an object")
@@ -438,6 +517,9 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             role = raw.get("role")
             if role not in POCKET_ARTIFACT_ROLES:
                 raise CatalogError(f"Unknown Pocket artifact role: {role!r}")
+            _validate_canonical_pocket_integrity(
+                raw, bundle_id, str(role), canonical=canonical
+            )
             raw_path = raw.get("path")
             filename = raw.get("filename") or (Path(str(raw_path)).name if raw_path else None)
             if not isinstance(filename, str) or not filename:
@@ -459,6 +541,8 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
                     metadata=metadata,
                 )
             )
+        voice_names, voice_states = _parse_pocket_voice_states(entry, bundle_id)
+
         metadata = {
             **(entry.get("metadata") or {}),
             "language": entry.get("language"),
@@ -472,6 +556,8 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             "model_recommended_frames_after_eos": entry.get("model_recommended_frames_after_eos"),
             "remove_semicolons": entry.get("remove_semicolons"),
             "pad_with_spaces_for_short_inputs": entry.get("pad_with_spaces_for_short_inputs"),
+            "voice_states": voice_states,
+            "canonical_catalog": canonical,
         }
         result.append(
             CatalogItem(
@@ -480,6 +566,7 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
                 kind="bundle",
                 artifacts=tuple(artifacts),
                 aliases=tuple(aliases),
+                voices=voice_names,
                 sample_rate=entry.get("sample_rate"),
                 metadata=metadata,
             )

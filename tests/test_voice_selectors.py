@@ -21,6 +21,7 @@ from onnxvoice.manager import OnnxVoice
 from onnxvoice.types import Artifact, CatalogItem, VoiceRecord
 from onnxvoice.voice_selectors import (
     VoiceSelectorRegistry,
+    catalog_voice_keys,
     format_voice_selector,
     is_voice_selector,
     iter_voice_identities,
@@ -263,6 +264,16 @@ def test_catalog_projection_reports_assigned_and_unassigned_voices():
     assert any(record.selector is None and record.voice_id == "new_voice" for record in projected)
     assert all(record.gender == "unknown" for record in projected)
 
+
+def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
+    pocket = CatalogItem(
+        system="pocket",
+        id="english_2026-04",
+        kind="bundle",
+        artifacts=(),
+        voices=("alba",),
+    )
+    assert catalog_voice_keys([pocket]) == ((pocket, "english_2026-04", "alba"),)
 
 def test_current_en_us_kokoro_catalog_has_no_unassigned_voices():
     catalog = [

@@ -5,8 +5,25 @@ import os
 
 import pytest
 
+from onnxvoice.errors import IntegrityError
 from onnxvoice.store import AssetStore
 from onnxvoice.types import Artifact, CatalogItem
+
+
+def test_canonical_pocket_install_requires_integrity(tmp_path):
+    source = tmp_path / "bundle.json"
+    source.write_bytes(b"bundle")
+    item = CatalogItem(
+        system="pocket",
+        id="bundle",
+        kind="bundle",
+        artifacts=(Artifact("bundle_metadata", source.name, source.as_uri()),),
+        metadata={"canonical_catalog": True},
+    )
+    store = AssetStore(tmp_path / "cache")
+    with pytest.raises(IntegrityError, match="no positive size"):
+        store.install(item)
+
 
 
 def test_store_deduplicates_content(tmp_path):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -196,6 +197,22 @@ class AssetStore:
         storage_id = self._storage_item_id(item)
         self._safe_component(item.system, "system")
         self._safe_component(storage_id, "item id")
+        if item.system == "pocket" and item.metadata.get("canonical_catalog") is True:
+            for artifact in item.artifacts:
+                if (
+                    not isinstance(artifact.size, int)
+                    or isinstance(artifact.size, bool)
+                    or artifact.size <= 0
+                ):
+                    raise IntegrityError(
+                        f"Canonical Pocket artifact {artifact.filename!r} has no positive size"
+                    )
+                if not isinstance(artifact.sha256, str) or re.fullmatch(
+                    r"[0-9a-f]{64}", artifact.sha256
+                ) is None:
+                    raise IntegrityError(
+                        f"Canonical Pocket artifact {artifact.filename!r} has no valid SHA-256"
+                    )
         for artifact in item.artifacts:
             try:
                 validate_relative_path(artifact.filename, field_name="artifact filename")

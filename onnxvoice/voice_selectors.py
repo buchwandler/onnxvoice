@@ -359,9 +359,13 @@ def catalog_voice_keys(
     for item in items:
         if item.system == "piper" and item.kind == "voice":
             result.append((item, item.id, item.id))
-        elif item.system == "kokoro" and item.kind == "model":
+        elif (
+            item.system == "kokoro" and item.kind == "model"
+            or item.system == "pocket" and item.kind == "bundle"
+        ):
             result.extend((item, item.id, voice_id) for voice_id in item.voices)
     return tuple(result)
+
 
 
 def make_voice_record(
