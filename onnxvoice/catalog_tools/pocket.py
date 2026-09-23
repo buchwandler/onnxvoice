@@ -583,6 +583,7 @@ def _parse_bundle_entry(
             isinstance(tree_metadata, dict),
             f"{bundle_id}/{role}: artifact path is not present in pinned tree: {upstream_path}",
         )
+        assert isinstance(tree_metadata, dict)
         size, sha256 = _file_integrity(
             repository,
             revision,
