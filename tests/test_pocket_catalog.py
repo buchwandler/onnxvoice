@@ -399,6 +399,7 @@ def test_canonical_object_map_parses_and_resolves_profile() -> None:
         "text_conditioner",
     ]
 
+
 def test_canonical_catalog_rejects_missing_integrity() -> None:
     entry = copy.deepcopy(SAMPLE_CATALOG["bundles"][0])
     for artifact in entry["artifacts"]:
@@ -412,6 +413,7 @@ def test_canonical_catalog_rejects_missing_integrity() -> None:
     }
     with pytest.raises(CatalogError, match="canonical artifact size"):
         _parse_pocket(catalog)
+
 
 def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
     entry = copy.deepcopy(SAMPLE_CATALOG["bundles"][0])

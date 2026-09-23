@@ -402,7 +402,10 @@ def _normalize_voice_states(
             set(source) == {"provider", "repository", "revision", "path"},
             f"{bundle_id}/{name}: source has unexpected fields",
         )
-        _require(source.get("provider") == "huggingface", f"{bundle_id}/{name}: source provider must be huggingface")
+        _require(
+            source.get("provider") == "huggingface",
+            f"{bundle_id}/{name}: source provider must be huggingface",
+        )
         source_repository = source.get("repository")
         _require(
             isinstance(source_repository, str)
@@ -458,7 +461,8 @@ def _normalize_voice_states(
         if url is not None:
             _require(
                 isinstance(url, str)
-                and url == huggingface_resolve_url(
+                and url
+                == huggingface_resolve_url(
                     str(source_repository), str(source_revision), source_path
                 ),
                 f"{bundle_id}/{name}: url is not pinned to source",
@@ -516,11 +520,7 @@ def _parse_bundle_entry(
 ) -> dict[str, Any]:
     """Parse a single upstream bundle.json into a normalized catalog entry."""
     _require(isinstance(bundle_data, dict), f"{bundle_id}: bundle must be a JSON object")
-    tree_by_path = {
-        item["path"]: item
-        for item in tree
-        if isinstance(item.get("path"), str)
-    }
+    tree_by_path = {item["path"]: item for item in tree if isinstance(item.get("path"), str)}
     language = bundle_data.get("language")
     _require(isinstance(language, str) and bool(language), f"{bundle_id}: invalid language")
     sample_rate = bundle_data.get("sample_rate")

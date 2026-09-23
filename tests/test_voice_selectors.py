@@ -275,6 +275,7 @@ def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
     )
     assert catalog_voice_keys([pocket]) == ((pocket, "english_2026-04", "alba"),)
 
+
 def test_current_en_us_kokoro_catalog_has_no_unassigned_voices():
     catalog = [
         _kokoro_model(

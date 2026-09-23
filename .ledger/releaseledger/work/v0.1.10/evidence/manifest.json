@@ -1,0 +1,34 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 536,
+      "deletions": 10,
+      "patch_file": "d4e7f51.patch",
+      "patch_sha256": "17227fd310d3916c55c5f11167e5c4d7b253c8100d008ba8e1ee9c43f68082bf",
+      "paths": [
+        "onnxvoice/catalog.py",
+        "onnxvoice/catalog_tools/pocket.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/store.py",
+        "onnxvoice/voice_selectors.py",
+        "tests/test_pocket_catalog.py",
+        "tests/test_pocket_catalog_tools.py",
+        "tests/test_pocket_real_managed.py",
+        "tests/test_store.py",
+        "tests/test_voice_selectors.py"
+      ],
+      "sha": "d4e7f5166c7efc9501f44a64d3060993dac514dc",
+      "short_sha": "d4e7f51",
+      "source_ref": "git:d4e7f5166c7efc9501f44a64d3060993dac514dc"
+    }
+  ],
+  "git_base_ref": "86c4dff0c0dc0866dd3728aa27b02f3f7c3b1c68",
+  "git_base_sha": "86c4dff0c0dc0866dd3728aa27b02f3f7c3b1c68",
+  "git_head_ref": "d4e7f5166c7efc9501f44a64d3060993dac514dc",
+  "git_head_sha": "d4e7f5166c7efc9501f44a64d3060993dac514dc",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.1.10",
+  "schema_version": 1
+}

@@ -463,7 +463,11 @@ def _parse_pocket_voice_states(
             raise CatalogError(f"{bundle_id}/{name}: resolver must be a non-empty string")
         if access["distributable"] and not isinstance(url, str):
             raise CatalogError(f"{bundle_id}/{name}: distributable state requires a url")
-        if not access["distributable"] and not isinstance(url, str) and not isinstance(resolver, str):
+        if (
+            not access["distributable"]
+            and not isinstance(url, str)
+            and not isinstance(resolver, str)
+        ):
             raise CatalogError(f"{bundle_id}/{name}: state requires a resolver or url")
         names.append(name)
         records.append(dict(raw))
@@ -517,9 +521,7 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             role = raw.get("role")
             if role not in POCKET_ARTIFACT_ROLES:
                 raise CatalogError(f"Unknown Pocket artifact role: {role!r}")
-            _validate_canonical_pocket_integrity(
-                raw, bundle_id, str(role), canonical=canonical
-            )
+            _validate_canonical_pocket_integrity(raw, bundle_id, str(role), canonical=canonical)
             raw_path = raw.get("path")
             filename = raw.get("filename") or (Path(str(raw_path)).name if raw_path else None)
             if not isinstance(filename, str) or not filename:

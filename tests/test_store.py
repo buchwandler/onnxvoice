@@ -25,7 +25,6 @@ def test_canonical_pocket_install_requires_integrity(tmp_path):
         store.install(item)
 
 
-
 def test_store_deduplicates_content(tmp_path):
     payload = b"same-model-bytes"
     source_a = tmp_path / "a.onnx"

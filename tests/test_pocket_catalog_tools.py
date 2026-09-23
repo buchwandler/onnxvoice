@@ -279,6 +279,7 @@ def test_build_catalog_discovers_upstream_files_and_metadata() -> None:
     assert len(entry["artifacts"]) == 13
     assert entry["profiles"]["int8"]["mimi_encoder"] == "fp32"
 
+
 def test_build_catalog_normalizes_declared_missing_integrity() -> None:
     upstream = _upstream_bundle()
     for artifact in upstream["artifacts"]:
@@ -303,6 +304,7 @@ def test_build_catalog_normalizes_declared_missing_integrity() -> None:
     artifacts = result["bundles"]["english_2026-04"]["artifacts"]
     assert all(isinstance(artifact["size"], int) and artifact["size"] > 0 for artifact in artifacts)
     assert all(len(artifact["sha256"]) == 64 for artifact in artifacts)
+
 
 def test_build_catalog_preserves_explicit_voice_state_contract() -> None:
     upstream = _upstream_bundle()

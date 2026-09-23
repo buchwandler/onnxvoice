@@ -207,9 +207,10 @@ class AssetStore:
                     raise IntegrityError(
                         f"Canonical Pocket artifact {artifact.filename!r} has no positive size"
                     )
-                if not isinstance(artifact.sha256, str) or re.fullmatch(
-                    r"[0-9a-f]{64}", artifact.sha256
-                ) is None:
+                if (
+                    not isinstance(artifact.sha256, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", artifact.sha256) is None
+                ):
                     raise IntegrityError(
                         f"Canonical Pocket artifact {artifact.filename!r} has no valid SHA-256"
                     )
