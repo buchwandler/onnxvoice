@@ -120,3 +120,23 @@ class TestRenderInventory:
         output = StringIO()
         render_inventory(["A", "B"], [["x", "y"]], format="plain", file=output)
         assert "x\ty" in output.getvalue()
+
+
+def test_doctor_reports_non_secret_huggingface_status(monkeypatch, capsys, tmp_path) -> None:
+    from onnxvoice.cli import main
+
+    secret = "hf_FAKE_SECRET_SENTINEL"
+    monkeypatch.setenv("HF_TOKEN", secret)
+    monkeypatch.setenv("HF_TOKEN_PATH", str(tmp_path / "token"))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+
+    assert main(["--offline", "doctor", "--system", "pocket", "--format", "json"]) == 0
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["system"] == "pocket"
+    assert report["credentials"] == "configured"
+    assert report["offline"] is True
+    assert report["implicit_token_disabled"] is True
+    assert report["gated_access"].startswith("not checked")
+    assert secret not in output

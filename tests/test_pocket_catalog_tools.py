@@ -308,23 +308,22 @@ def test_build_catalog_normalizes_declared_missing_integrity() -> None:
 
 def test_build_catalog_preserves_explicit_voice_state_contract() -> None:
     upstream = _upstream_bundle()
-    state_path = f"{BASE}/alba.safetensors"
+    state_path = "languages/english_2026-04/embeddings/alba.safetensors"
     upstream["voice_states"] = [
         {
             "name": "alba",
             "compatible_bundle": "english_2026-04",
             "source": {
                 "provider": "huggingface",
-                "repository": REPOSITORY,
-                "revision": REVISION,
+                "repository": "kyutai/pocket-tts",
+                "revision": "d" * 40,
                 "path": state_path,
             },
             "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
             "format": "safetensors",
             "size": 123,
             "sha256": "c" * 64,
-            "url": huggingface_resolve_url(REPOSITORY, REVISION, state_path),
-            "resolver": None,
+            "url": huggingface_resolve_url("kyutai/pocket-tts", "d" * 40, state_path),
         }
     ]
     tree = [
@@ -344,6 +343,10 @@ def test_build_catalog_preserves_explicit_voice_state_contract() -> None:
         result = build_catalog(resolved_revision=REVISION)
     verify_catalog(result)
     assert result["bundles"]["english_2026-04"]["voice_states"][0]["name"] == "alba"
+    state = result["bundles"]["english_2026-04"]["voice_states"][0]
+    assert state["source"]["repository"] == "kyutai/pocket-tts"
+    assert state["source"]["revision"] == "d" * 40
+    assert state["source"]["path"] == state_path
 
 
 def test_build_catalog_requires_bundles() -> None:

@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from onnxvoice.errors import IntegrityError
+from onnxvoice.errors import IntegrityError, OfflineError
 from onnxvoice.store import AssetStore
 from onnxvoice.types import Artifact, CatalogItem
 
@@ -155,3 +155,110 @@ def test_new_install_persists_timing_metadata(tmp_path):
     reloaded = store.get("kokoro", "v1.0")
 
     assert reloaded.timing_output == "durations"
+
+
+def _huggingface_artifact(payload: bytes, *, filename: str = "model.onnx") -> Artifact:
+    return Artifact(
+        role="flow_lm_main",
+        filename=filename,
+        url="https://huggingface.co/owner/repo/resolve/revision/model.onnx",
+        size=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        metadata={
+            "source": {
+                "provider": "huggingface",
+                "repository": "owner/repo",
+                "revision": "a" * 40,
+                "path": "onnx/bundle/model.onnx",
+                "gated": False,
+            }
+        },
+    )
+
+
+def test_pocket_huggingface_artifact_uses_structured_source_and_integrity(
+    tmp_path, monkeypatch
+) -> None:
+    import onnxvoice.store as store_module
+
+    payload = b"expected model bytes"
+    calls = []
+    store = AssetStore(tmp_path / "cache")
+    item = CatalogItem(
+        system="pocket",
+        id="bundle",
+        kind="bundle",
+        artifacts=(_huggingface_artifact(payload),),
+        metadata={"canonical_catalog": True},
+    )
+
+    def download(source, *, local_dir, offline):
+        calls.append((source, local_dir, offline))
+        path = local_dir / source.path
+        path.parent.mkdir(parents=True)
+        path.write_bytes(payload)
+        return path
+
+    monkeypatch.setattr(store_module, "download_huggingface_file", download)
+    monkeypatch.setattr(store, "_download", lambda *_args, **_kwargs: pytest.fail("used urllib"))
+    events = []
+    installed = store.install(item, progress=events.append)
+
+    assert installed.artifact("flow_lm_main").path.read_bytes() == payload
+    source, local_dir, offline = calls[0]
+    assert source.repository == "owner/repo"
+    assert source.revision == "a" * 40
+    assert source.path == "onnx/bundle/model.onnx"
+    assert local_dir.name.startswith("onnxvoice-download-")
+    assert not local_dir.exists()
+    assert offline is False
+    assert [event.phase for event in events if event.phase.startswith("download_")] == [
+        "download_started",
+        "download_completed",
+    ]
+
+
+def test_pocket_huggingface_download_still_checks_checksum(tmp_path, monkeypatch) -> None:
+    import onnxvoice.store as store_module
+
+    store = AssetStore(tmp_path / "cache")
+    payload = b"expected model bytes"
+    item = CatalogItem(
+        system="pocket",
+        id="bad-digest",
+        kind="bundle",
+        artifacts=(_huggingface_artifact(payload[:-1] + b"!"),),
+        metadata={"canonical_catalog": True},
+    )
+
+    def download(source, *, local_dir, offline):
+        path = local_dir / source.path
+        path.parent.mkdir(parents=True)
+        path.write_bytes(payload)
+        return path
+
+    monkeypatch.setattr(store_module, "download_huggingface_file", download)
+    with pytest.raises(IntegrityError):
+        store.install(item)
+
+
+def test_offline_pocket_cache_miss_does_not_invoke_huggingface(tmp_path, monkeypatch) -> None:
+    import onnxvoice.store as store_module
+
+    store = AssetStore(tmp_path / "cache", offline=True)
+    payload = b"expected model bytes"
+    item = CatalogItem(
+        system="pocket",
+        id="offline-miss",
+        kind="bundle",
+        artifacts=(_huggingface_artifact(payload),),
+        metadata={"canonical_catalog": True},
+    )
+    monkeypatch.setattr(
+        store_module,
+        "download_huggingface_file",
+        lambda *_args, **_kwargs: pytest.fail("offline cache miss attempted a Hub download"),
+    )
+
+    with pytest.raises(OfflineError):
+        store.install(item)

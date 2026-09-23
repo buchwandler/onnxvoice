@@ -38,6 +38,18 @@ class AssetDownloadError(OnnxVoiceError):
     """A remote asset could not be downloaded."""
 
 
+class AssetAccessError(AssetDownloadError):
+    """A remote asset requires credentials or repository access."""
+
+
+class AssetAuthenticationError(AssetAccessError):
+    """No usable authentication is configured for a remote asset."""
+
+
+class AssetPermissionError(AssetAccessError):
+    """Configured credentials lack permission to access a remote asset."""
+
+
 class PredefinedVoiceError(OnnxVoiceError):
     """A predefined voice state could not be resolved or loaded."""
 

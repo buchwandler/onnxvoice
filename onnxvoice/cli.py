@@ -140,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--check-updates", action="store_true", help="Check for updates (requires network)"
     )
 
+    # --- diagnostics ---
+    doctor_parser = sub.add_parser("doctor", help="Show non-secret download diagnostics")
+    doctor_parser.add_argument("--system", choices=["pocket"], default="pocket")
+    doctor_parser.add_argument("--format", choices=["plain", "json"], default="plain")
+
     # --- path ---
     path_parser = sub.add_parser("path", help="Print an installed model/voice path")
     path_parser.add_argument("ref")
@@ -567,6 +572,26 @@ def _cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from .huggingface import huggingface_diagnostics
+
+    report = {
+        "system": args.system,
+        **huggingface_diagnostics(offline=args.offline),
+    }
+    if args.format == "json":
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    print("Pocket download diagnostics")
+    print(f"Hugging Face integration : {report['huggingface_hub']}")
+    print(f"Credentials             : {report['credentials']}")
+    print(f"Offline mode            : {'yes' if report['offline'] else 'no'}")
+    print(f"Implicit token disabled : {'yes' if report['implicit_token_disabled'] else 'no'}")
+    print(f"Gated repository access : {report['gated_access']}")
+    return 0
+
+
 def _cmd_info(args: argparse.Namespace) -> int:
     from ._table import format_bytes
 
@@ -857,6 +882,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
 
         # Command dispatch
+        if args.command == "doctor":
+            return _cmd_doctor(args)
+
         if args.command == "voices":
             return _cmd_voices(args)
 

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from platformdirs import user_cache_path
 
 from .errors import AssetNotFoundError, CatalogError, OfflineError
 from .store import FileLock, ProgressCallback
-from .types import Artifact, AssetProgress, CatalogItem
+from .types import Artifact, AssetProgress, CatalogItem, validate_relative_path
 
 POCKET_ARTIFACT_ROLES = frozenset(
     {
@@ -29,6 +30,8 @@ POCKET_ARTIFACT_ROLES = frozenset(
     }
 )
 _POCKET_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_POCKET_HF_REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
+_POCKET_HF_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 
 POCKET_QUALIFIED_ROLES = frozenset(
     {
@@ -413,6 +416,13 @@ def _validate_canonical_pocket_integrity(
         raise CatalogError(f"{bundle_id}/{role}: canonical artifact sha256 must be lowercase hex")
 
 
+def _pocket_voice_source_url(repository: str, revision: str, path: str) -> str:
+    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
+    encoded_revision = urllib.parse.quote(revision, safe="")
+    encoded_path = urllib.parse.quote(path, safe="/")
+    return f"https://huggingface.co/{repo}/resolve/{encoded_revision}/{encoded_path}?download=true"
+
+
 def _parse_pocket_voice_states(
     entry: Mapping[str, Any],
     bundle_id: str,
@@ -441,6 +451,19 @@ def _parse_pocket_voice_states(
         for field in ("provider", "repository", "revision", "path"):
             if not isinstance(source.get(field), str) or not source[field]:
                 raise CatalogError(f"{bundle_id}/{name}: source.{field} is required")
+        if source["provider"] != "huggingface":
+            raise CatalogError(f"{bundle_id}/{name}: source provider must be huggingface")
+        source_repository = source["repository"]
+        if _POCKET_HF_REPOSITORY_RE.fullmatch(source_repository) is None:
+            raise CatalogError(f"{bundle_id}/{name}: invalid source repository")
+        source_revision = source["revision"]
+        if _POCKET_HF_REVISION_RE.fullmatch(source_revision) is None:
+            raise CatalogError(f"{bundle_id}/{name}: source revision must be a 40-character SHA")
+        source_path = source["path"]
+        try:
+            validate_relative_path(source_path, field_name="Pocket voice-state source path")
+        except ValueError as exc:
+            raise CatalogError(f"{bundle_id}/{name}: {exc}") from exc
         access = raw.get("access")
         if not isinstance(access, Mapping):
             raise CatalogError(f"{bundle_id}/{name}: access must be an object")
@@ -462,6 +485,10 @@ def _parse_pocket_voice_states(
         resolver = raw.get("resolver")
         if url is not None and (not isinstance(url, str) or not url):
             raise CatalogError(f"{bundle_id}/{name}: url must be a non-empty string")
+        if url is not None and url != _pocket_voice_source_url(
+            source_repository, source_revision, source_path
+        ):
+            raise CatalogError(f"{bundle_id}/{name}: url is not pinned to its source")
         if resolver is not None and (not isinstance(resolver, str) or not resolver):
             raise CatalogError(f"{bundle_id}/{name}: resolver must be a non-empty string")
         if access["distributable"] and not isinstance(url, str):
@@ -533,6 +560,24 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             metadata = dict(raw.get("metadata") or {})
             if raw_path is not None:
                 metadata.setdefault("path", raw_path)
+            if source.get("provider") == "huggingface":
+                if not isinstance(source.get("repository"), str) or not source["repository"]:
+                    raise CatalogError(f"{bundle_id}/{role}: Hugging Face repository is required")
+                if not isinstance(source.get("revision"), str) or not source["revision"]:
+                    raise CatalogError(f"{bundle_id}/{role}: Hugging Face revision is required")
+                if not isinstance(raw_path, str) or not raw_path:
+                    raise CatalogError(f"{bundle_id}/{role}: Hugging Face path is required")
+                try:
+                    validate_relative_path(raw_path, field_name="Hugging Face repository path")
+                except ValueError as exc:
+                    raise CatalogError(str(exc)) from exc
+                metadata["source"] = {
+                    "provider": "huggingface",
+                    "repository": source["repository"],
+                    "revision": source["revision"],
+                    "path": raw_path,
+                    "gated": False,
+                }
             artifacts.append(
                 Artifact(
                     role=str(role),

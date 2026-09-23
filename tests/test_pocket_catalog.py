@@ -12,6 +12,7 @@ from onnxvoice.catalog import (
     _parse_pocket,
     _select_pocket_profile,
 )
+from onnxvoice.catalog_tools.pocket import huggingface_resolve_url
 from onnxvoice.errors import CatalogError
 
 SAMPLE_CATALOG = {
@@ -429,27 +430,31 @@ def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
     item = _parse_pocket(catalog)[0]
     assert item.voices == ()
     assert item.metadata["predefined_voice_names"] == ["alba"]
+    state_path = "languages/english_2026-04/embeddings/alba.safetensors"
     entry["voice_states"] = [
         {
             "name": "alba",
             "compatible_bundle": entry["id"],
             "source": {
                 "provider": "huggingface",
-                "repository": SAMPLE_CATALOG["source"]["repository"],
-                "revision": SAMPLE_CATALOG["source"]["revision"],
-                "path": "onnx/english_2026-04/alba.safetensors",
+                "repository": "kyutai/pocket-tts",
+                "revision": "d" * 40,
+                "path": state_path,
             },
             "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
             "format": "safetensors",
             "size": 123,
             "sha256": "b" * 64,
-            "url": "https://example.com/alba.safetensors",
+            "url": huggingface_resolve_url("kyutai/pocket-tts", "d" * 40, state_path),
             "resolver": None,
         }
     ]
     item = _parse_pocket(catalog)[0]
     assert item.voices == ("alba",)
     assert item.metadata["voice_states"][0]["access"]["gated"] is False
+    assert item.metadata["voice_states"][0]["source"]["repository"] == "kyutai/pocket-tts"
+    assert item.metadata["voice_states"][0]["source"]["revision"] == "d" * 40
+    assert item.metadata["voice_states"][0]["source"]["path"] == state_path
 
 
 def test_canonical_object_map_rejects_key_id_mismatch() -> None:
@@ -466,3 +471,27 @@ def test_canonical_kind_rejects_list_and_wrong_kind() -> None:
         _parse_pocket(
             {"schema": 1, "kind": "pocket-bundle-catalog", "bundles": {entry["id"]: entry}}
         )
+
+
+def test_pocket_artifact_preserves_structured_huggingface_source() -> None:
+    catalog = copy.deepcopy(SAMPLE_CATALOG)
+    catalog["source"]["provider"] = "huggingface"
+    for artifact in catalog["bundles"][0]["artifacts"]:
+        artifact["path"] = f"onnx/english_2026-04/{artifact['filename']}"
+    item = _parse_pocket(catalog)[0]
+    artifact = item.artifact("bundle_metadata")
+    assert artifact.metadata["source"] == {
+        "provider": "huggingface",
+        "repository": "KevinAHM/pocket-tts-onnx",
+        "revision": "abc123def456abc123def456abc123def456abc1",
+        "path": "onnx/english_2026-04/bundle.json",
+        "gated": False,
+    }
+
+
+def test_pocket_huggingface_source_rejects_unsafe_repository_path() -> None:
+    catalog = copy.deepcopy(SAMPLE_CATALOG)
+    catalog["source"]["provider"] = "huggingface"
+    catalog["bundles"][0]["artifacts"][0]["path"] = "../bundle.json"
+    with pytest.raises(CatalogError, match="Unsafe"):
+        _parse_pocket(catalog)

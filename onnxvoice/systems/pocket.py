@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -17,7 +18,9 @@ from platformdirs import user_cache_path
 
 from ..checksums import digest_file, verify_file
 from ..errors import (
+    AssetAccessError,
     AssetDownloadError,
+    AssetNotFoundError,
     IntegrityError,
     OfflineError,
     OptionalDependencyError,
@@ -26,6 +29,7 @@ from ..errors import (
     PredefinedVoiceNotFoundError,
     RuntimeContractError,
 )
+from ..huggingface import HuggingFaceSource, download_huggingface_file
 from ..runtime import OnnxSession
 from ..store import FileLock
 from ..types import InferenceResult, Installation, validate_safe_component
@@ -62,39 +66,12 @@ PREDEFINED_VOICE_REPOSITORY = "kyutai/pocket-tts"
 PREDEFINED_VOICE_REVISION = "d18466fc6d3ad070afee1bde2f0db8992007c48f"
 
 
-def _download_predefined_voice_file(
-    repo_id: str,
-    filename: str,
-    revision: str,
-    *,
-    cache_dir: Path,
-    local_files_only: bool,
-) -> Path:
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError as exc:
-        raise OptionalDependencyError(
-            "Predefined Pocket voices require huggingface_hub and safetensors. "
-            "Install onnxvoice[pocket]."
-        ) from exc
-    return Path(
-        hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            revision=revision,
-            cache_dir=str(cache_dir),
-            local_files_only=local_files_only,
-        )
-    )
-
-
 def _load_safetensors(path: Path) -> Mapping[str, np.ndarray]:
     try:
         from safetensors.numpy import load_file
     except ImportError as exc:
         raise OptionalDependencyError(
-            "Predefined Pocket voices require huggingface_hub and safetensors. "
-            "Install onnxvoice[pocket]."
+            "Loading predefined Pocket voices requires safetensors. Install 'onnxvoice[pocket]'."
         ) from exc
     return load_file(str(path))
 
@@ -109,6 +86,8 @@ class StateSpec:
     shape: tuple[int, ...]
     dtype: np.dtype
     fill: str
+    module: str | None = None
+    key: str | None = None
 
 
 def parse_state_manifest(raw: Any, *, name: str) -> tuple[StateSpec, ...]:
@@ -160,10 +139,22 @@ def parse_state_manifest(raw: Any, *, name: str) -> tuple[StateSpec, ...]:
             raise RuntimeContractError(
                 f"{name} state entry {index} uses nan with non-floating dtype"
             )
+        module = entry.get("module")
+        key = entry.get("key")
+        if (module is None) != (key is None):
+            raise RuntimeContractError(
+                f"{name} state entry {index} must declare module and key together"
+            )
+        if module is not None and (not isinstance(module, str) or not module):
+            raise RuntimeContractError(f"{name} state entry {index} has invalid module")
+        if key is not None and (not isinstance(key, str) or not key):
+            raise RuntimeContractError(f"{name} state entry {index} has invalid key")
         indexes.add(index)
         input_names.add(input_name)
         output_names.add(output_name)
-        specs.append(StateSpec(index, input_name, output_name, tuple(shape), dtype, fill))
+        specs.append(
+            StateSpec(index, input_name, output_name, tuple(shape), dtype, fill, module, key)
+        )
     specs.sort(key=lambda spec: spec.index)
     if [spec.index for spec in specs] != list(range(len(specs))):
         raise RuntimeContractError(f"{name} state indexes must be contiguous and start at zero")
@@ -186,6 +177,70 @@ def initialize_state(specs: Sequence[StateSpec]) -> dict[str, np.ndarray]:
     return state
 
 
+def _derive_step(module_state: Mapping[str, Any]) -> np.ndarray:
+    if "step" in module_state:
+        return np.asarray(module_state["step"], dtype=np.int64).reshape(1)
+    if "offset" in module_state and "end_offset" not in module_state:
+        return np.asarray(module_state["offset"], dtype=np.int64).reshape(1)
+    if "current_end" in module_state:
+        return np.asarray([np.asarray(module_state["current_end"]).shape[0]], dtype=np.int64)
+    return np.asarray([0], dtype=np.int64)
+
+
+def _adapt_state_tensor(tensor: Any, spec: StateSpec) -> np.ndarray:
+    """Fit an imported tensor to a manifest's fixed state input shape."""
+    source = np.asarray(tensor, dtype=spec.dtype)
+    target = initialize_state((spec,))[spec.input_name]
+    if source.shape == spec.shape:
+        return source.copy()
+    if source.size == np.prod(spec.shape, dtype=np.int64):
+        return source.reshape(spec.shape).copy()
+    if source.ndim != len(spec.shape):
+        return target
+    slices = tuple(
+        slice(0, min(source_dim, target_dim))
+        for source_dim, target_dim in zip(source.shape, spec.shape, strict=True)
+    )
+    if any(selection.stop == 0 for selection in slices):
+        return target
+    adapted = target.copy()
+    adapted[slices] = source[slices]
+    return adapted
+
+
+def _flow_state_from_model_state(
+    model_state: Mapping[str, Mapping[str, Any]],
+    specs: Sequence[StateSpec],
+    *,
+    name: str,
+) -> dict[str, np.ndarray]:
+    if not specs:
+        raise PredefinedVoiceIntegrityError(
+            f"Pocket Flow-LM manifest cannot import predefined voice {name!r}: "
+            "the manifest is empty"
+        )
+    state = initialize_state(specs)
+    for spec in specs:
+        if spec.module is None or spec.key is None:
+            raise PredefinedVoiceIntegrityError(
+                f"Pocket Flow-LM manifest cannot import predefined voice {name!r}: "
+                f"state {spec.input_name!r} has no module/key mapping"
+            )
+        module_state = model_state.get(spec.module, {})
+        tensor = module_state.get(spec.key)
+        try:
+            if tensor is None and spec.key == "step":
+                tensor = _derive_step(module_state)
+            if tensor is not None:
+                state[spec.input_name] = _adapt_state_tensor(tensor, spec)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise PredefinedVoiceIntegrityError(
+                f"Predefined Pocket Flow-LM tensor {spec.module}/{spec.key} "
+                "could not be adapted to the bundle state manifest"
+            ) from exc
+    return state
+
+
 def update_state_from_named_outputs(
     state: dict[str, np.ndarray],
     output_by_name: Mapping[str, Any],
@@ -200,9 +255,10 @@ def update_state_from_named_outputs(
 
 @dataclass(frozen=True, slots=True, init=False)
 class PocketVoiceState:
-    """Reusable voice embedding sequence produced by the Mimi encoder."""
+    """Reusable Pocket conditioning, either embeddings or Flow-LM state."""
 
-    embeddings: np.ndarray
+    embeddings: np.ndarray | None
+    flow_state: Mapping[str, np.ndarray] | None
     sample_rate: int
     metadata: Mapping[str, Any]
     values: Mapping[str, np.ndarray]
@@ -213,19 +269,38 @@ class PocketVoiceState:
         sample_rate: int = 24000,
         metadata: Mapping[str, Any] | None = None,
         *,
+        flow_state: Mapping[str, np.ndarray] | None = None,
         values: Mapping[str, np.ndarray] | None = None,
     ) -> None:
         legacy_values = dict(values or {})
-        if embeddings is None:
+        if embeddings is not None and flow_state is not None:
+            raise ValueError("PocketVoiceState accepts embeddings or Flow-LM state, not both")
+        if flow_state is not None and legacy_values:
+            raise ValueError("PocketVoiceState values cannot be combined with Flow-LM state")
+        if embeddings is None and flow_state is None:
             if not legacy_values:
-                raise TypeError("PocketVoiceState requires embeddings")
+                raise TypeError("PocketVoiceState requires embeddings or Flow-LM state")
             embeddings = np.asarray(next(iter(legacy_values.values())), dtype=np.float32)
-        object.__setattr__(self, "embeddings", np.asarray(embeddings, dtype=np.float32))
+
+        metadata_values = dict(metadata or {})
+        if embeddings is not None:
+            normalized_embeddings = np.asarray(embeddings, dtype=np.float32)
+            normalized_flow_state = None
+            compatible_values = legacy_values or {"embeddings": normalized_embeddings}
+        else:
+            if not isinstance(flow_state, Mapping):
+                raise TypeError("PocketVoiceState Flow-LM state must be a mapping")
+            normalized_embeddings = None
+            normalized_flow_state = {name: np.asarray(value) for name, value in flow_state.items()}
+            compatible_values = {}
+
+        object.__setattr__(self, "embeddings", normalized_embeddings)
+        object.__setattr__(self, "flow_state", normalized_flow_state)
         object.__setattr__(
-            self, "sample_rate", int((metadata or {}).get("sample_rate", sample_rate))
+            self, "sample_rate", int(metadata_values.get("sample_rate", sample_rate))
         )
-        object.__setattr__(self, "metadata", dict(metadata or {}))
-        object.__setattr__(self, "values", legacy_values or {"embeddings": self.embeddings})
+        object.__setattr__(self, "metadata", metadata_values)
+        object.__setattr__(self, "values", compatible_values)
 
 
 class PocketAdapter(SystemAdapter):
@@ -251,7 +326,7 @@ class PocketAdapter(SystemAdapter):
         self._validated_contracts: set[str] = set()
         self._validated = False
         self._predefined_voice_states: dict[
-            tuple[str, str, str, str, str, str], PocketVoiceState
+            tuple[str, str, str, str, str, str, str], PocketVoiceState
         ] = {}
         self._voice_cache_dir = Path(
             voice_cache_dir
@@ -347,6 +422,51 @@ class PocketAdapter(SystemAdapter):
                 "Pocket bundle metadata and catalog disagree about predefined voice names"
             )
         return bundle_names if bundle_names is not None else catalog_names or ()
+
+    @staticmethod
+    def _predefined_voice_source(
+        metadata: Mapping[str, Any], name: str, bundle_name: str
+    ) -> HuggingFaceSource:
+        records = metadata.get("voice_states")
+        if records is not None:
+            if not isinstance(records, Sequence) or isinstance(records, (str, bytes, Mapping)):
+                raise RuntimeContractError("Pocket voice_states metadata must be a sequence")
+            for record in records:
+                if not isinstance(record, Mapping):
+                    raise RuntimeContractError("Pocket voice-state metadata must contain objects")
+                if record.get("name") != name:
+                    continue
+                source = record.get("source")
+                access = record.get("access")
+                if not isinstance(source, Mapping) or not isinstance(access, Mapping):
+                    raise RuntimeContractError(
+                        f"Pocket predefined voice {name!r} has invalid source metadata"
+                    )
+                repository = source.get("repository")
+                revision = source.get("revision")
+                path = source.get("path")
+                gated = access.get("gated")
+                if (
+                    source.get("provider") != "huggingface"
+                    or not isinstance(repository, str)
+                    or not isinstance(revision, str)
+                    or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+                    or not isinstance(path, str)
+                    or not isinstance(gated, bool)
+                ):
+                    raise RuntimeContractError(
+                        f"Pocket predefined voice {name!r} has invalid Hugging Face source metadata"
+                    )
+                try:
+                    return HuggingFaceSource(repository, revision, path, gated=gated)
+                except ValueError as exc:
+                    raise RuntimeContractError(str(exc)) from exc
+        return HuggingFaceSource(
+            PREDEFINED_VOICE_REPOSITORY,
+            PREDEFINED_VOICE_REVISION,
+            f"languages/{bundle_name}/embeddings/{name}.safetensors",
+            gated=True,
+        )
 
     @property
     def predefined_voices(self) -> tuple[str, ...]:
@@ -517,13 +637,14 @@ class PocketAdapter(SystemAdapter):
         self,
         name: str,
         bundle_id: str,
-        asset_path: str,
+        source: HuggingFaceSource,
     ) -> tuple[Path, str]:
         cache_key = {
             "system": "pocket",
             "asset_kind": "predefined_voice_state",
-            "model_repo": PREDEFINED_VOICE_REPOSITORY,
-            "model_revision": PREDEFINED_VOICE_REVISION,
+            "model_repo": source.repository,
+            "model_revision": source.revision,
+            "asset_path": source.path,
             "bundle_id": bundle_id,
             "voice_name": name,
         }
@@ -557,83 +678,107 @@ class PocketAdapter(SystemAdapter):
                     ) from exc
                 return state_path, sha256
 
-            try:
-                downloaded = _download_predefined_voice_file(
-                    PREDEFINED_VOICE_REPOSITORY,
-                    asset_path,
-                    PREDEFINED_VOICE_REVISION,
-                    cache_dir=self._voice_cache_dir / "huggingface",
-                    local_files_only=self._offline,
-                )
-            except OptionalDependencyError:
-                raise
-            except Exception as exc:
-                self._raise_predefined_voice_download_error(exc, name=name, bundle_id=bundle_id)
-            if not downloaded.is_file():
-                raise PredefinedVoiceIntegrityError(
-                    f"Downloaded state for predefined Pocket voice {name!r} is missing"
-                )
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
-            os.close(fd)
-            temporary_state = Path(temporary_name)
-            try:
-                shutil.copyfile(downloaded, temporary_state)
-                size = temporary_state.stat().st_size
-                if size <= 0:
-                    raise PredefinedVoiceIntegrityError(
-                        f"Downloaded state for predefined Pocket voice {name!r} is empty"
+            with tempfile.TemporaryDirectory(prefix="onnxvoice-pocket-hf-") as download_dir:
+                try:
+                    downloaded = download_huggingface_file(
+                        source,
+                        local_dir=Path(download_dir),
+                        offline=self._offline,
                     )
-                sha256 = digest_file(temporary_state)
-                os.replace(temporary_state, state_path)
-                record = {"key": cache_key, "size": size, "sha256": sha256}
+                except OptionalDependencyError:
+                    raise
+                except Exception as exc:
+                    self._raise_predefined_voice_download_error(
+                        exc, name=name, bundle_id=bundle_id, repository=source.repository
+                    )
+                if not downloaded.is_file():
+                    raise PredefinedVoiceIntegrityError(
+                        f"Downloaded state for predefined Pocket voice {name!r} is missing"
+                    )
+                cache_dir.mkdir(parents=True, exist_ok=True)
                 fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
                 os.close(fd)
-                temporary_metadata = Path(temporary_name)
+                temporary_state = Path(temporary_name)
                 try:
-                    temporary_metadata.write_text(
-                        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
-                    )
-                    os.replace(temporary_metadata, metadata_path)
+                    shutil.copyfile(downloaded, temporary_state)
+                    size = temporary_state.stat().st_size
+                    if size <= 0:
+                        raise PredefinedVoiceIntegrityError(
+                            f"Downloaded state for predefined Pocket voice {name!r} is empty"
+                        )
+                    sha256 = digest_file(temporary_state)
+                    os.replace(temporary_state, state_path)
+                    record = {"key": cache_key, "size": size, "sha256": sha256}
+                    fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
+                    os.close(fd)
+                    temporary_metadata = Path(temporary_name)
+                    try:
+                        temporary_metadata.write_text(
+                            json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
+                        )
+                        os.replace(temporary_metadata, metadata_path)
+                    finally:
+                        temporary_metadata.unlink(missing_ok=True)
                 finally:
-                    temporary_metadata.unlink(missing_ok=True)
-            finally:
-                temporary_state.unlink(missing_ok=True)
-            return state_path, sha256
+                    temporary_state.unlink(missing_ok=True)
+                return state_path, sha256
 
     @staticmethod
     def _raise_predefined_voice_download_error(
-        exc: Exception, *, name: str, bundle_id: str
+        exc: Exception, *, name: str, bundle_id: str, repository: str
     ) -> NoReturn:
         error_name = type(exc).__name__
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        if error_name in {"LocalEntryNotFoundError", "OfflineModeIsEnabled"}:
+        if isinstance(exc, OfflineError) or error_name in {
+            "LocalEntryNotFoundError",
+            "OfflineModeIsEnabled",
+        }:
             raise OfflineError(
                 f"Predefined Pocket voice {name!r} is not available in the local cache "
                 "and offline mode is enabled."
             ) from exc
-        if error_name == "GatedRepoError" or status in {401, 403}:
+        if (
+            isinstance(exc, AssetAccessError)
+            or error_name
+            in {
+                "PredefinedVoiceAccessError",
+                "AssetAccessError",
+                "AssetAuthenticationError",
+                "AssetPermissionError",
+                "GatedRepoError",
+            }
+            or status in {401, 403}
+        ):
             raise PredefinedVoiceAccessError(
                 f"Predefined Pocket voice {name!r} requires access to "
-                f"{PREDEFINED_VOICE_REPOSITORY}. Accept the model terms and authenticate "
-                "with Hugging Face, then retry."
+                f"{repository}. Accept or request access on the repository "
+                "page, authenticate with 'hf auth login' or HF_TOKEN, verify with "
+                "'hf auth whoami', and retry."
             ) from exc
         if (
-            error_name in {"EntryNotFoundError", "RevisionNotFoundError", "RepositoryNotFoundError"}
+            isinstance(exc, AssetNotFoundError)
+            or error_name
+            in {
+                "AssetNotFoundError",
+                "EntryNotFoundError",
+                "RemoteEntryNotFoundError",
+                "RevisionNotFoundError",
+                "RepositoryNotFoundError",
+            }
             or status == 404
         ):
             raise PredefinedVoiceNotFoundError(
                 f"Predefined Pocket voice {name!r} is not present for bundle "
                 f"{bundle_id!r} at the pinned upstream revision."
             ) from exc
+        if isinstance(exc, AssetDownloadError):
+            raise exc
         raise AssetDownloadError(
             f"Could not download predefined Pocket voice {name!r} for bundle {bundle_id!r}."
         ) from exc
 
     @staticmethod
-    def _predefined_voice_embeddings(
-        state_path: Path, *, expected_dimension: int, name: str
-    ) -> np.ndarray:
+    def _predefined_model_state(state_path: Path, *, name: str) -> dict[str, dict[str, np.ndarray]]:
         try:
             tensors = _load_safetensors(state_path)
         except OptionalDependencyError:
@@ -642,32 +787,23 @@ class PocketAdapter(SystemAdapter):
             raise PredefinedVoiceIntegrityError(
                 f"Could not load predefined Pocket voice state {name!r}"
             ) from exc
-        if not isinstance(tensors, Mapping) or len(tensors) != 1:
+        if not isinstance(tensors, Mapping) or not tensors:
             raise PredefinedVoiceIntegrityError(
-                f"Predefined Pocket voice state {name!r} must contain exactly one embedding tensor"
+                f"Predefined Pocket voice state {name!r} contains no model tensors"
             )
-        embeddings = np.asarray(next(iter(tensors.values())))
-        if not np.issubdtype(embeddings.dtype, np.floating):
-            raise PredefinedVoiceIntegrityError(
-                f"Predefined Pocket voice state {name!r} must use a floating-point dtype"
-            )
-        if embeddings.ndim == 2:
-            embeddings = embeddings[None, ...]
-        if (
-            embeddings.ndim != 3
-            or embeddings.shape[0] != 1
-            or embeddings.shape[1] == 0
-            or embeddings.shape[2] != expected_dimension
-        ):
-            raise PredefinedVoiceIntegrityError(
-                f"Predefined Pocket voice state {name!r} has shape {embeddings.shape}; "
-                f"expected [1, sequence, {expected_dimension}]"
-            )
-        if not np.isfinite(embeddings).all():
-            raise PredefinedVoiceIntegrityError(
-                f"Predefined Pocket voice state {name!r} contains non-finite values"
-            )
-        return np.array(embeddings, dtype=np.float32, copy=True)
+        model_state: dict[str, dict[str, np.ndarray]] = {}
+        for tensor_path, tensor in tensors.items():
+            if not isinstance(tensor_path, str) or "/" not in tensor_path:
+                raise PredefinedVoiceIntegrityError(
+                    f"Predefined Pocket voice state {name!r} has an invalid tensor key"
+                )
+            module, key = tensor_path.split("/", 1)
+            if not module or not key:
+                raise PredefinedVoiceIntegrityError(
+                    f"Predefined Pocket voice state {name!r} has an invalid tensor key"
+                )
+            model_state.setdefault(module, {})[key] = np.asarray(tensor)
+        return model_state
 
     def prepare_predefined_voice(self, name: str) -> PocketVoiceState:
         metadata = self._ensure_validated()
@@ -684,34 +820,34 @@ class PocketAdapter(SystemAdapter):
             validate_safe_component(bundle_name, field_name="bundle id")
         except ValueError as exc:
             raise RuntimeContractError(str(exc)) from exc
+        source = self._predefined_voice_source(metadata, name, bundle_name)
         cache_key = (
             "pocket",
             "predefined_voice_state",
-            PREDEFINED_VOICE_REPOSITORY,
-            PREDEFINED_VOICE_REVISION,
+            source.repository,
+            source.revision,
             bundle_name,
             name,
+            source.path,
         )
         cached = self._predefined_voice_states.get(cache_key)
         if cached is not None:
             return cached
-        asset_path = f"languages/{bundle_name}/embeddings/{name}.safetensors"
-        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, asset_path)
-        expected_dimension = int(metadata["conditioning_dim"])
-        embeddings = self._predefined_voice_embeddings(
-            state_path, expected_dimension=expected_dimension, name=name
-        )
+        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, source)
+        model_state = self._predefined_model_state(state_path, name=name)
+        flow_state = _flow_state_from_model_state(model_state, self._flow_specs, name=name)
         sample_rate = int(metadata["sample_rate"])
         voice_state = PocketVoiceState(
-            embeddings=embeddings,
+            flow_state=flow_state,
             sample_rate=sample_rate,
             metadata={
                 "sample_rate": sample_rate,
                 "bundle_id": bundle_name,
                 "voice_name": name,
-                "model_repo": PREDEFINED_VOICE_REPOSITORY,
-                "model_revision": PREDEFINED_VOICE_REVISION,
-                "asset_path": asset_path,
+                "kind": "predefined_flow_state",
+                "model_repo": source.repository,
+                "model_revision": source.revision,
+                "asset_path": source.path,
                 "sha256": sha256,
             },
         )
@@ -795,6 +931,19 @@ class PocketAdapter(SystemAdapter):
             return PocketAdapter._named_outputs(session, values)
         return {f"output_{index}": np.asarray(value) for index, value in enumerate(values)}
 
+    def _condition_embeddings(
+        self,
+        session: OnnxSession,
+        state: dict[str, np.ndarray],
+        embeddings: np.ndarray,
+        latent_dim: int,
+    ) -> None:
+        empty_sequence = np.empty((1, 0, latent_dim), dtype=np.float32)
+        inputs = {"sequence": empty_sequence, "text_embeddings": embeddings, **state}
+        outputs = self._outputs(session, session.run(inputs))
+        if self._flow_specs:
+            update_state_from_named_outputs(state, outputs, self._flow_specs)
+
     def _condition_prefix(
         self,
         session: OnnxSession,
@@ -803,13 +952,8 @@ class PocketAdapter(SystemAdapter):
         text_embeddings: np.ndarray,
         latent_dim: int,
     ) -> None:
-        empty_sequence = np.empty((1, 0, latent_dim), dtype=np.float32)
-        for embeddings in (voice_embeddings, text_embeddings):
-            inputs = {"sequence": empty_sequence, "text_embeddings": embeddings, **state}
-            outputs = self._outputs(session, session.run(inputs))
-            update_state_from_named_outputs(
-                state, outputs, self._flow_specs
-            ) if self._flow_specs else None
+        self._condition_embeddings(session, state, voice_embeddings, latent_dim)
+        self._condition_embeddings(session, state, text_embeddings, latent_dim)
 
     def _generate_latents(
         self,
@@ -946,23 +1090,42 @@ class PocketAdapter(SystemAdapter):
         flow = self._get_session("flow_lm_flow")
         decoder = self._get_session("mimi_decoder")
         text_embeddings = self._encode_text(text_conditioner, token_ids)
-        flow_state = initialize_state(self._flow_specs)
         mimi_state = initialize_state(self._mimi_specs)
         if voice_state is None:
+            flow_state = initialize_state(self._flow_specs)
             voice_embeddings = self._normalize_embeddings(
                 self._load_bos_conditioning(), label="BOS conditioning"
+            )
+            self._condition_prefix(
+                main, flow_state, voice_embeddings, text_embeddings, int(metadata["latent_dim"])
             )
         else:
             if voice_state.sample_rate != metadata.get("sample_rate"):
                 raise RuntimeContractError(
                     "Pocket voice state sample rate does not match the bundle"
                 )
-            voice_embeddings = self._normalize_embeddings(
-                voice_state.embeddings, label="Pocket voice embeddings"
-            )
-        self._condition_prefix(
-            main, flow_state, voice_embeddings, text_embeddings, int(metadata["latent_dim"])
-        )
+            if voice_state.flow_state is not None:
+                flow_state = {
+                    name: np.array(value, copy=True)
+                    for name, value in voice_state.flow_state.items()
+                }
+                self._condition_embeddings(
+                    main, flow_state, text_embeddings, int(metadata["latent_dim"])
+                )
+            else:
+                if voice_state.embeddings is None:
+                    raise RuntimeContractError("Pocket voice state has no conditioning data")
+                flow_state = initialize_state(self._flow_specs)
+                voice_embeddings = self._normalize_embeddings(
+                    voice_state.embeddings, label="Pocket voice embeddings"
+                )
+                self._condition_prefix(
+                    main,
+                    flow_state,
+                    voice_embeddings,
+                    text_embeddings,
+                    int(metadata["latent_dim"]),
+                )
         latents, eos_detected, frame_count = self._generate_latents(
             main,
             flow,

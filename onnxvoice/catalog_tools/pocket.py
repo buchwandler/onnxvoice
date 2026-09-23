@@ -370,12 +370,7 @@ def _build_artifact(
     }
 
 
-def _normalize_voice_states(
-    bundle_id: str,
-    raw: Any,
-    repository: str,
-    revision: str,
-) -> list[dict[str, Any]]:
+def _normalize_voice_states(bundle_id: str, raw: Any) -> list[dict[str, Any]]:
     """Normalize explicitly declared predefined voice-state assets."""
     if raw in (None, []):
         return []
@@ -409,25 +404,15 @@ def _normalize_voice_states(
         source_repository = source.get("repository")
         _require(
             isinstance(source_repository, str)
-            and re.fullmatch(r"[^/\\\\ ]+/[^/\\\\ ]+", source_repository) is not None,
+            and re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", source_repository) is not None,
             f"{bundle_id}/{name}: invalid source repository",
-        )
-        _require(
-            source_repository == repository,
-            f"{bundle_id}/{name}: source repository is not the catalog repository",
         )
         source_revision = source.get("revision")
         _require(
             isinstance(source_revision, str) and _SHA_RE.fullmatch(source_revision) is not None,
             f"{bundle_id}/{name}: source revision must be a 40-character SHA",
         )
-        source_path = source.get("path")
-        _require(
-            isinstance(source_path, str) and source_path.startswith("onnx/"),
-            f"{bundle_id}/{name}: source path is required",
-        )
-        _safe_relative_path(source_path, f"{bundle_id}/{name}: source path")
-        _require(source_revision == revision, f"{bundle_id}/{name}: source revision is not pinned")
+        source_path = _safe_relative_path(source.get("path"), f"{bundle_id}/{name}: source path")
         access = value.get("access")
         _require(isinstance(access, dict), f"{bundle_id}/{name}: access must be an object")
         _require(
@@ -645,9 +630,7 @@ def _parse_bundle_entry(
                 f"{bundle_id}: profile {profile_name!r} references missing ({role!r}, {profile_roles[role]!r})",
             )
 
-    voice_states = _normalize_voice_states(
-        bundle_id, bundle_data.get("voice_states"), repository, revision
-    )
+    voice_states = _normalize_voice_states(bundle_id, bundle_data.get("voice_states"))
     entry: dict[str, Any] = {
         "id": bundle_id,
         "aliases": aliases,
@@ -736,14 +719,9 @@ def build_catalog(
     return catalog
 
 
-def _verify_voice_states(
-    bundle: dict[str, Any],
-    bundle_id: str,
-    repository: str,
-    revision: str,
-) -> None:
+def _verify_voice_states(bundle: dict[str, Any], bundle_id: str) -> None:
     raw = bundle.get("voice_states", [])
-    normalized = _normalize_voice_states(bundle_id, raw, repository, revision)
+    normalized = _normalize_voice_states(bundle_id, raw)
     _require(
         raw == normalized,
         f"{bundle_id}: voice_states must use the normalized record shape",
@@ -864,7 +842,7 @@ def verify_catalog(catalog: Any) -> None:
     for map_id, raw_bundle in bundles.items():
         _require(isinstance(raw_bundle, dict), f"{map_id}: bundle must be an object")
         bundle = cast(dict[str, Any], raw_bundle)
-        _verify_voice_states(bundle, map_id, repository, revision)
+        _verify_voice_states(bundle, map_id)
         for field in ("language", "layers", "bundle_schema", "profiles", "artifacts"):
             _require(field in bundle, f"{map_id}: missing required field {field!r}")
         _require(

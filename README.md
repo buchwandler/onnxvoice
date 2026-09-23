@@ -114,6 +114,19 @@ A local path or HTTP(S) URL is accepted.
 
 ## CLI
 
+### Pocket downloads
+
+Install `onnxvoice[pocket]` for direct Pocket use, or use `pocketsynth[cpu]` / `pocketsynth[gpu]`. Public ONNX bundle artifacts do not require login. Predefined voice states are separate and may require access to a gated repository plus standard Hugging Face authentication (`hf auth login` or `HF_TOKEN`).
+
+The diagnostic is local-only and never displays a token or checks gated access over the network:
+
+```bash
+onnxvoice doctor --system pocket
+onnxvoice --offline doctor --system pocket --format json
+```
+
+See [`docs/pocket-downloads.md`](docs/pocket-downloads.md) for setup, access, offline caching, and troubleshooting details.
+
 ### Inventory and discovery
 
 ```bash

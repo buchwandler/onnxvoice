@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,7 @@ from platformdirs import user_cache_path
 
 from .checksums import digest_file, verify_file
 from .errors import (
+    AssetDownloadError,
     AssetNotFoundError,
     IntegrityError,
     LockError,
@@ -23,6 +24,7 @@ from .errors import (
     OfflineError,
     UnsafePathError,
 )
+from .huggingface import HuggingFaceSource, download_huggingface_file
 from .types import (
     MANIFEST_SCHEMA_VERSION,
     Artifact,
@@ -553,7 +555,24 @@ class AssetStore:
         progress: ProgressCallback | None,
         target: str,
     ) -> tuple[Path, str]:
-        if not artifact.url:
+        source_metadata = artifact.metadata.get("source")
+        hf_source = None
+        if (
+            isinstance(source_metadata, Mapping)
+            and source_metadata.get("provider") == "huggingface"
+        ):
+            try:
+                hf_source = HuggingFaceSource(
+                    repository=source_metadata["repository"],
+                    revision=source_metadata["revision"],
+                    path=source_metadata["path"],
+                    gated=source_metadata.get("gated", False),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AssetDownloadError(
+                    f"Invalid Hugging Face source metadata for {artifact.filename!r}"
+                ) from exc
+        if not artifact.url and hf_source is None:
             raise AssetNotFoundError(f"Artifact {artifact.filename!r} has no URL")
         if artifact.sha256:
             known_blob = self._blob_path(artifact.sha256)
@@ -605,16 +624,26 @@ class AssetStore:
             ),
         )
         with tempfile.TemporaryDirectory(prefix="onnxvoice-download-") as temp_dir:
-            temp = Path(temp_dir) / Path(artifact.filename).name
-            self._download(
-                artifact.url,
-                temp,
-                ref=ref,
-                artifact=artifact.filename,
-                role=artifact.role,
-                target=target,
-                progress=progress,
-            )
+            if hf_source is not None:
+                if self.offline:
+                    raise OfflineError(
+                        f"Network access disabled while fetching {ref}:{artifact.filename}"
+                    )
+                temp = download_huggingface_file(
+                    hf_source, local_dir=Path(temp_dir), offline=self.offline
+                )
+            else:
+                assert artifact.url is not None
+                temp = Path(temp_dir) / Path(artifact.filename).name
+                self._download(
+                    artifact.url,
+                    temp,
+                    ref=ref,
+                    artifact=artifact.filename,
+                    role=artifact.role,
+                    target=target,
+                    progress=progress,
+                )
             self._emit(
                 progress,
                 AssetProgress(
