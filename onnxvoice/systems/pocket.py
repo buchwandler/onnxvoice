@@ -480,6 +480,26 @@ class PocketAdapter(SystemAdapter):
         return ()
 
     @staticmethod
+    def _input_ranks(session: Any) -> dict[str, int]:
+        specs = getattr(session, "input_specs", ())
+        if not isinstance(specs, (tuple, list)):
+            return {}
+        return {spec.name: len(spec.shape) for spec in specs}
+
+    @staticmethod
+    def _fit_rank(value: Any, rank: int) -> np.ndarray:
+        result = np.asarray(value, dtype=np.float32)
+        while result.ndim < rank:
+            result = np.expand_dims(result, axis=1)
+        while result.ndim > rank:
+            if result.shape[1] != 1:
+                raise RuntimeContractError(
+                    f"Cannot fit tensor shape {result.shape} to rank {rank}"
+                )
+            result = np.squeeze(result, axis=1)
+        return result
+
+    @staticmethod
     def _named_outputs(session: Any, outputs: Sequence[Any]) -> dict[str, np.ndarray]:
         names = PocketAdapter._names(session, "output_names")
         if len(names) != len(outputs):
@@ -974,6 +994,7 @@ class PocketAdapter(SystemAdapter):
         previous_latent: np.ndarray | None = None
         eos_detected = False
         post_eos = 0
+        flow_input_ranks = self._input_ranks(flow)
         empty_text = np.empty((1, 0, conditioning_dim), dtype=np.float32)
         for _ in range(max_frames):
             sequence = (
@@ -1000,12 +1021,13 @@ class PocketAdapter(SystemAdapter):
                 ("conditioning", "cond", "c", "latent"),
                 label="Flow-LM main conditioning",
             )
-            conditioning = np.asarray(non_state[conditioning_name], dtype=np.float32)
-            if conditioning.ndim == 2:
-                conditioning = conditioning[:, None, :]
-            x = np.random.standard_normal((1, 1, latent_dim)).astype(np.float32) * np.float32(
+            conditioning = self._fit_rank(
+                non_state[conditioning_name], flow_input_ranks.get("c", 3)
+            )
+            x = np.random.standard_normal((1, latent_dim)).astype(np.float32) * np.float32(
                 temperature
             )
+            x = self._fit_rank(x, flow_input_ranks.get("x", 3))
             for step in range(lsd_steps):
                 t = np.float32(1.0 - step / lsd_steps)
                 s = np.float32(1.0 - (step + 1) / lsd_steps)
@@ -1014,8 +1036,14 @@ class PocketAdapter(SystemAdapter):
                     flow.run(
                         {
                             "c": conditioning,
-                            "s": np.asarray([s], dtype=np.float32),
-                            "t": np.asarray([t], dtype=np.float32),
+                            "s": self._fit_rank(
+                                np.asarray([s], dtype=np.float32),
+                                flow_input_ranks.get("s", 1),
+                            ),
+                            "t": self._fit_rank(
+                                np.asarray([t], dtype=np.float32),
+                                flow_input_ranks.get("t", 1),
+                            ),
                             "x": x,
                         }
                     ),
@@ -1026,7 +1054,7 @@ class PocketAdapter(SystemAdapter):
                     label="flow velocity",
                 )
                 x = x + (t - s) * np.asarray(flow_outputs[velocity_name], dtype=np.float32)
-            latent = np.asarray(x, dtype=np.float32)
+            latent = self._fit_rank(x, 3)
             frames.append(latent)
             previous_latent = latent
             if eos_now:

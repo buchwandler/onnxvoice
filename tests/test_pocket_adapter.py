@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -704,6 +705,56 @@ def test_predefined_flow_state_uses_text_prefix_and_defensive_copy(tmp_path: Pat
     assert np.array_equal(main_inputs[1]["state_0"], [6.0])
     assert not np.shares_memory(main_state_inputs[0], imported_state)
     assert np.array_equal(voice_state.flow_state["state_0"], [5.0])
+
+
+def test_generate_latents_matches_rank_two_flow_inputs() -> None:
+    adapter = PocketAdapter(_make_installation())
+    main = MagicMock()
+    main.output_names = ("conditioning", "eos_logit")
+    main_inputs: list[dict[str, np.ndarray]] = []
+    main.run.side_effect = lambda inputs: (
+        main_inputs.append(inputs)
+        or [
+            np.ones((1, 4), dtype=np.float32),
+            np.zeros((1, 1), dtype=np.float32),
+        ]
+    )
+    flow = MagicMock()
+    flow.input_specs = tuple(
+        SimpleNamespace(name=name, shape=shape)
+        for name, shape in (
+            ("c", ("batch", 4)),
+            ("s", ("batch", 1)),
+            ("t", ("batch", 1)),
+            ("x", ("batch", 3)),
+        )
+    )
+    flow.output_names = ("flow_dir",)
+    flow_inputs: list[dict[str, np.ndarray]] = []
+    flow.run.side_effect = lambda inputs: (
+        flow_inputs.append(inputs) or [np.zeros((1, 3), dtype=np.float32)]
+    )
+
+    latents, eos_detected, frame_count = adapter._generate_latents(
+        main,
+        flow,
+        {},
+        temperature=0.7,
+        lsd_steps=1,
+        max_frames=2,
+        frames_after_eos=None,
+        latent_dim=3,
+        conditioning_dim=4,
+    )
+
+    assert latents.shape == (1, 2, 3)
+    assert not eos_detected
+    assert frame_count == 2
+    assert [inputs["x"].shape for inputs in flow_inputs] == [(1, 3), (1, 3)]
+    assert [inputs["c"].shape for inputs in flow_inputs] == [(1, 4), (1, 4)]
+    assert [inputs["s"].shape for inputs in flow_inputs] == [(1, 1), (1, 1)]
+    assert [inputs["t"].shape for inputs in flow_inputs] == [(1, 1), (1, 1)]
+    assert [inputs["sequence"].shape for inputs in main_inputs] == [(1, 1, 3)] * 2
 
 
 def _predefined_adapter(
