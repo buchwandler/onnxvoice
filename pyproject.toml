@@ -16,7 +16,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [{name = "onnxvoice contributors"}]
-keywords = ["onnx", "tts", "speech", "voice", "piper", "kokoro"]
+keywords = ["onnx", "tts", "speech", "voice", "piper", "kokoro", "pocket", "voice-selectors", "asset-cache"]
 dependencies = [
   "numpy>=1.23",
   "platformdirs>=4,<5",

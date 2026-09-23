@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import argparse
 import inspect
+import json
+from unittest.mock import patch
 
 import pytest
 
 from onnxvoice.catalog import parse_ref
 from onnxvoice.catalog_tools.voice_selectors import (
+    _parse_catalog_arg,
+    append_unassigned_registry_entries,
     check_registry_and_catalog,
     missing_registry_voices,
     unassigned_catalog_voices,
 )
+from onnxvoice.catalog_tools.voice_selectors import build_parser as build_selector_tool_parser
+from onnxvoice.catalog_tools.voice_selectors import main as selector_tools_main
 from onnxvoice.cli import _render_voice_records, build_parser
 from onnxvoice.errors import (
     VoiceSelectorError,
@@ -20,6 +27,7 @@ from onnxvoice.errors import (
 from onnxvoice.manager import OnnxVoice
 from onnxvoice.types import Artifact, CatalogItem, VoiceRecord
 from onnxvoice.voice_selectors import (
+    VOICE_ENGINE_CODES,
     VoiceSelectorRegistry,
     catalog_voice_keys,
     format_voice_selector,
@@ -28,6 +36,7 @@ from onnxvoice.voice_selectors import (
     load_voice_selector_registry,
     parse_voice_selector,
     resolve_voice_selector,
+    voice_selector_systems,
 )
 
 
@@ -47,7 +56,11 @@ def _entry(
 
 def _registry(*entries):
     return VoiceSelectorRegistry.from_data(
-        {"schema": 1, "engine_codes": {"kokoro": "ko", "piper": "pi"}, "entries": list(entries)}
+        {
+            "schema": 1,
+            "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
+            "entries": list(entries),
+        }
     )
 
 
@@ -58,6 +71,20 @@ def _piper_voice(voice_id: str, language: str = "de_DE") -> CatalogItem:
         kind="voice",
         artifacts=(Artifact("model", "voice.onnx"),),
         metadata={"language": {"code": language}, "gender": None},
+    )
+
+
+def _pocket_bundle(bundle_id: str, voices: tuple[str, ...], language: str = "en") -> CatalogItem:
+    return CatalogItem(
+        system="pocket",
+        id=bundle_id,
+        kind="bundle",
+        artifacts=(),
+        voices=voices,
+        metadata={
+            "language": language,
+            "voice_states": [{"name": voice} for voice in voices],
+        },
     )
 
 
@@ -147,6 +174,7 @@ def test_packaged_registry_contains_all_en_us_kokoro_assignments():
 
 
 def test_engine_codes_and_packaged_baseline():
+    assert voice_selector_systems() == ("kokoro", "piper", "pocket")
     assert resolve_voice_selector("de-ko-1").system == "kokoro"
     assert resolve_voice_selector("de-ko-1").canonical_key == ("kokoro", "de-anna", "df_anna")
     assert resolve_voice_selector("de-pi-1").canonical_key == (
@@ -155,6 +183,7 @@ def test_engine_codes_and_packaged_baseline():
         "de_DE-eva_k-x_low",
     )
     assert {identity.engine_code for identity in iter_voice_identities()} == {"ko", "pi"}
+    assert VOICE_ENGINE_CODES == {"kokoro": "ko", "piper": "pi", "pocket": "po"}
     assert load_voice_selector_registry().identities == iter_voice_identities()
 
 
@@ -276,6 +305,15 @@ def test_catalog_projection_reports_assigned_and_unassigned_voices():
     assert any(record.selector is None and record.voice_id == "new_voice" for record in projected)
     assert all(record.gender == "unknown" for record in projected)
 
+    assigned = next(record for record in projected if record.selector == "de-ko-1")
+    unassigned_record = next(
+        record for record in projected if record.selector is None and record.voice_id == "new_voice"
+    )
+    assert assigned.available and assigned.selector_available
+    assert unassigned_record.available
+    assert not unassigned_record.selector_available
+    assert unassigned_record.state == "unassigned"
+
 
 def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
     pocket = CatalogItem(
@@ -286,6 +324,134 @@ def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
         voices=("alba",),
     )
     assert catalog_voice_keys([pocket]) == ((pocket, "english_2026-04", "alba"),)
+
+
+def test_pocket_selector_identity_uses_permanent_engine_code_and_bundle():
+    registry = _registry(_entry("en_us", "po", 1, "pocket", "bundle-a", "alba"))
+    selector = format_voice_selector("en-US", "po", 1)
+    assert selector == "en_us-po-1"
+    assert parse_voice_selector(selector).selector == selector
+    identity = registry.resolve(selector)
+    assert identity.system == "pocket"
+    assert identity.asset_id == "bundle-a"
+    assert identity.voice_id == "alba"
+    assert identity.backing_ref == "pocket:bundle-a"
+
+
+def test_append_unassigned_pocket_entries_is_deterministic_and_append_only():
+    original = _entry("en", "po", 2, "pocket", "retired-bundle", "old", "retired")
+    registry_data = {
+        "schema": 1,
+        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
+        "entries": [original],
+    }
+    bundles = [
+        _pocket_bundle("bundle-b", ("alba",)),
+        _pocket_bundle("bundle-a", ("alba",)),
+    ]
+    updated, additions = append_unassigned_registry_entries(bundles, registry_data)
+
+    assert updated["entries"][0] == original
+    assert [entry["slot"] for entry in additions] == [3, 4]
+    assert [(entry["asset_id"], entry["voice_id"]) for entry in additions] == [
+        ("bundle-a", "alba"),
+        ("bundle-b", "alba"),
+    ]
+    registry = VoiceSelectorRegistry.from_data(updated)
+    assert registry.resolve("en-po-3").canonical_key == ("pocket", "bundle-a", "alba")
+    assert registry.resolve("en-po-4").canonical_key == ("pocket", "bundle-b", "alba")
+
+
+def test_append_unassigned_requires_one_language_and_explicit_pocket_state():
+    data = {
+        "schema": 1,
+        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
+        "entries": [],
+    }
+    ambiguous = CatalogItem(
+        system="pocket",
+        id="bundle-a",
+        kind="bundle",
+        artifacts=(),
+        voices=("alba",),
+        metadata={
+            "language_codes": ["en", "fr"],
+            "voice_states": [{"name": "alba"}],
+        },
+    )
+    with pytest.raises(ValueError, match="exactly one language"):
+        append_unassigned_registry_entries([ambiguous], data)
+
+    implicit = CatalogItem(
+        system="pocket",
+        id="bundle-b",
+        kind="bundle",
+        artifacts=(),
+        voices=("alba",),
+        metadata={"language": "en", "predefined_voice_names": ["alba"]},
+    )
+    with pytest.raises(ValueError, match="explicit voice_states"):
+        append_unassigned_registry_entries([implicit], data)
+
+    names_only = CatalogItem(
+        system="pocket",
+        id="bundle-c",
+        kind="bundle",
+        artifacts=(),
+        voices=(),
+        metadata={"language": "en", "predefined_voice_names": ["alba"]},
+    )
+    unchanged, additions = append_unassigned_registry_entries([names_only], data)
+    assert additions == ()
+    assert unchanged["entries"] == []
+
+
+def test_selector_maintenance_accepts_pocket_catalog_and_append_modes(tmp_path, capsys):
+    assert _parse_catalog_arg("pocket=/tmp/pocket.json") == ("pocket", "/tmp/pocket.json")
+    with pytest.raises(argparse.ArgumentTypeError):
+        _parse_catalog_arg("unknown=/tmp/catalog.json")
+    args = build_selector_tool_parser().parse_args(
+        ["--catalog", "pocket=/tmp/pocket.json", "--append-unassigned"]
+    )
+    assert args.catalog == [("pocket", "/tmp/pocket.json")]
+    assert args.append_unassigned
+
+    registry_path = tmp_path / "registry.json"
+    data = {
+        "schema": 1,
+        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
+        "entries": [],
+    }
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
+    bundle = _pocket_bundle("bundle-a", ("alba",), "en-US")
+    args = [
+        "--registry",
+        str(registry_path),
+        "--catalog",
+        "pocket=/tmp/pocket.json",
+        "--append-unassigned",
+        "--json",
+    ]
+    with patch(
+        "onnxvoice.catalog_tools.voice_selectors._load_catalog_items",
+        return_value=[bundle],
+    ):
+        assert selector_tools_main(args) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["added"][0]["slot"] == 1
+    assert json.loads(registry_path.read_text(encoding="utf-8"))["entries"] == []
+
+    with patch(
+        "onnxvoice.catalog_tools.voice_selectors._load_catalog_items",
+        return_value=[bundle],
+    ):
+        assert selector_tools_main([*args, "--apply"]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["applied"] is True
+    assert (
+        json.loads(registry_path.read_text(encoding="utf-8"))["entries"][0]["asset_id"]
+        == "bundle-a"
+    )
 
 
 def test_current_en_us_kokoro_catalog_has_no_unassigned_voices():
@@ -320,6 +486,9 @@ def test_cli_parser_and_json_projection():
     assert args.voices_command == "list"
     assert args.system == "piper"
     assert args.format == "json"
+    for system in voice_selector_systems():
+        system_args = build_parser().parse_args(["voices", "list", "--system", system])
+        assert system_args.system == system
     assert build_parser().parse_args(["voices", "show", "de-ko-1"]).selector == "de-ko-1"
 
 
@@ -332,6 +501,33 @@ def test_voice_records_render_identity_fields(capsys):
     output = capsys.readouterr().out
     assert '"selector": "de-ko-1"' in output
     assert '"backing_ref": "kokoro:de-anna"' in output
+
+
+def test_unassigned_voice_render_separates_catalog_and_selector_state(capsys):
+    item = CatalogItem(
+        system="pocket",
+        id="bundle-a",
+        kind="bundle",
+        artifacts=(),
+        voices=("alba",),
+    )
+    record = VoiceRecord(
+        identity=None,
+        available=True,
+        catalog_item=item,
+        languages=("en",),
+        catalog_voice_id="alba",
+    )
+
+    for output_format in ("table", "plain", "json", "tsv"):
+        _render_voice_records([record], output_format)
+        output = capsys.readouterr().out
+        assert "unassigned" in output
+        if output_format == "json":
+            payload = json.loads(output)["items"][0]
+            assert payload["available"] is True
+            assert payload["selector_available"] is False
+            assert payload["state"] == "unassigned"
 
 
 def test_selector_module_has_no_onnx_runtime_dependency():

@@ -17,6 +17,7 @@ from .catalog_tools.piper import (
 from .manager import OnnxVoice
 from .systems import registered_systems
 from .validation import verify_installation
+from .voice_selectors import voice_selector_systems
 
 
 def _manager(args: argparse.Namespace) -> OnnxVoice:
@@ -78,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     voices_list_parser = voices_sub.add_parser(
         "list", help="List catalog voices with stable selectors"
     )
-    voices_list_parser.add_argument("--system", choices=["kokoro", "piper"])
+    voices_list_parser.add_argument("--system", choices=voice_selector_systems())
     voices_list_parser.add_argument("--lang", "--language", dest="language")
     voices_list_parser.add_argument("--refresh", action="store_true")
     voices_list_parser.add_argument("--include-retired", action="store_true")
@@ -266,6 +267,7 @@ def _voice_payload(record) -> dict[str, Any]:
         "backing_ref": backing_ref,
         "state": record.state,
         "available": record.available,
+        "selector_available": record.selector_available,
         "languages": list(record.languages),
         "gender": record.gender,
     }
@@ -275,7 +277,7 @@ def _render_voice_records(records, output_format: str) -> None:
     columns = ["SELECTOR", "SYSTEM", "ASSET", "VOICE", "LANG", "STATUS"]
     rows = []
     for record in records:
-        status = "available" if record.available else record.state
+        status = record.state
         rows.append(
             [
                 record.selector or "-",
@@ -361,6 +363,7 @@ def _cmd_voices_show(args: argparse.Namespace) -> int:
             "slot",
             "state",
             "available",
+            "selector_available",
         ):
             print(f"{key.replace('_', ' ').title():16} {payload[key]}")
     return 0
@@ -755,9 +758,17 @@ def _cmd_remove(args: argparse.Namespace) -> int:
     gc_bytes = 0
     if args.gc:
         gc_report = manager.store.gc()
-        gc_bytes = gc_report.removed_bytes
-        if gc_report.removed_blobs > 0:
-            print(f"GC: removed {gc_report.removed_blobs} orphan blobs ({format_bytes(gc_bytes)})")
+        gc_bytes = gc_report.removed_bytes + gc_report.removed_auxiliary_bytes
+        if gc_report.removed_blobs:
+            print(
+                f"GC: removed {gc_report.removed_blobs} orphan blobs "
+                f"({format_bytes(gc_report.removed_bytes)})"
+            )
+        if gc_report.removed_auxiliary_count:
+            print(
+                f"GC: removed {gc_report.removed_auxiliary_count} Pocket voice states "
+                f"({format_bytes(gc_report.removed_auxiliary_bytes)})"
+            )
 
     summary_parts = [
         f"Removed {removed_count} installation(s) ({format_bytes(total_logical_bytes)})"
@@ -787,6 +798,11 @@ def _cmd_cache_info(args: argparse.Namespace) -> int:
             "unique_file_bytes": usage.unique_file_bytes,
             "orphan_blob_count": usage.orphan_blob_count,
             "orphan_blob_bytes": usage.orphan_blob_bytes,
+            "auxiliary_bytes": usage.auxiliary_bytes,
+            "pocket_voice_state_count": usage.pocket_voice_state_count,
+            "pocket_voice_state_bytes": usage.pocket_voice_state_bytes,
+            "orphan_auxiliary_count": usage.orphan_auxiliary_count,
+            "orphan_auxiliary_bytes": usage.orphan_auxiliary_bytes,
         }
         print(json_mod.dumps(data, indent=2, sort_keys=True))
     else:
@@ -798,6 +814,15 @@ def _cmd_cache_info(args: argparse.Namespace) -> int:
         print(f"Unique cache files    {format_bytes(usage.unique_file_bytes)}")
         print(f"Orphan blobs          {usage.orphan_blob_count}")
         print(f"Reclaimable blobs     {format_bytes(usage.orphan_blob_bytes)}")
+        print(f"Auxiliary cache      {format_bytes(usage.auxiliary_bytes)}")
+        print(
+            f"Pocket voice states  {usage.pocket_voice_state_count} "
+            f"({format_bytes(usage.pocket_voice_state_bytes)})"
+        )
+        print(
+            f"Reclaimable Pocket   {usage.orphan_auxiliary_count} "
+            f"({format_bytes(usage.orphan_auxiliary_bytes)})"
+        )
     return 0
 
 
@@ -808,19 +833,32 @@ def _cmd_cache_gc(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         usage = manager.store.usage()
-        if usage.orphan_blob_count == 0:
-            print("No orphan blobs to remove.")
+        if usage.orphan_blob_count == 0 and usage.orphan_auxiliary_count == 0:
+            print("No orphan cache files to remove.")
         else:
-            print(
-                f"Would remove {usage.orphan_blob_count} blobs ({format_bytes(usage.orphan_blob_bytes)})"
-            )
+            if usage.orphan_blob_count:
+                print(
+                    f"Would remove {usage.orphan_blob_count} blobs "
+                    f"({format_bytes(usage.orphan_blob_bytes)})"
+                )
+            if usage.orphan_auxiliary_count:
+                print(
+                    f"Would remove {usage.orphan_auxiliary_count} Pocket voice states "
+                    f"({format_bytes(usage.orphan_auxiliary_bytes)})"
+                )
         return 0
 
     report = manager.store.gc()
-    if report.removed_blobs == 0:
-        print("No orphan blobs to remove.")
+    if report.removed_blobs == 0 and report.removed_auxiliary_count == 0:
+        print("No orphan cache files to remove.")
     else:
-        print(f"Removed {report.removed_blobs} blobs ({format_bytes(report.removed_bytes)})")
+        if report.removed_blobs:
+            print(f"Removed {report.removed_blobs} blobs ({format_bytes(report.removed_bytes)})")
+        if report.removed_auxiliary_count:
+            print(
+                f"Removed {report.removed_auxiliary_count} Pocket voice states "
+                f"({format_bytes(report.removed_auxiliary_bytes)})"
+            )
     return 0
 
 

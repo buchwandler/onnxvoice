@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 
 import pytest
@@ -72,6 +73,82 @@ def test_remove_then_gc(tmp_path):
     store.remove("test", "one")
     report = store.gc()
     assert report.removed_blobs == 1
+
+
+def test_pocket_state_gc_respects_references_from_all_installed_variants(tmp_path):
+    state_payload = b"pinned voice state"
+    state_sha = hashlib.sha256(state_payload).hexdigest()
+    source_record = {
+        "name": "alba",
+        "source": {
+            "provider": "huggingface",
+            "repository": "kyutai/pocket-tts",
+            "revision": "d" * 40,
+            "path": "languages/english_2026-04/embeddings/alba.safetensors",
+        },
+        "size": len(state_payload),
+        "sha256": state_sha,
+    }
+    bundle_payload = b"bundle metadata"
+    bundle_file = tmp_path / "bundle.json"
+    bundle_file.write_bytes(bundle_payload)
+    bundle_artifact = Artifact(
+        "bundle_metadata",
+        "bundle.json",
+        bundle_file.as_uri(),
+        len(bundle_payload),
+        hashlib.sha256(bundle_payload).hexdigest(),
+    )
+    store = AssetStore(tmp_path / "cache")
+
+    def item(cache_id: str) -> CatalogItem:
+        return CatalogItem(
+            system="pocket",
+            id="english_2026-04",
+            kind="bundle",
+            artifacts=(bundle_artifact,),
+            metadata={
+                "cache_id": cache_id,
+                "canonical_catalog": True,
+                "predefined_voice_names": ["alba"],
+                "voice_states": [source_record],
+            },
+        )
+
+    store.install(item("english-profile-a"))
+    store.install(item("english-profile-b"))
+    key = {
+        "system": "pocket",
+        "asset_kind": "predefined_voice_state",
+        "model_repo": "kyutai/pocket-tts",
+        "model_revision": "d" * 40,
+        "asset_path": "languages/english_2026-04/embeddings/alba.safetensors",
+        "bundle_id": "english_2026-04",
+        "voice_name": "alba",
+        "expected_size": len(state_payload),
+        "expected_sha256": state_sha,
+    }
+    digest = hashlib.sha256(
+        json.dumps(key, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    cache_dir = store.root / "pocket-voice-states" / digest[:2] / digest
+    cache_dir.mkdir(parents=True)
+    state_path = cache_dir / "alba.safetensors"
+    state_path.write_bytes(state_payload)
+    (cache_dir / "alba.json").write_text(
+        json.dumps({"key": key, "size": len(state_payload), "sha256": state_sha}),
+        encoding="utf-8",
+    )
+
+    assert store.gc().removed_auxiliary_count == 0
+    store.remove("pocket", "english-profile-a")
+    assert store.gc().removed_auxiliary_count == 0
+    store.remove("pocket", "english-profile-b")
+    report = store.gc()
+    assert report.removed_auxiliary_count == 1
+    assert report.removed_bytes == len(bundle_payload)
+    assert report.removed_auxiliary_bytes >= len(state_payload)
+    assert not state_path.exists()
 
 
 def test_install_falls_back_to_copy_when_os_link_is_unavailable(tmp_path, monkeypatch):

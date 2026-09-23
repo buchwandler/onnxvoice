@@ -175,10 +175,10 @@ class CatalogItem:
 
 @dataclass(frozen=True, slots=True)
 class VoiceRecord:
-    """A stable selector identity projected onto current catalog state."""
+    """A catalog voice joined to its optional stable selector identity."""
 
     identity: VoiceIdentity | None
-    available: bool
+    available: bool  # current catalog presence; selector availability is separate
     catalog_item: CatalogItem | None
     languages: tuple[str, ...] = ()
     gender: str = "unknown"
@@ -213,6 +213,11 @@ class VoiceRecord:
     @property
     def state(self) -> str:
         return self.identity.state if self.identity is not None else "unassigned"
+
+    @property
+    def selector_available(self) -> bool:
+        """Whether the record has an active selector assignment in the catalog."""
+        return self.identity is not None and self.identity.state == "active" and self.available
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +398,12 @@ class CacheUsage:
     orphan_blob_count: int
     orphan_blob_bytes: int
 
+    auxiliary_bytes: int = 0
+    pocket_voice_state_count: int = 0
+    pocket_voice_state_bytes: int = 0
+    orphan_auxiliary_count: int = 0
+    orphan_auxiliary_bytes: int = 0
+
 
 @dataclass(frozen=True, slots=True)
 class GcReport:
@@ -400,6 +411,8 @@ class GcReport:
 
     removed_blobs: int
     removed_bytes: int
+    removed_auxiliary_count: int = 0
+    removed_auxiliary_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)

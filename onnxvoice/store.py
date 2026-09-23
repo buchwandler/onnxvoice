@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import time
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -367,27 +367,206 @@ class AssetStore:
                 raise IntegrityError(f"Missing installed artifact: {path}")
             verify_file(path, expected_size=artifact.size, sha256=artifact.sha256)
 
-    def gc(self) -> GcReport:
-        """Remove blobs no longer referenced by any install manifest.
+    def _pocket_voice_state_references(
+        self, installations: Sequence[Installation]
+    ) -> dict[tuple[str, str, str, str, str], set[tuple[int | None, str | None]]]:
+        references: dict[tuple[str, str, str, str, str], set[tuple[int | None, str | None]]] = {}
 
-        Returns a GcReport with count and bytes of removed blobs.
-        """
+        def add_reference(
+            bundle_id: str,
+            voice_name: str,
+            repository: str,
+            revision: str,
+            path: str,
+            size: int | None,
+            sha256: str | None,
+        ) -> None:
+            identity = (bundle_id, voice_name, repository, revision, path)
+            references.setdefault(identity, set()).add((size, sha256))
+
+        for installation in installations:
+            if installation.system != "pocket":
+                continue
+            bundle_id = installation.metadata.get("bundle_name")
+            if not isinstance(bundle_id, str) or not bundle_id:
+                bundle_id = installation.id
+            explicit_names: set[str] = set()
+            states = installation.metadata.get("voice_states")
+            if isinstance(states, Sequence) and not isinstance(states, (str, bytes, Mapping)):
+                for state in states:
+                    if not isinstance(state, Mapping):
+                        continue
+                    name = state.get("name")
+                    source = state.get("source")
+                    if not isinstance(name, str) or not isinstance(source, Mapping):
+                        continue
+                    repository = source.get("repository")
+                    revision = source.get("revision")
+                    path = source.get("path")
+                    if not isinstance(repository, str) or not repository:
+                        continue
+                    if not isinstance(revision, str) or not revision:
+                        continue
+                    if not isinstance(path, str) or not path:
+                        continue
+                    size = state.get("size")
+                    sha256 = state.get("sha256")
+                    add_reference(
+                        bundle_id,
+                        name,
+                        repository,
+                        revision,
+                        path,
+                        size if type(size) is int and size > 0 else None,
+                        sha256 if isinstance(sha256, str) else None,
+                    )
+                    explicit_names.add(name)
+
+            names: set[str] = set()
+            for field in ("predefined_voice_names", "predefined_voices"):
+                raw_names = installation.metadata.get(field)
+                if isinstance(raw_names, Sequence) and not isinstance(
+                    raw_names, (str, bytes, Mapping)
+                ):
+                    names.update(name for name in raw_names if isinstance(name, str))
+            if names - explicit_names:
+                from .systems.pocket import (
+                    PREDEFINED_VOICE_REPOSITORY,
+                    PREDEFINED_VOICE_REVISION,
+                )
+
+                for name in names - explicit_names:
+                    add_reference(
+                        bundle_id,
+                        name,
+                        PREDEFINED_VOICE_REPOSITORY,
+                        PREDEFINED_VOICE_REVISION,
+                        f"languages/{bundle_id}/embeddings/{name}.safetensors",
+                        None,
+                        None,
+                    )
+        return references
+
+    @staticmethod
+    def _pocket_voice_state_key(
+        key: Mapping[str, Any],
+    ) -> tuple[tuple[str, str, str, str, str], tuple[int | None, str | None] | None] | None:
+        bundle_id = key.get("bundle_id")
+        voice_name = key.get("voice_name")
+        repository = key.get("model_repo")
+        revision = key.get("model_revision")
+        asset_path = key.get("asset_path")
+        if (
+            key.get("system") != "pocket"
+            or key.get("asset_kind") != "predefined_voice_state"
+            or not isinstance(bundle_id, str)
+            or not bundle_id
+            or not isinstance(voice_name, str)
+            or not voice_name
+            or not isinstance(repository, str)
+            or not repository
+            or not isinstance(revision, str)
+            or not revision
+            or not isinstance(asset_path, str)
+            or not asset_path
+        ):
+            return None
+        identity = (bundle_id, voice_name, repository, revision, asset_path)
+        has_expected_size = "expected_size" in key
+        has_expected_sha = "expected_sha256" in key
+        if has_expected_size != has_expected_sha:
+            return None
+        if not has_expected_size:
+            expected = None
+        else:
+            size = key.get("expected_size")
+            sha256 = key.get("expected_sha256")
+            if type(size) is not int or size <= 0 or not isinstance(sha256, str):
+                return None
+            expected = (size, sha256)
+        return identity, expected
+
+    @staticmethod
+    def _pocket_voice_state_is_referenced(
+        record: Mapping[str, Any],
+        parsed_key: tuple[
+            tuple[str, str, str, str, str],
+            tuple[int | None, str | None] | None,
+        ],
+        references: dict[
+            tuple[str, str, str, str, str],
+            set[tuple[int | None, str | None]],
+        ],
+    ) -> bool:
+        identity, expected = parsed_key
+        matching_references = references.get(identity, set())
+        if expected is not None:
+            return expected in matching_references
+        size = record.get("size")
+        sha256 = record.get("sha256")
+        return any(
+            pinned_size is None
+            and pinned_sha is None
+            or (pinned_size, pinned_sha) == (size, sha256)
+            for pinned_size, pinned_sha in matching_references
+        )
+
+    def gc(self) -> GcReport:
+        """Remove unreferenced blobs and Pocket voice-state cache records."""
         from .types import GcReport
 
         with FileLock(self._gc_lock_path()):
-            referenced = {
+            installations = self.installed()
+            referenced_blobs = {
                 artifact.sha256
-                for installation in self.installed()
+                for installation in installations
                 for artifact in installation.artifacts
             }
-            removed_count = 0
-            removed_bytes = 0
+            removed_blobs = 0
+            removed_blob_bytes = 0
             for blob in self.blobs.glob("*/*"):
-                if blob.is_file() and blob.name not in referenced:
-                    removed_bytes += blob.stat().st_size
+                if blob.is_file() and blob.name not in referenced_blobs:
+                    removed_blob_bytes += blob.stat().st_size
                     blob.unlink()
-                    removed_count += 1
-            return GcReport(removed_blobs=removed_count, removed_bytes=removed_bytes)
+                    removed_blobs += 1
+
+            state_root = self.root / "pocket-voice-states"
+            state_references = self._pocket_voice_state_references(installations)
+            removed_auxiliary = 0
+            removed_auxiliary_bytes = 0
+            for metadata_path in sorted(state_root.glob("*/*/*.json")):
+                cache_dir = metadata_path.parent
+                lock_path = state_root / "locks" / f"{cache_dir.name}.lock"
+                with FileLock(lock_path):
+                    if not metadata_path.is_file():
+                        continue
+                    try:
+                        record = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
+                        continue
+                    parsed_key = self._pocket_voice_state_key(record["key"])
+                    if parsed_key is None:
+                        continue
+                    if self._pocket_voice_state_is_referenced(record, parsed_key, state_references):
+                        continue
+                    state_path = metadata_path.with_suffix(".safetensors")
+                    for cached_path in (state_path, metadata_path):
+                        if cached_path.is_file():
+                            removed_auxiliary_bytes += cached_path.stat().st_size
+                            cached_path.unlink()
+                    removed_auxiliary += 1
+                    with suppress(OSError):
+                        cache_dir.rmdir()
+                        cache_dir.parent.rmdir()
+
+            return GcReport(
+                removed_blobs=removed_blobs,
+                removed_bytes=removed_blob_bytes,
+                removed_auxiliary_count=removed_auxiliary,
+                removed_auxiliary_bytes=removed_auxiliary_bytes,
+            )
 
     def usage(self) -> CacheUsage:
         """Compute cache storage usage statistics.
@@ -438,6 +617,48 @@ class AssetStore:
                         seen_inodes.add(inode_key)
                         unique_bytes += st.st_size
 
+        state_root = self.root / "pocket-voice-states"
+        auxiliary_bytes = 0
+        pocket_state_count = 0
+        pocket_state_bytes = 0
+        orphan_auxiliary_count = 0
+        orphan_auxiliary_bytes = 0
+        state_references = self._pocket_voice_state_references(installations)
+        if state_root.is_dir():
+            for cached_file in sorted(state_root.rglob("*")):
+                if (
+                    not cached_file.is_file()
+                    or "locks" in cached_file.relative_to(state_root).parts
+                ):
+                    continue
+                stat = cached_file.stat()
+                auxiliary_bytes += stat.st_size
+                inode_key = (stat.st_dev, stat.st_ino)
+                if inode_key not in seen_inodes:
+                    seen_inodes.add(inode_key)
+                    unique_bytes += stat.st_size
+
+            for metadata_path in sorted(state_root.glob("*/*/*.json")):
+                try:
+                    record = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
+                    continue
+                parsed_key = self._pocket_voice_state_key(record["key"])
+                if parsed_key is None:
+                    continue
+                state_path = metadata_path.with_suffix(".safetensors")
+                state_size = 0
+                if state_path.is_file():
+                    pocket_state_count += 1
+                    state_size = state_path.stat().st_size
+                    pocket_state_bytes += state_size
+                record_size = state_size + metadata_path.stat().st_size
+                if not self._pocket_voice_state_is_referenced(record, parsed_key, state_references):
+                    orphan_auxiliary_count += 1
+                    orphan_auxiliary_bytes += record_size
+
         # Orphan blobs
         referenced = {artifact.sha256 for inst in installations for artifact in inst.artifacts}
         orphan_count = 0
@@ -457,6 +678,11 @@ class AssetStore:
             unique_file_bytes=unique_bytes,
             orphan_blob_count=orphan_count,
             orphan_blob_bytes=orphan_bytes,
+            auxiliary_bytes=auxiliary_bytes,
+            pocket_voice_state_count=pocket_state_count,
+            pocket_voice_state_bytes=pocket_state_bytes,
+            orphan_auxiliary_count=orphan_auxiliary_count,
+            orphan_auxiliary_bytes=orphan_auxiliary_bytes,
         )
 
     def replace(

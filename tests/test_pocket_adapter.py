@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Event
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -831,6 +834,55 @@ def _predefined_model_tensors() -> dict[str, np.ndarray]:
     }
 
 
+def _explicit_voice_state_record(payload: bytes) -> dict[str, Any]:
+    return {
+        "name": "alba",
+        "compatible_bundle": "english_2026-04",
+        "source": {
+            "provider": "huggingface",
+            "repository": "kyutai/pocket-tts",
+            "revision": "d" * 40,
+            "path": "languages/english_2026-04/embeddings/alba.safetensors",
+        },
+        "access": {"gated": True, "distributable": False, "license": "cc-by-4.0"},
+        "format": "safetensors",
+        "size": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "url": None,
+        "resolver": "huggingface",
+    }
+
+
+def _write_legacy_voice_state_cache(cache_dir: Path, payload: bytes) -> Path:
+    key = {
+        "system": "pocket",
+        "asset_kind": "predefined_voice_state",
+        "model_repo": "kyutai/pocket-tts",
+        "model_revision": "d" * 40,
+        "asset_path": "languages/english_2026-04/embeddings/alba.safetensors",
+        "bundle_id": "english_2026-04",
+        "voice_name": "alba",
+    }
+    digest = hashlib.sha256(
+        json.dumps(key, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    record_dir = cache_dir / digest[:2] / digest
+    record_dir.mkdir(parents=True)
+    state_path = record_dir / "alba.safetensors"
+    state_path.write_bytes(payload)
+    (record_dir / "alba.json").write_text(
+        json.dumps(
+            {
+                "key": key,
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
 def test_predefined_voice_download_uses_pinned_bundle_asset_and_runtime_cache(
     tmp_path: Path,
 ) -> None:
@@ -887,7 +939,8 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
     tmp_path: Path,
 ) -> None:
     remote_file = tmp_path / "voice.safetensors"
-    remote_file.write_bytes(b"fake safetensors payload")
+    payload = b"fake safetensors payload"
+    remote_file.write_bytes(payload)
     adapter = _predefined_adapter(tmp_path)
     source_record = {
         "name": "alba",
@@ -900,8 +953,8 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
         },
         "access": {"gated": True, "distributable": False, "license": "cc-by-4.0"},
         "format": "safetensors",
-        "size": 123,
-        "sha256": "a" * 64,
+        "size": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
         "url": None,
         "resolver": "huggingface",
     }
@@ -923,8 +976,104 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
     assert source.revision == "d" * 40
     assert source.path == source_record["source"]["path"]
     assert source.gated is True
+    cached_record = json.loads(
+        next(adapter._voice_cache_dir.rglob("alba.json")).read_text(encoding="utf-8")
+    )
+    assert cached_record["key"]["expected_size"] == len(payload)
+    assert cached_record["key"]["expected_sha256"] == hashlib.sha256(payload).hexdigest()
     assert state.metadata["model_repo"] == "kyutai/pocket-tts"
     assert state.metadata["model_revision"] == "d" * 40
+
+
+def test_pinned_explicit_voice_reuses_legacy_cache_offline(tmp_path: Path) -> None:
+    payload = b"cached pinned state"
+    cache_dir = tmp_path / "voice-cache"
+    legacy_state = _write_legacy_voice_state_cache(cache_dir, payload)
+    adapter = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
+    adapter.installation.metadata["voice_states"] = [_explicit_voice_state_record(payload)]
+
+    with (
+        patch("onnxvoice.systems.pocket.download_huggingface_file") as download,
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value=_predefined_model_tensors(),
+        ),
+    ):
+        state = adapter.prepare_predefined_voice("alba")
+
+    download.assert_not_called()
+    assert state.metadata["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert legacy_state.is_file()
+
+
+def test_stale_legacy_voice_state_is_not_reused_for_changed_integrity_pin(
+    tmp_path: Path,
+) -> None:
+    old_payload = b"old pinned state"
+    new_payload = b"new pinned state with different size"
+    cache_dir = tmp_path / "voice-cache"
+    _write_legacy_voice_state_cache(cache_dir, old_payload)
+    adapter = _predefined_adapter(tmp_path, cache_dir=cache_dir)
+    adapter.installation.metadata["voice_states"] = [_explicit_voice_state_record(new_payload)]
+    remote_file = tmp_path / "new-state.safetensors"
+    remote_file.write_bytes(new_payload)
+
+    with (
+        patch(
+            "onnxvoice.systems.pocket.download_huggingface_file",
+            return_value=remote_file,
+        ) as download,
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value=_predefined_model_tensors(),
+        ),
+    ):
+        state = adapter.prepare_predefined_voice("alba")
+
+    download.assert_called_once()
+    assert state.metadata["sha256"] == hashlib.sha256(new_payload).hexdigest()
+
+
+def test_concurrent_predefined_voice_requests_share_one_atomic_download(tmp_path: Path) -> None:
+    source = tmp_path / "download.safetensors"
+    source.write_bytes(b"concurrent voice state")
+    cache_dir = tmp_path / "voice-cache"
+    adapters = [
+        _predefined_adapter(tmp_path, cache_dir=cache_dir),
+        _predefined_adapter(tmp_path, cache_dir=cache_dir),
+    ]
+    ready = Barrier(2)
+    download_started = Event()
+    finish_download = Event()
+
+    def download(*args, **kwargs):
+        download_started.set()
+        assert finish_download.wait(timeout=5)
+        return source
+
+    def prepare(adapter):
+        ready.wait(timeout=5)
+        return adapter.prepare_predefined_voice("alba")
+
+    with (
+        patch(
+            "onnxvoice.systems.pocket.download_huggingface_file",
+            side_effect=download,
+        ) as download_mock,
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value=_predefined_model_tensors(),
+        ) as load,
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        futures = [executor.submit(prepare, adapter) for adapter in adapters]
+        assert download_started.wait(timeout=5)
+        finish_download.set()
+        states = [future.result(timeout=5) for future in futures]
+
+    download_mock.assert_called_once()
+    assert len(states) == 2
+    assert load.call_count == 2
 
 
 def test_predefined_voice_uses_persistent_cache_offline(

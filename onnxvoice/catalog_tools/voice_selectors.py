@@ -4,19 +4,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from ..catalog import CatalogClient
+from ..inventory import language_codes_from_metadata
 from ..types import CatalogItem
 from ..voice_selectors import (
     VoiceSelectorRegistry,
     catalog_voice_keys,
+    format_voice_selector,
     get_voice_selector_registry,
     load_voice_selector_registry,
+    parse_voice_selector,
     selector_for_voice,
+    voice_selector_systems,
 )
 
 
@@ -58,6 +64,75 @@ def missing_registry_voices(
     )
 
 
+def append_unassigned_registry_entries(
+    items: Iterable[CatalogItem], registry_data: Mapping[str, Any]
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    """Build an append-only registry update for unassigned catalog voices."""
+    registry = VoiceSelectorRegistry.from_data(registry_data)
+    pending: dict[tuple[str, str, str], tuple[str, str, CatalogItem]] = {}
+    for item, asset_id, voice_id in unassigned_catalog_voices(items, registry=registry):
+        if item.system == "pocket":
+            states = item.metadata.get("voice_states")
+            if not isinstance(states, (list, tuple)) or not any(
+                isinstance(state, Mapping) and state.get("name") == voice_id for state in states
+            ):
+                raise ValueError(
+                    f"Pocket voice {asset_id}:{voice_id} has no explicit voice_states record"
+                )
+        languages = language_codes_from_metadata(item.metadata)
+        if len(languages) != 1:
+            raise ValueError(
+                f"{item.system}:{asset_id}:{voice_id} needs exactly one language in catalog metadata"
+            )
+        try:
+            engine_code = registry.engine_codes[item.system]
+        except KeyError as exc:
+            raise ValueError(f"selector registry has no engine code for {item.system!r}") from exc
+        language = parse_voice_selector(
+            format_voice_selector(languages[0], engine_code, 1)
+        ).language
+        key = (item.system, asset_id, voice_id)
+        candidate = (language, engine_code, item)
+        previous = pending.get(key)
+        if previous is not None and previous[:2] != candidate[:2]:
+            raise ValueError(f"ambiguous language metadata for {item.system}:{asset_id}:{voice_id}")
+        pending[key] = candidate
+
+    next_slots = {
+        (identity.language, identity.engine_code): identity.slot for identity in registry.identities
+    }
+    for identity in registry.identities:
+        slot_key = (identity.language, identity.engine_code)
+        next_slots[slot_key] = max(next_slots[slot_key], identity.slot)
+
+    ordered = sorted(
+        (
+            (language, engine_code, key[1], key[2], key[0])
+            for key, (language, engine_code, _item) in pending.items()
+        ),
+    )
+    additions: list[dict[str, Any]] = []
+    for language, engine_code, asset_id, voice_id, system in ordered:
+        slot_key = (language, engine_code)
+        slot = next_slots.get(slot_key, 0) + 1
+        next_slots[slot_key] = slot
+        additions.append(
+            {
+                "language": language,
+                "engine_code": engine_code,
+                "slot": slot,
+                "system": system,
+                "asset_id": asset_id,
+                "voice_id": voice_id,
+                "state": "active",
+            }
+        )
+
+    updated = {**registry_data, "entries": [*registry_data["entries"], *additions]}
+    VoiceSelectorRegistry.from_data(updated)
+    return updated, tuple(additions)
+
+
 def check_registry_and_catalog(
     items: Iterable[CatalogItem] = (),
     *,
@@ -85,8 +160,11 @@ def _parse_catalog_arg(value: str) -> tuple[str, str]:
     if "=" not in value:
         raise argparse.ArgumentTypeError("catalog must use SYSTEM=PATH")
     system, path = value.split("=", 1)
-    if system not in {"kokoro", "piper"} or not path:
-        raise argparse.ArgumentTypeError("catalog must use kokoro=PATH or piper=PATH")
+    supported = voice_selector_systems()
+    if system not in supported or not path:
+        raise argparse.ArgumentTypeError(
+            f"catalog must use SYSTEM=PATH where SYSTEM is one of: {', '.join(supported)}"
+        )
     return system, path
 
 
@@ -103,6 +181,39 @@ def _load_catalog_items(sources: list[tuple[str, str]]) -> list[CatalogItem]:
         for system, _ in sources:
             items.extend(client.list(system))
         return items
+
+
+def _read_registry_data(path: Path | None) -> dict[str, Any]:
+    try:
+        if path is None:
+            raw = (
+                resources.files("onnxvoice")
+                .joinpath("data/voice_selectors.json")
+                .read_text(encoding="utf-8")
+            )
+        else:
+            raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("cannot read selector registry") from exc
+    if not isinstance(data, dict):
+        raise ValueError("selector registry must be a JSON object")
+    return data
+
+
+def _write_registry(path: Path, data: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent, text=True
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, indent=2)
+            stream.write("\n")
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _voice_payload(
@@ -130,15 +241,63 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--list-unassigned", action="store_true")
+    parser.add_argument("--append-unassigned", action="store_true")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write append-unassigned results to the explicit --registry file (preview is default)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    if not args.check and not args.list_unassigned:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.apply and not args.append_unassigned:
+        parser.error("--apply requires --append-unassigned")
+    if args.apply and args.registry is None:
+        parser.error("--apply requires an explicit --registry path")
+    if not args.check and not args.list_unassigned and not args.append_unassigned:
         args.check = True
-    registry = load_voice_selector_registry(args.registry)
+    if args.append_unassigned:
+        registry_data = _read_registry_data(args.registry)
+        registry = VoiceSelectorRegistry.from_data(registry_data)
+    else:
+        registry_data = None
+        registry = load_voice_selector_registry(args.registry)
     items = _load_catalog_items(args.catalog)
+    if args.append_unassigned:
+        assert registry_data is not None
+        updated, additions = append_unassigned_registry_entries(items, registry_data)
+        if args.apply and additions:
+            assert args.registry is not None
+            _write_registry(args.registry, updated)
+        if args.as_json:
+            print(
+                json.dumps(
+                    {
+                        "added": list(additions),
+                        "applied": bool(args.apply and additions),
+                        "registry": str(args.registry) if args.apply else None,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        elif not additions:
+            print("no unassigned catalog voices")
+        else:
+            for entry in additions:
+                selector = format_voice_selector(
+                    entry["language"], entry["engine_code"], entry["slot"]
+                )
+                identity = f"{entry['system']}:{entry['asset_id']}:{entry['voice_id']}"
+                print(f"{selector} {identity}")
+            if args.apply:
+                print(f"Updated selector registry: {args.registry}")
+            else:
+                print("Preview only; rerun with --apply and an explicit --registry to write.")
+        return 0
     unassigned = unassigned_catalog_voices(items, registry=registry)
     issues = check_registry_and_catalog(items, registry=registry) if args.check else ()
 

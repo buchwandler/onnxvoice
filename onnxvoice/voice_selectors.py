@@ -26,7 +26,15 @@ from .types import CatalogItem, VoiceIdentity, VoiceRecord
 VOICE_ENGINE_CODES: dict[str, str] = {
     "kokoro": "ko",
     "piper": "pi",
+    "pocket": "po",
 }
+
+
+def voice_selector_systems() -> tuple[str, ...]:
+    """Return systems with stable voice-selector catalog semantics."""
+    return tuple(sorted(VOICE_ENGINE_CODES))
+
+
 ENGINE_CODE_SYSTEMS: dict[str, str] = {code: system for system, code in VOICE_ENGINE_CODES.items()}
 _SUPPORTED_SCHEMA = 1
 _LANGUAGE_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
@@ -394,6 +402,7 @@ __all__ = [
     "get_voice_selector_registry",
     "is_voice_selector",
     "iter_voice_identities",
+    "voice_selector_systems",
     "load_voice_selector_registry",
     "make_voice_record",
     "parse_voice_selector",

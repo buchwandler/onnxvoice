@@ -49,4 +49,8 @@ pocketsynth synthesize --bundle english_2026-04 --voice alba --offline \
   --output hello.wav "Hello from Pocket."
 ```
 
-An offline cache miss is reported as an offline error. Explicit local bundles and previously installed assets remain usable without the Hub client. Canonical model artifacts continue to be checked against their catalog size and SHA-256 metadata; predefined voice states retain their OnnxVoice cache integrity record.
+An offline cache miss is reported as an offline error. Explicit local bundles and previously installed assets remain usable without the Hub client. Canonical model artifacts are checked against their catalog size and SHA-256 metadata. For explicit Pocket `voice_states`, predefined state files are checked against the declared size and SHA-256 before atomic cache publication; both values are included in the cache identity. A changed integrity pin cannot reuse an older state.
+
+Legacy Pocket state files stay in the existing `pocket-voice-states` layout. When a catalog supplies an explicit pin, a legacy entry is verified from its cache record and reused offline only if its actual size and SHA-256 match that pin. Hugging Face credentials are never part of the cache key or metadata.
+
+`onnxvoice cache info` reports `auxiliary_bytes`, `pocket_voice_state_count`, `pocket_voice_state_bytes`, `orphan_auxiliary_count`, and `orphan_auxiliary_bytes`. `onnxvoice cache gc --dry-run` shows unreachable state records without deleting them. Actual GC preserves states referenced by any installed matching Pocket bundle variant and removes them after the last such variant is removed.

@@ -2,7 +2,8 @@
   "schema": 1,
   "engine_codes": {
     "kokoro": "ko",
-    "piper": "pi"
+    "piper": "pi",
+    "pocket": "po"
   },
   "entries": [
     {

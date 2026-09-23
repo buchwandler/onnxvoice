@@ -30,7 +30,9 @@ The cache is content-addressed:
 ├── blobs/sha256/ab/abcdef...
 ├── catalogs/
 │   ├── kokoro.json
-│   └── piper.json
+│   ├── piper.json
+│   └── pocket.json
+├── pocket-voice-states/
 └── installs/
     ├── kokoro/v1.0/manifest.json
     └── piper/en_US-lessac-medium/manifest.json
@@ -51,7 +53,7 @@ Milestone A defines the dependency boundary used by downstream frontends:
 - Provider names support aliases such as `cpu`, `cuda`, `gpu`, `directml`, and `openvino`. Use `auto` for deterministic priority selection, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an environment policy.
 - Provider names support aliases `cpu`, `cuda`, `gpu`, `directml`, `dml`, `openvino`, `coreml`, `nnapi`, and `xnnpack`, plus canonical ONNX Runtime names. Use `auto` for the documented deterministic priority policy, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an explicit environment policy. The `coreml`, `nnapi`, `xnnpack`, and `mobile` extras are markers because compatible platform ONNX Runtime builds supply those providers.
 
-The shared cache is never required for importing the package. Offline mode reads existing catalog and blob data only and does not make network requests.
+The shared cache is never required for importing the package. Offline mode reads existing catalog, blob, and Pocket voice-state cache data only and does not make network requests.
 
 ## Stable voice selectors
 
@@ -72,7 +74,7 @@ language filter/input locale: en-us or en-US
 canonical selector language key: en_us
 ```
 
-`ko` is the permanent Kokoro code and `pi` is the permanent Piper code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Use the selector API to resolve the complete identity:
+`ko` is the permanent Kokoro code, `pi` is the permanent Piper code, and `po` is the permanent Pocket code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Pocket identities are bundle-scoped `(pocket, bundle_id, voice_id)` records and require explicit catalog `voice_states`. The current canonical Pocket catalog exposes predefined names without those records, so they remain unassigned and receive no Pocket selector. Use the selector API to resolve the complete identity of assigned selectors:
 
 ```python
 from onnxvoice import resolve_voice_selector
@@ -82,7 +84,17 @@ assert identity.backing_ref == "kokoro:de-anna"
 assert identity.voice_id == "df_anna"
 ```
 
-Asset operations still use canonical `system:id` references such as `kokoro:de-anna` and `piper:de_DE-eva_k-x_low`. Resolving a Kokoro selector does not choose a style tensor; producer packages remain responsible for style/policy selection. Catalog voices without registry assignments are reported as unassigned rather than receiving a runtime-generated number.
+Asset operations still use canonical `system:id` references such as `kokoro:de-anna` and `piper:de_DE-eva_k-x_low`. Resolving a Kokoro selector does not choose a style tensor; producer packages remain responsible for style/policy selection. Catalog voices without registry assignments are reported as unassigned rather than receiving a runtime-generated number. Pocket `predefined_voice_names` are not stable identities on their own.
+
+The maintenance tool checks selector/catalog drift and previews append-only assignments. Pocket candidates without explicit `voice_states` records are rejected, even when `predefined_voice_names` lists them:
+
+```bash
+python -m onnxvoice.catalog_tools.voice_selectors --check
+python -m onnxvoice.catalog_tools.voice_selectors --append-unassigned \
+  --registry /path/to/voice_selectors.json --catalog pocket=/path/to/catalog.json
+```
+
+Preview is the default. Add `--apply` to the append command to write the explicitly selected registry file. Existing slots are never reused or automatically retired.
 
 ## Install
 
@@ -177,9 +189,11 @@ onnxvoice cache info --format json
 # Show what GC would remove
 onnxvoice cache gc --dry-run
 
-# Remove orphaned blobs
+# Remove orphaned blobs and unreachable Pocket voice states
 onnxvoice cache gc
 ```
+
+`cache info` includes `auxiliary_bytes`, `pocket_voice_state_count`, `pocket_voice_state_bytes`, `orphan_auxiliary_count`, and `orphan_auxiliary_bytes`. The dry run reports unreachable Pocket state records alongside orphan blobs. Garbage collection retains state files referenced by any installed matching bundle variant, then removes the record only when no installed variant needs it.
 
 ### Removal
 
@@ -244,7 +258,7 @@ Common flags for `list`, `installed`, and `updates`:
 
 **Note on gender**: Gender metadata depends on authoritative catalog sources. If the catalog does not supply a gender field, entries default to `unknown`. The CLI never infers gender from voice names or IDs.
 
-**Note on installed vs cached blobs**: After `onnxvoice remove REF`, the installation is gone but content-addressed blobs may remain until `onnxvoice cache gc` is run. Use `cache info` to see reclaimable space.
+**Note on cache reclamation**: After `onnxvoice remove REF`, installation files are gone, but content-addressed blobs and Pocket predefined voice states can remain until `onnxvoice cache gc` is run. `cache info` reports blob and auxiliary cache sizes. Pocket state cache entries are retained while any installed matching bundle variant references them.
 
 Kokoro has multiple ONNX model qualities in one distribution. `onnxvoice install kokoro:v1.0` selects `fp32` by default rather than downloading all model variants. Non-model runtime artifacts from the selected distribution are installed with it.
 
@@ -471,7 +485,7 @@ The project uses `setuptools_scm`. There is no hard-coded project version and no
 
 ## Current limitations
 
-The current release supports the built-in Piper and Kokoro catalog formats, single-file Kokoro, and the first-class `split-onnx-v1` multi-component Kokoro layout. Catalog distributions are selectable by identifier and cached with distinct identities. Resumable downloads, general third-party catalog schemas, and release-grade waveform parity gates remain separate work.
+The current release supports the built-in Piper and Kokoro catalog formats, the canonical Pocket ONNX bundle catalog, single-file Kokoro, and the first-class `split-onnx-v1` multi-component Kokoro layout. Catalog distributions are selectable by identifier and cached with distinct identities. Pocket predefined states remain separate assets; stable Pocket selectors require explicit canonical `voice_states` records. Resumable downloads, general third-party catalog schemas, and release-grade waveform parity gates remain separate work.
 
 ## License
 

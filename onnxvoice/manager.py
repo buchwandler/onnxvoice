@@ -23,6 +23,7 @@ from .voice_selectors import (
     iter_voice_identities,
     make_voice_record,
     selector_for_voice,
+    voice_selector_systems,
 )
 from .voice_selectors import resolve_voice_selector as _resolve_voice_selector
 
@@ -104,8 +105,9 @@ class OnnxVoice:
         from .inventory import language_codes_from_metadata, matches_language
         from .voice_selectors import get_voice_selector_registry
 
-        systems = (system.casefold(),) if system is not None else ("kokoro", "piper", "pocket")
-        unsupported = set(systems) - {"kokoro", "piper", "pocket"}
+        supported_systems = voice_selector_systems()
+        systems = (system.casefold(),) if system is not None else supported_systems
+        unsupported = set(systems) - set(supported_systems)
         if unsupported:
             raise ValueError(
                 f"voice selectors are not available for: {', '.join(sorted(unsupported))}"
@@ -140,7 +142,7 @@ class OnnxVoice:
             records.append(
                 make_voice_record(
                     identity,
-                    available=identity is not None and identity.state == "active",
+                    available=True,
                     catalog_item=item,
                     languages=language_codes_from_metadata(metadata),
                     gender=str(metadata.get("gender") or "unknown")

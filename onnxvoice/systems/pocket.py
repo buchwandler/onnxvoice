@@ -326,7 +326,8 @@ class PocketAdapter(SystemAdapter):
         self._validated_contracts: set[str] = set()
         self._validated = False
         self._predefined_voice_states: dict[
-            tuple[str, str, str, str, str, str, str], PocketVoiceState
+            tuple[str, str, str, str, str, str, str, int | None, str | None],
+            PocketVoiceState,
         ] = {}
         self._voice_cache_dir = Path(
             voice_cache_dir
@@ -468,6 +469,34 @@ class PocketAdapter(SystemAdapter):
             gated=True,
         )
 
+    @staticmethod
+    def _predefined_voice_integrity(
+        metadata: Mapping[str, Any], name: str
+    ) -> tuple[int | None, str | None]:
+        records = metadata.get("voice_states")
+        if records is None:
+            return None, None
+        if not isinstance(records, Sequence) or isinstance(records, (str, bytes, Mapping)):
+            raise RuntimeContractError("Pocket voice_states metadata must be a sequence")
+        for record in records:
+            if not isinstance(record, Mapping):
+                raise RuntimeContractError("Pocket voice-state metadata must contain objects")
+            if record.get("name") != name:
+                continue
+            size = record.get("size")
+            sha256 = record.get("sha256")
+            if (
+                type(size) is not int
+                or size <= 0
+                or not isinstance(sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+            ):
+                raise RuntimeContractError(
+                    f"Pocket predefined voice {name!r} has invalid integrity metadata"
+                )
+            return size, sha256
+        return None, None
+
     @property
     def predefined_voices(self) -> tuple[str, ...]:
         return self._predefined_voice_names(self._ensure_validated())
@@ -493,9 +522,7 @@ class PocketAdapter(SystemAdapter):
             result = np.expand_dims(result, axis=1)
         while result.ndim > rank:
             if result.shape[1] != 1:
-                raise RuntimeContractError(
-                    f"Cannot fit tensor shape {result.shape} to rank {rank}"
-                )
+                raise RuntimeContractError(f"Cannot fit tensor shape {result.shape} to rank {rank}")
             result = np.squeeze(result, axis=1)
         return result
 
@@ -658,8 +685,11 @@ class PocketAdapter(SystemAdapter):
         name: str,
         bundle_id: str,
         source: HuggingFaceSource,
+        *,
+        expected_size: int | None,
+        expected_sha256: str | None,
     ) -> tuple[Path, str]:
-        cache_key = {
+        cache_key: dict[str, str | int] = {
             "system": "pocket",
             "asset_kind": "predefined_voice_state",
             "model_repo": source.repository,
@@ -668,6 +698,11 @@ class PocketAdapter(SystemAdapter):
             "bundle_id": bundle_id,
             "voice_name": name,
         }
+        legacy_cache_key = dict(cache_key)
+        if expected_size is not None:
+            cache_key["expected_size"] = expected_size
+        if expected_sha256 is not None:
+            cache_key["expected_sha256"] = expected_sha256
         cache_digest = hashlib.sha256(
             json.dumps(cache_key, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -698,6 +733,42 @@ class PocketAdapter(SystemAdapter):
                     ) from exc
                 return state_path, sha256
 
+            if cache_key != legacy_cache_key:
+                legacy_digest = hashlib.sha256(
+                    json.dumps(legacy_cache_key, sort_keys=True, separators=(",", ":")).encode(
+                        "utf-8"
+                    )
+                ).hexdigest()
+                legacy_dir = self._voice_cache_dir / legacy_digest[:2] / legacy_digest
+                legacy_state = legacy_dir / f"{name}.safetensors"
+                legacy_metadata = legacy_dir / f"{name}.json"
+                legacy_lock = self._voice_cache_dir / "locks" / f"{legacy_digest}.lock"
+                with FileLock(legacy_lock):
+                    if legacy_state.exists() or legacy_metadata.exists():
+                        if not legacy_state.is_file() or not legacy_metadata.is_file():
+                            raise PredefinedVoiceIntegrityError(
+                                f"Incomplete cached state for predefined Pocket voice {name!r}"
+                            )
+                        try:
+                            record = json.loads(legacy_metadata.read_text(encoding="utf-8"))
+                            if (
+                                not isinstance(record, dict)
+                                or record.get("key") != legacy_cache_key
+                            ):
+                                raise ValueError("legacy cache key mismatch")
+                            size = record["size"]
+                            sha256 = record["sha256"]
+                            if type(size) is not int or size <= 0 or not isinstance(sha256, str):
+                                raise ValueError("invalid legacy integrity metadata")
+                            verify_file(legacy_state, expected_size=size, sha256=sha256)
+                        except (OSError, KeyError, TypeError, ValueError, IntegrityError) as exc:
+                            raise PredefinedVoiceIntegrityError(
+                                f"Cached predefined Pocket voice {name!r} failed integrity validation"
+                            ) from exc
+                        if (expected_size is None or size == expected_size) and (
+                            expected_sha256 is None or sha256 == expected_sha256
+                        ):
+                            return legacy_state, sha256
             with tempfile.TemporaryDirectory(prefix="onnxvoice-pocket-hf-") as download_dir:
                 try:
                     downloaded = download_huggingface_file(
@@ -727,6 +798,14 @@ class PocketAdapter(SystemAdapter):
                             f"Downloaded state for predefined Pocket voice {name!r} is empty"
                         )
                     sha256 = digest_file(temporary_state)
+                    if expected_size is not None and size != expected_size:
+                        raise PredefinedVoiceIntegrityError(
+                            f"Downloaded state for predefined Pocket voice {name!r} failed integrity validation"
+                        )
+                    if expected_sha256 is not None and sha256 != expected_sha256:
+                        raise PredefinedVoiceIntegrityError(
+                            f"Downloaded state for predefined Pocket voice {name!r} failed integrity validation"
+                        )
                     os.replace(temporary_state, state_path)
                     record = {"key": cache_key, "size": size, "sha256": sha256}
                     fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
@@ -841,6 +920,7 @@ class PocketAdapter(SystemAdapter):
         except ValueError as exc:
             raise RuntimeContractError(str(exc)) from exc
         source = self._predefined_voice_source(metadata, name, bundle_name)
+        expected_size, expected_sha256 = self._predefined_voice_integrity(metadata, name)
         cache_key = (
             "pocket",
             "predefined_voice_state",
@@ -849,11 +929,19 @@ class PocketAdapter(SystemAdapter):
             bundle_name,
             name,
             source.path,
+            expected_size,
+            expected_sha256,
         )
         cached = self._predefined_voice_states.get(cache_key)
         if cached is not None:
             return cached
-        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, source)
+        state_path, sha256 = self._cached_predefined_voice_asset(
+            name,
+            bundle_name,
+            source,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+        )
         model_state = self._predefined_model_state(state_path, name=name)
         flow_state = _flow_state_from_model_state(model_state, self._flow_specs, name=name)
         sample_rate = int(metadata["sample_rate"])

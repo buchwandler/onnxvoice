@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from argparse import Namespace
+from types import SimpleNamespace
 
+import onnxvoice.cli as cli
 from onnxvoice.store import AssetStore
 from onnxvoice.types import Artifact, CatalogItem
 
@@ -28,6 +32,109 @@ class TestCacheUsage:
         assert usage.installation_count == 0
         assert usage.install_logical_bytes == 0
         assert usage.orphan_blob_count == 0
+        assert usage.auxiliary_bytes == 0
+        assert usage.pocket_voice_state_count == 0
+        assert usage.pocket_voice_state_bytes == 0
+        assert usage.orphan_auxiliary_count == 0
+        assert usage.orphan_auxiliary_bytes == 0
+
+    def test_pocket_auxiliary_metrics_and_cache_cli(self, tmp_path, monkeypatch, capsys):
+        state_payload = b"pocket voice state bytes"
+        state_sha = hashlib.sha256(state_payload).hexdigest()
+        source_record = {
+            "name": "alba",
+            "source": {
+                "provider": "huggingface",
+                "repository": "kyutai/pocket-tts",
+                "revision": "d" * 40,
+                "path": "languages/english_2026-04/embeddings/alba.safetensors",
+            },
+            "size": len(state_payload),
+            "sha256": state_sha,
+        }
+        bundle_file = tmp_path / "bundle.json"
+        bundle_file.write_bytes(b"bundle")
+        bundle_sha = hashlib.sha256(b"bundle").hexdigest()
+        item = CatalogItem(
+            system="pocket",
+            id="english_2026-04",
+            kind="bundle",
+            artifacts=(
+                Artifact(
+                    "bundle_metadata",
+                    bundle_file.name,
+                    bundle_file.as_uri(),
+                    bundle_file.stat().st_size,
+                    bundle_sha,
+                ),
+            ),
+            metadata={"predefined_voice_names": ["alba"], "voice_states": [source_record]},
+        )
+        store = AssetStore(tmp_path / "cache")
+        store.install(item)
+        key = {
+            "system": "pocket",
+            "asset_kind": "predefined_voice_state",
+            "model_repo": "kyutai/pocket-tts",
+            "model_revision": "d" * 40,
+            "asset_path": "languages/english_2026-04/embeddings/alba.safetensors",
+            "bundle_id": "english_2026-04",
+            "voice_name": "alba",
+            "expected_size": len(state_payload),
+            "expected_sha256": state_sha,
+        }
+        digest = hashlib.sha256(
+            json.dumps(key, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        state_dir = store.root / "pocket-voice-states" / digest[:2] / digest
+        state_dir.mkdir(parents=True)
+        state_path = state_dir / "alba.safetensors"
+        state_path.write_bytes(state_payload)
+        metadata_path = state_dir / "alba.json"
+        metadata_path.write_text(
+            json.dumps(
+                {"key": key, "size": len(state_payload), "sha256": state_sha},
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+        referenced_usage = store.usage()
+        assert (
+            referenced_usage.auxiliary_bytes
+            == state_path.stat().st_size + metadata_path.stat().st_size
+        )
+        assert referenced_usage.pocket_voice_state_count == 1
+        assert referenced_usage.pocket_voice_state_bytes == len(state_payload)
+        assert referenced_usage.orphan_auxiliary_count == 0
+        store.remove("pocket", "english_2026-04")
+
+        monkeypatch.setattr(cli, "_manager", lambda args: SimpleNamespace(store=store))
+        assert cli._cmd_cache_info(Namespace(format="json")) == 0
+        json_usage = json.loads(capsys.readouterr().out)
+        assert (
+            json_usage["auxiliary_bytes"]
+            == state_path.stat().st_size + metadata_path.stat().st_size
+        )
+        assert json_usage["pocket_voice_state_count"] == 1
+        assert json_usage["pocket_voice_state_bytes"] == len(state_payload)
+        assert json_usage["orphan_auxiliary_count"] == 1
+        assert (
+            json_usage["orphan_auxiliary_bytes"]
+            == state_path.stat().st_size + metadata_path.stat().st_size
+        )
+
+        assert cli._cmd_cache_info(Namespace(format="table")) == 0
+        text_usage = capsys.readouterr().out
+        assert "Pocket voice states" in text_usage
+        assert "Reclaimable Pocket" in text_usage
+
+        assert cli._cmd_cache_gc(Namespace(dry_run=True)) == 0
+        assert "Would remove 1 Pocket voice states" in capsys.readouterr().out
+        assert cli._cmd_cache_gc(Namespace(dry_run=False)) == 0
+        gc_output = capsys.readouterr().out
+        assert "Removed 1 Pocket voice states" in gc_output
+        assert not state_path.exists()
 
     def test_install_logical_bytes(self, tmp_path):
         payload = b"x" * 1000
