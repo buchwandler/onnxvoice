@@ -1,0 +1,156 @@
+ onnxvoice/systems/pocket.py  | 42 ++++++++++++++++++++++++++++++------
+ tests/test_pocket_adapter.py | 51 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 86 insertions(+), 7 deletions(-)
+
+diff --git a/onnxvoice/systems/pocket.py b/onnxvoice/systems/pocket.py
+index ad38e60..d1fc21d 100644
+--- a/onnxvoice/systems/pocket.py
++++ b/onnxvoice/systems/pocket.py
+@@ -479,6 +479,26 @@ class PocketAdapter(SystemAdapter):
+             return tuple(str(name) for name in value)
+         return ()
+
++    @staticmethod
++    def _input_ranks(session: Any) -> dict[str, int]:
++        specs = getattr(session, "input_specs", ())
++        if not isinstance(specs, (tuple, list)):
++            return {}
++        return {spec.name: len(spec.shape) for spec in specs}
++
++    @staticmethod
++    def _fit_rank(value: Any, rank: int) -> np.ndarray:
++        result = np.asarray(value, dtype=np.float32)
++        while result.ndim < rank:
++            result = np.expand_dims(result, axis=1)
++        while result.ndim > rank:
++            if result.shape[1] != 1:
++                raise RuntimeContractError(
++                    f"Cannot fit tensor shape {result.shape} to rank {rank}"
++                )
++            result = np.squeeze(result, axis=1)
++        return result
++
+     @staticmethod
+     def _named_outputs(session: Any, outputs: Sequence[Any]) -> dict[str, np.ndarray]:
+         names = PocketAdapter._names(session, "output_names")
+@@ -974,6 +994,7 @@ class PocketAdapter(SystemAdapter):
+         previous_latent: np.ndarray | None = None
+         eos_detected = False
+         post_eos = 0
++        flow_input_ranks = self._input_ranks(flow)
+         empty_text = np.empty((1, 0, conditioning_dim), dtype=np.float32)
+         for _ in range(max_frames):
+             sequence = (
+@@ -1000,12 +1021,13 @@ class PocketAdapter(SystemAdapter):
+                 ("conditioning", "cond", "c", "latent"),
+                 label="Flow-LM main conditioning",
+             )
+-            conditioning = np.asarray(non_state[conditioning_name], dtype=np.float32)
+-            if conditioning.ndim == 2:
+-                conditioning = conditioning[:, None, :]
+-            x = np.random.standard_normal((1, 1, latent_dim)).astype(np.float32) * np.float32(
++            conditioning = self._fit_rank(
++                non_state[conditioning_name], flow_input_ranks.get("c", 3)
++            )
++            x = np.random.standard_normal((1, latent_dim)).astype(np.float32) * np.float32(
+                 temperature
+             )
++            x = self._fit_rank(x, flow_input_ranks.get("x", 3))
+             for step in range(lsd_steps):
+                 t = np.float32(1.0 - step / lsd_steps)
+                 s = np.float32(1.0 - (step + 1) / lsd_steps)
+@@ -1014,8 +1036,14 @@ class PocketAdapter(SystemAdapter):
+                     flow.run(
+                         {
+                             "c": conditioning,
+-                            "s": np.asarray([s], dtype=np.float32),
+-                            "t": np.asarray([t], dtype=np.float32),
++                            "s": self._fit_rank(
++                                np.asarray([s], dtype=np.float32),
++                                flow_input_ranks.get("s", 1),
++                            ),
++                            "t": self._fit_rank(
++                                np.asarray([t], dtype=np.float32),
++                                flow_input_ranks.get("t", 1),
++                            ),
+                             "x": x,
+                         }
+                     ),
+@@ -1026,7 +1054,7 @@ class PocketAdapter(SystemAdapter):
+                     label="flow velocity",
+                 )
+                 x = x + (t - s) * np.asarray(flow_outputs[velocity_name], dtype=np.float32)
+-            latent = np.asarray(x, dtype=np.float32)
++            latent = self._fit_rank(x, 3)
+             frames.append(latent)
+             previous_latent = latent
+             if eos_now:
+diff --git a/tests/test_pocket_adapter.py b/tests/test_pocket_adapter.py
+index 95ea20c..10322ca 100644
+--- a/tests/test_pocket_adapter.py
++++ b/tests/test_pocket_adapter.py
+@@ -4,6 +4,7 @@ from __future__ import annotations
+
+ import json
+ from pathlib import Path
++from types import SimpleNamespace
+ from typing import Any
+ from unittest.mock import MagicMock, patch
+
+@@ -706,6 +707,56 @@ def test_predefined_flow_state_uses_text_prefix_and_defensive_copy(tmp_path: Pat
+     assert np.array_equal(voice_state.flow_state["state_0"], [5.0])
+
+
++def test_generate_latents_matches_rank_two_flow_inputs() -> None:
++    adapter = PocketAdapter(_make_installation())
++    main = MagicMock()
++    main.output_names = ("conditioning", "eos_logit")
++    main_inputs: list[dict[str, np.ndarray]] = []
++    main.run.side_effect = lambda inputs: (
++        main_inputs.append(inputs)
++        or [
++            np.ones((1, 4), dtype=np.float32),
++            np.zeros((1, 1), dtype=np.float32),
++        ]
++    )
++    flow = MagicMock()
++    flow.input_specs = tuple(
++        SimpleNamespace(name=name, shape=shape)
++        for name, shape in (
++            ("c", ("batch", 4)),
++            ("s", ("batch", 1)),
++            ("t", ("batch", 1)),
++            ("x", ("batch", 3)),
++        )
++    )
++    flow.output_names = ("flow_dir",)
++    flow_inputs: list[dict[str, np.ndarray]] = []
++    flow.run.side_effect = lambda inputs: (
++        flow_inputs.append(inputs) or [np.zeros((1, 3), dtype=np.float32)]
++    )
++
++    latents, eos_detected, frame_count = adapter._generate_latents(
++        main,
++        flow,
++        {},
++        temperature=0.7,
++        lsd_steps=1,
++        max_frames=2,
++        frames_after_eos=None,
++        latent_dim=3,
++        conditioning_dim=4,
++    )
++
++    assert latents.shape == (1, 2, 3)
++    assert not eos_detected
++    assert frame_count == 2
++    assert [inputs["x"].shape for inputs in flow_inputs] == [(1, 3), (1, 3)]
++    assert [inputs["c"].shape for inputs in flow_inputs] == [(1, 4), (1, 4)]
++    assert [inputs["s"].shape for inputs in flow_inputs] == [(1, 1), (1, 1)]
++    assert [inputs["t"].shape for inputs in flow_inputs] == [(1, 1), (1, 1)]
++    assert [inputs["sequence"].shape for inputs in main_inputs] == [(1, 1, 3)] * 2
++
++
+ def _predefined_adapter(
+     tmp_path: Path,
+     *,

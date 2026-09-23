@@ -1,0 +1,134 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.1.11
+git_base_ref: v0.1.10
+git_base_sha: b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891
+git_head_ref: HEAD
+git_head_sha: 5b474f750fc7311edae9c205621805de9f3ccb2c
+git_range: b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891..5b474f750fc7311edae9c205621805de9f3ccb2c
+commit_count: 5
+rows:
+  - sha: 13163fe28703407ae8fb961ea4c9bf23598a224a
+    source_ref: git:13163fe28703407ae8fb961ea4c9bf23598a224a
+    short_sha: 13163fe
+    changed_paths:
+      - onnxvoice/catalog_tools/pocket.py
+    stats:
+      files_changed: 1
+      insertions: 1
+      deletions: 0
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "chore: mypy"
+  - sha: 6b3080a162b310688c5e486fad23a0da29029289
+    source_ref: git:6b3080a162b310688c5e486fad23a0da29029289
+    short_sha: 6b3080a
+    changed_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/data/voice_selectors.json
+      - onnxvoice/errors.py
+      - onnxvoice/manager.py
+      - onnxvoice/systems/pocket.py
+      - pyproject.toml
+      - tests/test_catalog.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_network_boundaries.py
+      - tests/test_voice_selectors.py
+    stats:
+      files_changed: 11
+      insertions: 3969
+      deletions: 17
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: pocket update and add missing voice selectors"
+  - sha: 577fe9840787e07ff8fc6291a379d81357661836
+    source_ref: git:577fe9840787e07ff8fc6291a379d81357661836
+    short_sha: 577fe98
+    changed_paths:
+      - README.md
+      - docs/pocket-downloads.md
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/pocket.py
+      - onnxvoice/cli.py
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/pocket.py
+      - tests/test_cli.py
+      - tests/test_huggingface.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_pocket_contract.py
+      - tests/test_store.py
+    stats:
+      files_changed: 16
+      insertions: 1327
+      deletions: 239
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: pocket download fix"
+  - sha: 67d4fa7ccfb438703ad416cc5cd772eafe7513a4
+    source_ref: git:67d4fa7ccfb438703ad416cc5cd772eafe7513a4
+    short_sha: 67d4fa7
+    changed_paths:
+      - onnxvoice/systems/pocket.py
+      - tests/test_pocket_adapter.py
+    stats:
+      files_changed: 2
+      insertions: 86
+      deletions: 7
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "fix: pocket voice usage"
+  - sha: 5b474f750fc7311edae9c205621805de9f3ccb2c
+    source_ref: git:5b474f750fc7311edae9c205621805de9f3ccb2c
+    short_sha: 5b474f7
+    changed_paths:
+      - README.md
+      - docs/architecture.md
+      - docs/pocket-downloads.md
+      - onnxvoice/catalog_tools/voice_selectors.py
+      - onnxvoice/cli.py
+      - onnxvoice/data/voice_selectors.json
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/pocket.py
+      - onnxvoice/types.py
+      - onnxvoice/voice_selectors.py
+      - pyproject.toml
+      - tests/test_cache_usage.py
+      - tests/test_pocket_adapter.py
+      - tests/test_store.py
+      - tests/test_voice_selectors.py
+    stats:
+      files_changed: 16
+      insertions: 1149
+      deletions: 58
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add pocket to voice selectors"

@@ -1,0 +1,104 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.1.11
+git_base_ref: b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891
+git_base_sha: b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891
+git_head_ref: 5b474f750fc7311edae9c205621805de9f3ccb2c
+git_head_sha: 5b474f750fc7311edae9c205621805de9f3ccb2c
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added built-in Pocket voice conditioning with downloadable predefined voices and validated voice-state data"
+    status: accepted
+    source_refs:
+      - git:6b3080a162b310688c5e486fad23a0da29029289
+    paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/data/voice_selectors.json
+      - onnxvoice/errors.py
+      - onnxvoice/manager.py
+      - onnxvoice/systems/pocket.py
+      - pyproject.toml
+      - tests/test_catalog.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_network_boundaries.py
+      - tests/test_voice_selectors.py
+    sources:
+      - git:6b3080a162b310688c5e486fad23a0da29029289
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: "Added pinned Hugging Face asset downloads with integrity checks, cache reuse, and setup guidance for Pocket assets"
+    status: accepted
+    source_refs:
+      - git:577fe9840787e07ff8fc6291a379d81357661836
+    paths:
+      - README.md
+      - docs/pocket-downloads.md
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/pocket.py
+      - onnxvoice/cli.py
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/pocket.py
+      - tests/test_cli.py
+      - tests/test_huggingface.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_pocket_contract.py
+      - tests/test_store.py
+    sources:
+      - git:577fe9840787e07ff8fc6291a379d81357661836
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: fixed
+    summary: "Fixed Pocket inference tensor shapes to match the model contract"
+    status: accepted
+    source_refs:
+      - git:67d4fa7ccfb438703ad416cc5cd772eafe7513a4
+    paths:
+      - onnxvoice/systems/pocket.py
+      - tests/test_pocket_adapter.py
+    sources:
+      - git:67d4fa7ccfb438703ad416cc5cd772eafe7513a4
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: "Added Pocket to stable voice selectors and exposed predefined voice cache usage and cleanup"
+    status: accepted
+    source_refs:
+      - git:5b474f750fc7311edae9c205621805de9f3ccb2c
+    paths:
+      - README.md
+      - docs/architecture.md
+      - docs/pocket-downloads.md
+      - onnxvoice/catalog_tools/voice_selectors.py
+      - onnxvoice/cli.py
+      - onnxvoice/data/voice_selectors.json
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/pocket.py
+      - onnxvoice/types.py
+      - onnxvoice/voice_selectors.py
+      - pyproject.toml
+      - tests/test_cache_usage.py
+      - tests/test_pocket_adapter.py
+      - tests/test_store.py
+      - tests/test_voice_selectors.py
+    sources:
+      - git:5b474f750fc7311edae9c205621805de9f3ccb2c
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

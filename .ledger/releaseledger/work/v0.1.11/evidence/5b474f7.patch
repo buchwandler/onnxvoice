@@ -1,0 +1,1824 @@
+ README.md                                  |  28 +++-
+ docs/architecture.md                       |  10 +-
+ docs/pocket-downloads.md                   |   6 +-
+ onnxvoice/catalog_tools/voice_selectors.py | 171 +++++++++++++++++++-
+ onnxvoice/cli.py                           |  64 ++++++--
+ onnxvoice/data/voice_selectors.json        |   3 +-
+ onnxvoice/manager.py                       |   8 +-
+ onnxvoice/store.py                         | 252 +++++++++++++++++++++++++++--
+ onnxvoice/systems/pocket.py                | 100 +++++++++++-
+ onnxvoice/types.py                         |  17 +-
+ onnxvoice/voice_selectors.py               |   9 ++
+ pyproject.toml                             |   2 +-
+ tests/test_cache_usage.py                  | 107 ++++++++++++
+ tests/test_pocket_adapter.py               | 155 +++++++++++++++++-
+ tests/test_store.py                        |  77 +++++++++
+ tests/test_voice_selectors.py              | 198 ++++++++++++++++++++++-
+ 16 files changed, 1149 insertions(+), 58 deletions(-)
+
+diff --git a/README.md b/README.md
+index 11101f8..8cc73e9 100644
+--- a/README.md
++++ b/README.md
+@@ -30,7 +30,9 @@ The cache is content-addressed:
+ ├── blobs/sha256/ab/abcdef...
+ ├── catalogs/
+ │   ├── kokoro.json
+-│   └── piper.json
++│   ├── piper.json
++│   └── pocket.json
++├── pocket-voice-states/
+ └── installs/
+     ├── kokoro/v1.0/manifest.json
+     └── piper/en_US-lessac-medium/manifest.json
+@@ -51,7 +53,7 @@ Milestone A defines the dependency boundary used by downstream frontends:
+ - Provider names support aliases such as `cpu`, `cuda`, `gpu`, `directml`, and `openvino`. Use `auto` for deterministic priority selection, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an environment policy.
+ - Provider names support aliases `cpu`, `cuda`, `gpu`, `directml`, `dml`, `openvino`, `coreml`, `nnapi`, and `xnnpack`, plus canonical ONNX Runtime names. Use `auto` for the documented deterministic priority policy, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an explicit environment policy. The `coreml`, `nnapi`, `xnnpack`, and `mobile` extras are markers because compatible platform ONNX Runtime builds supply those providers.
+
+-The shared cache is never required for importing the package. Offline mode reads existing catalog and blob data only and does not make network requests.
++The shared cache is never required for importing the package. Offline mode reads existing catalog, blob, and Pocket voice-state cache data only and does not make network requests.
+
+ ## Stable voice selectors
+
+@@ -72,7 +74,7 @@ language filter/input locale: en-us or en-US
+ canonical selector language key: en_us
+ ```
+
+-`ko` is the permanent Kokoro code and `pi` is the permanent Piper code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Use the selector API to resolve the complete identity:
++`ko` is the permanent Kokoro code, `pi` is the permanent Piper code, and `po` is the permanent Pocket code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Pocket identities are bundle-scoped `(pocket, bundle_id, voice_id)` records and require explicit catalog `voice_states`. The current canonical Pocket catalog exposes predefined names without those records, so they remain unassigned and receive no Pocket selector. Use the selector API to resolve the complete identity of assigned selectors:
+
+ ```python
+ from onnxvoice import resolve_voice_selector
+@@ -82,7 +84,17 @@ assert identity.backing_ref == "kokoro:de-anna"
+ assert identity.voice_id == "df_anna"
+ ```
+
+-Asset operations still use canonical `system:id` references such as `kokoro:de-anna` and `piper:de_DE-eva_k-x_low`. Resolving a Kokoro selector does not choose a style tensor; producer packages remain responsible for style/policy selection. Catalog voices without registry assignments are reported as unassigned rather than receiving a runtime-generated number.
++Asset operations still use canonical `system:id` references such as `kokoro:de-anna` and `piper:de_DE-eva_k-x_low`. Resolving a Kokoro selector does not choose a style tensor; producer packages remain responsible for style/policy selection. Catalog voices without registry assignments are reported as unassigned rather than receiving a runtime-generated number. Pocket `predefined_voice_names` are not stable identities on their own.
++
++The maintenance tool checks selector/catalog drift and previews append-only assignments. Pocket candidates without explicit `voice_states` records are rejected, even when `predefined_voice_names` lists them:
++
++```bash
++python -m onnxvoice.catalog_tools.voice_selectors --check
++python -m onnxvoice.catalog_tools.voice_selectors --append-unassigned \
++  --registry /path/to/voice_selectors.json --catalog pocket=/path/to/catalog.json
++```
++
++Preview is the default. Add `--apply` to the append command to write the explicitly selected registry file. Existing slots are never reused or automatically retired.
+
+ ## Install
+
+@@ -177,10 +189,12 @@ onnxvoice cache info --format json
+ # Show what GC would remove
+ onnxvoice cache gc --dry-run
+
+-# Remove orphaned blobs
++# Remove orphaned blobs and unreachable Pocket voice states
+ onnxvoice cache gc
+ ```
+
++`cache info` includes `auxiliary_bytes`, `pocket_voice_state_count`, `pocket_voice_state_bytes`, `orphan_auxiliary_count`, and `orphan_auxiliary_bytes`. The dry run reports unreachable Pocket state records alongside orphan blobs. Garbage collection retains state files referenced by any installed matching bundle variant, then removes the record only when no installed variant needs it.
++
+ ### Removal
+
+ ```bash
+@@ -244,7 +258,7 @@ Common flags for `list`, `installed`, and `updates`:
+
+ **Note on gender**: Gender metadata depends on authoritative catalog sources. If the catalog does not supply a gender field, entries default to `unknown`. The CLI never infers gender from voice names or IDs.
+
+-**Note on installed vs cached blobs**: After `onnxvoice remove REF`, the installation is gone but content-addressed blobs may remain until `onnxvoice cache gc` is run. Use `cache info` to see reclaimable space.
++**Note on cache reclamation**: After `onnxvoice remove REF`, installation files are gone, but content-addressed blobs and Pocket predefined voice states can remain until `onnxvoice cache gc` is run. `cache info` reports blob and auxiliary cache sizes. Pocket state cache entries are retained while any installed matching bundle variant references them.
+
+ Kokoro has multiple ONNX model qualities in one distribution. `onnxvoice install kokoro:v1.0` selects `fp32` by default rather than downloading all model variants. Non-model runtime artifacts from the selected distribution are installed with it.
+
+@@ -471,7 +485,7 @@ The project uses `setuptools_scm`. There is no hard-coded project version and no
+
+ ## Current limitations
+
+-The current release supports the built-in Piper and Kokoro catalog formats, single-file Kokoro, and the first-class `split-onnx-v1` multi-component Kokoro layout. Catalog distributions are selectable by identifier and cached with distinct identities. Resumable downloads, general third-party catalog schemas, and release-grade waveform parity gates remain separate work.
++The current release supports the built-in Piper and Kokoro catalog formats, the canonical Pocket ONNX bundle catalog, single-file Kokoro, and the first-class `split-onnx-v1` multi-component Kokoro layout. Catalog distributions are selectable by identifier and cached with distinct identities. Pocket predefined states remain separate assets; stable Pocket selectors require explicit canonical `voice_states` records. Resumable downloads, general third-party catalog schemas, and release-grade waveform parity gates remain separate work.
+
+ ## License
+
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 1783d79..beab0cc 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -4,10 +4,12 @@ OnnxVoice executes installed voice-model runtimes and owns stable catalog voice
+
+ ## Stable catalog voice identity
+
+-Short selectors such as `de-ko-1` and `de-pi-1` are persisted, append-only aliases for complete canonical identities. They resolve to a system, backing asset/model, and logical voice ID while leaving `system:id` asset references unchanged. Catalog projection may report an unassigned voice, but runtime discovery never invents a numeric slot.
++Short selectors such as `de-ko-1` and `de-pi-1` are persisted, append-only aliases for complete canonical identities. Permanent engine codes are `ko` for Kokoro, `pi` for Piper, and `po` for Pocket. Selectors resolve to a system, backing asset/model, and logical voice ID while leaving `system:id` asset references unchanged. Catalog projection may report an unassigned voice, but runtime discovery never invents a numeric slot.
+
+ This identity alias is distinct from producer semantic voice aliases and style policy. In particular, resolving a Kokoro selector does not select or construct a style tensor; the producer remains responsible for that operation.
+
++Pocket selector identity is bundle-scoped as `(pocket, bundle_id, voice_id)` and is allocated only when canonical catalog metadata includes an explicit matching `voice_states` record. `predefined_voice_names` alone is not sufficient to construct a stable identity. The current canonical Pocket catalog has no explicit `voice_states`, so its predefined voices remain unassigned. Selector capability is independent of runtime adapter registration.
++
+ ## Runtime boundary
+
+ ```text
+@@ -26,6 +28,12 @@ The Kokoro adapter dispatches from catalog runtime metadata. A single layout own
+
+ Catalog and manifest metadata retain the runtime layout, selected distribution, sample rate, maximum token count, required components, style dimensions, and declared timing output. Artifacts are queried by role, component, and quality rather than by filename conventions. Explicit distribution selection receives a distinct cache identity.
+
++## Pocket auxiliary state cache
++
++Pocket predefined voice states keep their existing `pocket-voice-states` cache layout separate from content-addressed model blobs. Explicit catalog size and SHA-256 pins participate in the cache identity and are checked before a downloaded state is published. Valid legacy cache entries remain reusable offline when their recorded integrity matches the current explicit pin; a changed pin cannot reuse the old state.
++
++`AssetStore.usage()` exposes `auxiliary_bytes`, `pocket_voice_state_count`, `pocket_voice_state_bytes`, `orphan_auxiliary_count`, and `orphan_auxiliary_bytes`. Garbage collection derives reachability from installed Pocket bundle variants and removes a state only after no installed matching variant references it. `GcReport.removed_bytes` remains the blob-only byte total for compatibility; `removed_auxiliary_count` and `removed_auxiliary_bytes` report state-cache reclamation separately.
++
+ ## Providers and diagnostics
+
+ Provider aliases are normalized without importing ONNX Runtime. The explicit `auto` policy checks TensorRT, CUDA, ROCm, DirectML, OpenVINO, CoreML, XNNPACK, NNAPI, and CPU in that order. Platform-managed CoreML and mobile providers use marker extras because the compatible ONNX Runtime build supplies the provider implementation.
+diff --git a/docs/pocket-downloads.md b/docs/pocket-downloads.md
+index cd503d6..a451f90 100644
+--- a/docs/pocket-downloads.md
++++ b/docs/pocket-downloads.md
+@@ -49,4 +49,8 @@ pocketsynth synthesize --bundle english_2026-04 --voice alba --offline \
+   --output hello.wav "Hello from Pocket."
+ ```
+
+-An offline cache miss is reported as an offline error. Explicit local bundles and previously installed assets remain usable without the Hub client. Canonical model artifacts continue to be checked against their catalog size and SHA-256 metadata; predefined voice states retain their OnnxVoice cache integrity record.
++An offline cache miss is reported as an offline error. Explicit local bundles and previously installed assets remain usable without the Hub client. Canonical model artifacts are checked against their catalog size and SHA-256 metadata. For explicit Pocket `voice_states`, predefined state files are checked against the declared size and SHA-256 before atomic cache publication; both values are included in the cache identity. A changed integrity pin cannot reuse an older state.
++
++Legacy Pocket state files stay in the existing `pocket-voice-states` layout. When a catalog supplies an explicit pin, a legacy entry is verified from its cache record and reused offline only if its actual size and SHA-256 match that pin. Hugging Face credentials are never part of the cache key or metadata.
++
++`onnxvoice cache info` reports `auxiliary_bytes`, `pocket_voice_state_count`, `pocket_voice_state_bytes`, `orphan_auxiliary_count`, and `orphan_auxiliary_bytes`. `onnxvoice cache gc --dry-run` shows unreachable state records without deleting them. Actual GC preserves states referenced by any installed matching Pocket bundle variant and removes them after the last such variant is removed.
+diff --git a/onnxvoice/catalog_tools/voice_selectors.py b/onnxvoice/catalog_tools/voice_selectors.py
+index 7c34ff1..a6d1970 100644
+--- a/onnxvoice/catalog_tools/voice_selectors.py
++++ b/onnxvoice/catalog_tools/voice_selectors.py
+@@ -4,19 +4,25 @@ from __future__ import annotations
+
+ import argparse
+ import json
++import os
+ import tempfile
+-from collections.abc import Iterable
++from collections.abc import Iterable, Mapping
++from importlib import resources
+ from pathlib import Path
+ from typing import Any
+
+ from ..catalog import CatalogClient
++from ..inventory import language_codes_from_metadata
+ from ..types import CatalogItem
+ from ..voice_selectors import (
+     VoiceSelectorRegistry,
+     catalog_voice_keys,
++    format_voice_selector,
+     get_voice_selector_registry,
+     load_voice_selector_registry,
++    parse_voice_selector,
+     selector_for_voice,
++    voice_selector_systems,
+ )
+
+
+@@ -58,6 +64,75 @@ def missing_registry_voices(
+     )
+
+
++def append_unassigned_registry_entries(
++    items: Iterable[CatalogItem], registry_data: Mapping[str, Any]
++) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
++    """Build an append-only registry update for unassigned catalog voices."""
++    registry = VoiceSelectorRegistry.from_data(registry_data)
++    pending: dict[tuple[str, str, str], tuple[str, str, CatalogItem]] = {}
++    for item, asset_id, voice_id in unassigned_catalog_voices(items, registry=registry):
++        if item.system == "pocket":
++            states = item.metadata.get("voice_states")
++            if not isinstance(states, (list, tuple)) or not any(
++                isinstance(state, Mapping) and state.get("name") == voice_id for state in states
++            ):
++                raise ValueError(
++                    f"Pocket voice {asset_id}:{voice_id} has no explicit voice_states record"
++                )
++        languages = language_codes_from_metadata(item.metadata)
++        if len(languages) != 1:
++            raise ValueError(
++                f"{item.system}:{asset_id}:{voice_id} needs exactly one language in catalog metadata"
++            )
++        try:
++            engine_code = registry.engine_codes[item.system]
++        except KeyError as exc:
++            raise ValueError(f"selector registry has no engine code for {item.system!r}") from exc
++        language = parse_voice_selector(
++            format_voice_selector(languages[0], engine_code, 1)
++        ).language
++        key = (item.system, asset_id, voice_id)
++        candidate = (language, engine_code, item)
++        previous = pending.get(key)
++        if previous is not None and previous[:2] != candidate[:2]:
++            raise ValueError(f"ambiguous language metadata for {item.system}:{asset_id}:{voice_id}")
++        pending[key] = candidate
++
++    next_slots = {
++        (identity.language, identity.engine_code): identity.slot for identity in registry.identities
++    }
++    for identity in registry.identities:
++        slot_key = (identity.language, identity.engine_code)
++        next_slots[slot_key] = max(next_slots[slot_key], identity.slot)
++
++    ordered = sorted(
++        (
++            (language, engine_code, key[1], key[2], key[0])
++            for key, (language, engine_code, _item) in pending.items()
++        ),
++    )
++    additions: list[dict[str, Any]] = []
++    for language, engine_code, asset_id, voice_id, system in ordered:
++        slot_key = (language, engine_code)
++        slot = next_slots.get(slot_key, 0) + 1
++        next_slots[slot_key] = slot
++        additions.append(
++            {
++                "language": language,
++                "engine_code": engine_code,
++                "slot": slot,
++                "system": system,
++                "asset_id": asset_id,
++                "voice_id": voice_id,
++                "state": "active",
++            }
++        )
++
++    updated = {**registry_data, "entries": [*registry_data["entries"], *additions]}
++    VoiceSelectorRegistry.from_data(updated)
++    return updated, tuple(additions)
++
++
+ def check_registry_and_catalog(
+     items: Iterable[CatalogItem] = (),
+     *,
+@@ -85,8 +160,11 @@ def _parse_catalog_arg(value: str) -> tuple[str, str]:
+     if "=" not in value:
+         raise argparse.ArgumentTypeError("catalog must use SYSTEM=PATH")
+     system, path = value.split("=", 1)
+-    if system not in {"kokoro", "piper"} or not path:
+-        raise argparse.ArgumentTypeError("catalog must use kokoro=PATH or piper=PATH")
++    supported = voice_selector_systems()
++    if system not in supported or not path:
++        raise argparse.ArgumentTypeError(
++            f"catalog must use SYSTEM=PATH where SYSTEM is one of: {', '.join(supported)}"
++        )
+     return system, path
+
+
+@@ -105,6 +183,39 @@ def _load_catalog_items(sources: list[tuple[str, str]]) -> list[CatalogItem]:
+         return items
+
+
++def _read_registry_data(path: Path | None) -> dict[str, Any]:
++    try:
++        if path is None:
++            raw = (
++                resources.files("onnxvoice")
++                .joinpath("data/voice_selectors.json")
++                .read_text(encoding="utf-8")
++            )
++        else:
++            raw = path.read_text(encoding="utf-8")
++        data = json.loads(raw)
++    except (OSError, json.JSONDecodeError) as exc:
++        raise ValueError("cannot read selector registry") from exc
++    if not isinstance(data, dict):
++        raise ValueError("selector registry must be a JSON object")
++    return data
++
++
++def _write_registry(path: Path, data: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    descriptor, temporary_name = tempfile.mkstemp(
++        prefix=f".{path.name}.", dir=path.parent, text=True
++    )
++    temporary_path = Path(temporary_name)
++    try:
++        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
++            json.dump(data, stream, indent=2)
++            stream.write("\n")
++        os.replace(temporary_path, path)
++    finally:
++        temporary_path.unlink(missing_ok=True)
++
++
+ def _voice_payload(
+     item: CatalogItem, asset_id: str, voice_id: str, registry: VoiceSelectorRegistry
+ ) -> dict[str, Any]:
+@@ -130,15 +241,63 @@ def build_parser() -> argparse.ArgumentParser:
+     parser.add_argument("--json", action="store_true", dest="as_json")
+     parser.add_argument("--check", action="store_true")
+     parser.add_argument("--list-unassigned", action="store_true")
++    parser.add_argument("--append-unassigned", action="store_true")
++    parser.add_argument(
++        "--apply",
++        action="store_true",
++        help="Write append-unassigned results to the explicit --registry file (preview is default)",
++    )
+     return parser
+
+
+ def main(argv: list[str] | None = None) -> int:
+-    args = build_parser().parse_args(argv)
+-    if not args.check and not args.list_unassigned:
++    parser = build_parser()
++    args = parser.parse_args(argv)
++    if args.apply and not args.append_unassigned:
++        parser.error("--apply requires --append-unassigned")
++    if args.apply and args.registry is None:
++        parser.error("--apply requires an explicit --registry path")
++    if not args.check and not args.list_unassigned and not args.append_unassigned:
+         args.check = True
+-    registry = load_voice_selector_registry(args.registry)
++    if args.append_unassigned:
++        registry_data = _read_registry_data(args.registry)
++        registry = VoiceSelectorRegistry.from_data(registry_data)
++    else:
++        registry_data = None
++        registry = load_voice_selector_registry(args.registry)
+     items = _load_catalog_items(args.catalog)
++    if args.append_unassigned:
++        assert registry_data is not None
++        updated, additions = append_unassigned_registry_entries(items, registry_data)
++        if args.apply and additions:
++            assert args.registry is not None
++            _write_registry(args.registry, updated)
++        if args.as_json:
++            print(
++                json.dumps(
++                    {
++                        "added": list(additions),
++                        "applied": bool(args.apply and additions),
++                        "registry": str(args.registry) if args.apply else None,
++                    },
++                    indent=2,
++                    sort_keys=True,
++                )
++            )
++        elif not additions:
++            print("no unassigned catalog voices")
++        else:
++            for entry in additions:
++                selector = format_voice_selector(
++                    entry["language"], entry["engine_code"], entry["slot"]
++                )
++                identity = f"{entry['system']}:{entry['asset_id']}:{entry['voice_id']}"
++                print(f"{selector} {identity}")
++            if args.apply:
++                print(f"Updated selector registry: {args.registry}")
++            else:
++                print("Preview only; rerun with --apply and an explicit --registry to write.")
++        return 0
+     unassigned = unassigned_catalog_voices(items, registry=registry)
+     issues = check_registry_and_catalog(items, registry=registry) if args.check else ()
+
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 1f9435e..a160dbc 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -17,6 +17,7 @@ from .catalog_tools.piper import (
+ from .manager import OnnxVoice
+ from .systems import registered_systems
+ from .validation import verify_installation
++from .voice_selectors import voice_selector_systems
+
+
+ def _manager(args: argparse.Namespace) -> OnnxVoice:
+@@ -78,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
+     voices_list_parser = voices_sub.add_parser(
+         "list", help="List catalog voices with stable selectors"
+     )
+-    voices_list_parser.add_argument("--system", choices=["kokoro", "piper"])
++    voices_list_parser.add_argument("--system", choices=voice_selector_systems())
+     voices_list_parser.add_argument("--lang", "--language", dest="language")
+     voices_list_parser.add_argument("--refresh", action="store_true")
+     voices_list_parser.add_argument("--include-retired", action="store_true")
+@@ -266,6 +267,7 @@ def _voice_payload(record) -> dict[str, Any]:
+         "backing_ref": backing_ref,
+         "state": record.state,
+         "available": record.available,
++        "selector_available": record.selector_available,
+         "languages": list(record.languages),
+         "gender": record.gender,
+     }
+@@ -275,7 +277,7 @@ def _render_voice_records(records, output_format: str) -> None:
+     columns = ["SELECTOR", "SYSTEM", "ASSET", "VOICE", "LANG", "STATUS"]
+     rows = []
+     for record in records:
+-        status = "available" if record.available else record.state
++        status = record.state
+         rows.append(
+             [
+                 record.selector or "-",
+@@ -361,6 +363,7 @@ def _cmd_voices_show(args: argparse.Namespace) -> int:
+             "slot",
+             "state",
+             "available",
++            "selector_available",
+         ):
+             print(f"{key.replace('_', ' ').title():16} {payload[key]}")
+     return 0
+@@ -755,9 +758,17 @@ def _cmd_remove(args: argparse.Namespace) -> int:
+     gc_bytes = 0
+     if args.gc:
+         gc_report = manager.store.gc()
+-        gc_bytes = gc_report.removed_bytes
+-        if gc_report.removed_blobs > 0:
+-            print(f"GC: removed {gc_report.removed_blobs} orphan blobs ({format_bytes(gc_bytes)})")
++        gc_bytes = gc_report.removed_bytes + gc_report.removed_auxiliary_bytes
++        if gc_report.removed_blobs:
++            print(
++                f"GC: removed {gc_report.removed_blobs} orphan blobs "
++                f"({format_bytes(gc_report.removed_bytes)})"
++            )
++        if gc_report.removed_auxiliary_count:
++            print(
++                f"GC: removed {gc_report.removed_auxiliary_count} Pocket voice states "
++                f"({format_bytes(gc_report.removed_auxiliary_bytes)})"
++            )
+
+     summary_parts = [
+         f"Removed {removed_count} installation(s) ({format_bytes(total_logical_bytes)})"
+@@ -787,6 +798,11 @@ def _cmd_cache_info(args: argparse.Namespace) -> int:
+             "unique_file_bytes": usage.unique_file_bytes,
+             "orphan_blob_count": usage.orphan_blob_count,
+             "orphan_blob_bytes": usage.orphan_blob_bytes,
++            "auxiliary_bytes": usage.auxiliary_bytes,
++            "pocket_voice_state_count": usage.pocket_voice_state_count,
++            "pocket_voice_state_bytes": usage.pocket_voice_state_bytes,
++            "orphan_auxiliary_count": usage.orphan_auxiliary_count,
++            "orphan_auxiliary_bytes": usage.orphan_auxiliary_bytes,
+         }
+         print(json_mod.dumps(data, indent=2, sort_keys=True))
+     else:
+@@ -798,6 +814,15 @@ def _cmd_cache_info(args: argparse.Namespace) -> int:
+         print(f"Unique cache files    {format_bytes(usage.unique_file_bytes)}")
+         print(f"Orphan blobs          {usage.orphan_blob_count}")
+         print(f"Reclaimable blobs     {format_bytes(usage.orphan_blob_bytes)}")
++        print(f"Auxiliary cache      {format_bytes(usage.auxiliary_bytes)}")
++        print(
++            f"Pocket voice states  {usage.pocket_voice_state_count} "
++            f"({format_bytes(usage.pocket_voice_state_bytes)})"
++        )
++        print(
++            f"Reclaimable Pocket   {usage.orphan_auxiliary_count} "
++            f"({format_bytes(usage.orphan_auxiliary_bytes)})"
++        )
+     return 0
+
+
+@@ -808,19 +833,32 @@ def _cmd_cache_gc(args: argparse.Namespace) -> int:
+
+     if args.dry_run:
+         usage = manager.store.usage()
+-        if usage.orphan_blob_count == 0:
+-            print("No orphan blobs to remove.")
++        if usage.orphan_blob_count == 0 and usage.orphan_auxiliary_count == 0:
++            print("No orphan cache files to remove.")
+         else:
+-            print(
+-                f"Would remove {usage.orphan_blob_count} blobs ({format_bytes(usage.orphan_blob_bytes)})"
+-            )
++            if usage.orphan_blob_count:
++                print(
++                    f"Would remove {usage.orphan_blob_count} blobs "
++                    f"({format_bytes(usage.orphan_blob_bytes)})"
++                )
++            if usage.orphan_auxiliary_count:
++                print(
++                    f"Would remove {usage.orphan_auxiliary_count} Pocket voice states "
++                    f"({format_bytes(usage.orphan_auxiliary_bytes)})"
++                )
+         return 0
+
+     report = manager.store.gc()
+-    if report.removed_blobs == 0:
+-        print("No orphan blobs to remove.")
++    if report.removed_blobs == 0 and report.removed_auxiliary_count == 0:
++        print("No orphan cache files to remove.")
+     else:
+-        print(f"Removed {report.removed_blobs} blobs ({format_bytes(report.removed_bytes)})")
++        if report.removed_blobs:
++            print(f"Removed {report.removed_blobs} blobs ({format_bytes(report.removed_bytes)})")
++        if report.removed_auxiliary_count:
++            print(
++                f"Removed {report.removed_auxiliary_count} Pocket voice states "
++                f"({format_bytes(report.removed_auxiliary_bytes)})"
++            )
+     return 0
+
+
+diff --git a/onnxvoice/data/voice_selectors.json b/onnxvoice/data/voice_selectors.json
+index fa99a87..b75a73f 100644
+--- a/onnxvoice/data/voice_selectors.json
++++ b/onnxvoice/data/voice_selectors.json
+@@ -2,7 +2,8 @@
+   "schema": 1,
+   "engine_codes": {
+     "kokoro": "ko",
+-    "piper": "pi"
++    "piper": "pi",
++    "pocket": "po"
+   },
+   "entries": [
+     {
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 5bfe4d9..59b737b 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -23,6 +23,7 @@ from .voice_selectors import (
+     iter_voice_identities,
+     make_voice_record,
+     selector_for_voice,
++    voice_selector_systems,
+ )
+ from .voice_selectors import resolve_voice_selector as _resolve_voice_selector
+
+@@ -104,8 +105,9 @@ class OnnxVoice:
+         from .inventory import language_codes_from_metadata, matches_language
+         from .voice_selectors import get_voice_selector_registry
+
+-        systems = (system.casefold(),) if system is not None else ("kokoro", "piper", "pocket")
+-        unsupported = set(systems) - {"kokoro", "piper", "pocket"}
++        supported_systems = voice_selector_systems()
++        systems = (system.casefold(),) if system is not None else supported_systems
++        unsupported = set(systems) - set(supported_systems)
+         if unsupported:
+             raise ValueError(
+                 f"voice selectors are not available for: {', '.join(sorted(unsupported))}"
+@@ -140,7 +142,7 @@ class OnnxVoice:
+             records.append(
+                 make_voice_record(
+                     identity,
+-                    available=identity is not None and identity.state == "active",
++                    available=True,
+                     catalog_item=item,
+                     languages=language_codes_from_metadata(metadata),
+                     gender=str(metadata.get("gender") or "unknown")
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index d1ec656..277389e 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -7,7 +7,7 @@ import shutil
+ import tempfile
+ import time
+ import urllib.request
+-from collections.abc import Callable, Mapping
++from collections.abc import Callable, Mapping, Sequence
+ from contextlib import suppress
+ from pathlib import Path
+ from typing import Any
+@@ -367,27 +367,206 @@ class AssetStore:
+                 raise IntegrityError(f"Missing installed artifact: {path}")
+             verify_file(path, expected_size=artifact.size, sha256=artifact.sha256)
+
+-    def gc(self) -> GcReport:
+-        """Remove blobs no longer referenced by any install manifest.
++    def _pocket_voice_state_references(
++        self, installations: Sequence[Installation]
++    ) -> dict[tuple[str, str, str, str, str], set[tuple[int | None, str | None]]]:
++        references: dict[tuple[str, str, str, str, str], set[tuple[int | None, str | None]]] = {}
++
++        def add_reference(
++            bundle_id: str,
++            voice_name: str,
++            repository: str,
++            revision: str,
++            path: str,
++            size: int | None,
++            sha256: str | None,
++        ) -> None:
++            identity = (bundle_id, voice_name, repository, revision, path)
++            references.setdefault(identity, set()).add((size, sha256))
++
++        for installation in installations:
++            if installation.system != "pocket":
++                continue
++            bundle_id = installation.metadata.get("bundle_name")
++            if not isinstance(bundle_id, str) or not bundle_id:
++                bundle_id = installation.id
++            explicit_names: set[str] = set()
++            states = installation.metadata.get("voice_states")
++            if isinstance(states, Sequence) and not isinstance(states, (str, bytes, Mapping)):
++                for state in states:
++                    if not isinstance(state, Mapping):
++                        continue
++                    name = state.get("name")
++                    source = state.get("source")
++                    if not isinstance(name, str) or not isinstance(source, Mapping):
++                        continue
++                    repository = source.get("repository")
++                    revision = source.get("revision")
++                    path = source.get("path")
++                    if not isinstance(repository, str) or not repository:
++                        continue
++                    if not isinstance(revision, str) or not revision:
++                        continue
++                    if not isinstance(path, str) or not path:
++                        continue
++                    size = state.get("size")
++                    sha256 = state.get("sha256")
++                    add_reference(
++                        bundle_id,
++                        name,
++                        repository,
++                        revision,
++                        path,
++                        size if type(size) is int and size > 0 else None,
++                        sha256 if isinstance(sha256, str) else None,
++                    )
++                    explicit_names.add(name)
+
+-        Returns a GcReport with count and bytes of removed blobs.
+-        """
++            names: set[str] = set()
++            for field in ("predefined_voice_names", "predefined_voices"):
++                raw_names = installation.metadata.get(field)
++                if isinstance(raw_names, Sequence) and not isinstance(
++                    raw_names, (str, bytes, Mapping)
++                ):
++                    names.update(name for name in raw_names if isinstance(name, str))
++            if names - explicit_names:
++                from .systems.pocket import (
++                    PREDEFINED_VOICE_REPOSITORY,
++                    PREDEFINED_VOICE_REVISION,
++                )
++
++                for name in names - explicit_names:
++                    add_reference(
++                        bundle_id,
++                        name,
++                        PREDEFINED_VOICE_REPOSITORY,
++                        PREDEFINED_VOICE_REVISION,
++                        f"languages/{bundle_id}/embeddings/{name}.safetensors",
++                        None,
++                        None,
++                    )
++        return references
++
++    @staticmethod
++    def _pocket_voice_state_key(
++        key: Mapping[str, Any],
++    ) -> tuple[tuple[str, str, str, str, str], tuple[int | None, str | None] | None] | None:
++        bundle_id = key.get("bundle_id")
++        voice_name = key.get("voice_name")
++        repository = key.get("model_repo")
++        revision = key.get("model_revision")
++        asset_path = key.get("asset_path")
++        if (
++            key.get("system") != "pocket"
++            or key.get("asset_kind") != "predefined_voice_state"
++            or not isinstance(bundle_id, str)
++            or not bundle_id
++            or not isinstance(voice_name, str)
++            or not voice_name
++            or not isinstance(repository, str)
++            or not repository
++            or not isinstance(revision, str)
++            or not revision
++            or not isinstance(asset_path, str)
++            or not asset_path
++        ):
++            return None
++        identity = (bundle_id, voice_name, repository, revision, asset_path)
++        has_expected_size = "expected_size" in key
++        has_expected_sha = "expected_sha256" in key
++        if has_expected_size != has_expected_sha:
++            return None
++        if not has_expected_size:
++            expected = None
++        else:
++            size = key.get("expected_size")
++            sha256 = key.get("expected_sha256")
++            if type(size) is not int or size <= 0 or not isinstance(sha256, str):
++                return None
++            expected = (size, sha256)
++        return identity, expected
++
++    @staticmethod
++    def _pocket_voice_state_is_referenced(
++        record: Mapping[str, Any],
++        parsed_key: tuple[
++            tuple[str, str, str, str, str],
++            tuple[int | None, str | None] | None,
++        ],
++        references: dict[
++            tuple[str, str, str, str, str],
++            set[tuple[int | None, str | None]],
++        ],
++    ) -> bool:
++        identity, expected = parsed_key
++        matching_references = references.get(identity, set())
++        if expected is not None:
++            return expected in matching_references
++        size = record.get("size")
++        sha256 = record.get("sha256")
++        return any(
++            pinned_size is None
++            and pinned_sha is None
++            or (pinned_size, pinned_sha) == (size, sha256)
++            for pinned_size, pinned_sha in matching_references
++        )
++
++    def gc(self) -> GcReport:
++        """Remove unreferenced blobs and Pocket voice-state cache records."""
+         from .types import GcReport
+
+         with FileLock(self._gc_lock_path()):
+-            referenced = {
++            installations = self.installed()
++            referenced_blobs = {
+                 artifact.sha256
+-                for installation in self.installed()
++                for installation in installations
+                 for artifact in installation.artifacts
+             }
+-            removed_count = 0
+-            removed_bytes = 0
++            removed_blobs = 0
++            removed_blob_bytes = 0
+             for blob in self.blobs.glob("*/*"):
+-                if blob.is_file() and blob.name not in referenced:
+-                    removed_bytes += blob.stat().st_size
++                if blob.is_file() and blob.name not in referenced_blobs:
++                    removed_blob_bytes += blob.stat().st_size
+                     blob.unlink()
+-                    removed_count += 1
+-            return GcReport(removed_blobs=removed_count, removed_bytes=removed_bytes)
++                    removed_blobs += 1
++
++            state_root = self.root / "pocket-voice-states"
++            state_references = self._pocket_voice_state_references(installations)
++            removed_auxiliary = 0
++            removed_auxiliary_bytes = 0
++            for metadata_path in sorted(state_root.glob("*/*/*.json")):
++                cache_dir = metadata_path.parent
++                lock_path = state_root / "locks" / f"{cache_dir.name}.lock"
++                with FileLock(lock_path):
++                    if not metadata_path.is_file():
++                        continue
++                    try:
++                        record = json.loads(metadata_path.read_text(encoding="utf-8"))
++                    except (OSError, json.JSONDecodeError):
++                        continue
++                    if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
++                        continue
++                    parsed_key = self._pocket_voice_state_key(record["key"])
++                    if parsed_key is None:
++                        continue
++                    if self._pocket_voice_state_is_referenced(record, parsed_key, state_references):
++                        continue
++                    state_path = metadata_path.with_suffix(".safetensors")
++                    for cached_path in (state_path, metadata_path):
++                        if cached_path.is_file():
++                            removed_auxiliary_bytes += cached_path.stat().st_size
++                            cached_path.unlink()
++                    removed_auxiliary += 1
++                    with suppress(OSError):
++                        cache_dir.rmdir()
++                        cache_dir.parent.rmdir()
++
++            return GcReport(
++                removed_blobs=removed_blobs,
++                removed_bytes=removed_blob_bytes,
++                removed_auxiliary_count=removed_auxiliary,
++                removed_auxiliary_bytes=removed_auxiliary_bytes,
++            )
+
+     def usage(self) -> CacheUsage:
+         """Compute cache storage usage statistics.
+@@ -438,6 +617,48 @@ class AssetStore:
+                         seen_inodes.add(inode_key)
+                         unique_bytes += st.st_size
+
++        state_root = self.root / "pocket-voice-states"
++        auxiliary_bytes = 0
++        pocket_state_count = 0
++        pocket_state_bytes = 0
++        orphan_auxiliary_count = 0
++        orphan_auxiliary_bytes = 0
++        state_references = self._pocket_voice_state_references(installations)
++        if state_root.is_dir():
++            for cached_file in sorted(state_root.rglob("*")):
++                if (
++                    not cached_file.is_file()
++                    or "locks" in cached_file.relative_to(state_root).parts
++                ):
++                    continue
++                stat = cached_file.stat()
++                auxiliary_bytes += stat.st_size
++                inode_key = (stat.st_dev, stat.st_ino)
++                if inode_key not in seen_inodes:
++                    seen_inodes.add(inode_key)
++                    unique_bytes += stat.st_size
++
++            for metadata_path in sorted(state_root.glob("*/*/*.json")):
++                try:
++                    record = json.loads(metadata_path.read_text(encoding="utf-8"))
++                except (OSError, json.JSONDecodeError):
++                    continue
++                if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
++                    continue
++                parsed_key = self._pocket_voice_state_key(record["key"])
++                if parsed_key is None:
++                    continue
++                state_path = metadata_path.with_suffix(".safetensors")
++                state_size = 0
++                if state_path.is_file():
++                    pocket_state_count += 1
++                    state_size = state_path.stat().st_size
++                    pocket_state_bytes += state_size
++                record_size = state_size + metadata_path.stat().st_size
++                if not self._pocket_voice_state_is_referenced(record, parsed_key, state_references):
++                    orphan_auxiliary_count += 1
++                    orphan_auxiliary_bytes += record_size
++
+         # Orphan blobs
+         referenced = {artifact.sha256 for inst in installations for artifact in inst.artifacts}
+         orphan_count = 0
+@@ -457,6 +678,11 @@ class AssetStore:
+             unique_file_bytes=unique_bytes,
+             orphan_blob_count=orphan_count,
+             orphan_blob_bytes=orphan_bytes,
++            auxiliary_bytes=auxiliary_bytes,
++            pocket_voice_state_count=pocket_state_count,
++            pocket_voice_state_bytes=pocket_state_bytes,
++            orphan_auxiliary_count=orphan_auxiliary_count,
++            orphan_auxiliary_bytes=orphan_auxiliary_bytes,
+         )
+
+     def replace(
+diff --git a/onnxvoice/systems/pocket.py b/onnxvoice/systems/pocket.py
+index d1fc21d..b669c21 100644
+--- a/onnxvoice/systems/pocket.py
++++ b/onnxvoice/systems/pocket.py
+@@ -326,7 +326,8 @@ class PocketAdapter(SystemAdapter):
+         self._validated_contracts: set[str] = set()
+         self._validated = False
+         self._predefined_voice_states: dict[
+-            tuple[str, str, str, str, str, str, str], PocketVoiceState
++            tuple[str, str, str, str, str, str, str, int | None, str | None],
++            PocketVoiceState,
+         ] = {}
+         self._voice_cache_dir = Path(
+             voice_cache_dir
+@@ -468,6 +469,34 @@ class PocketAdapter(SystemAdapter):
+             gated=True,
+         )
+
++    @staticmethod
++    def _predefined_voice_integrity(
++        metadata: Mapping[str, Any], name: str
++    ) -> tuple[int | None, str | None]:
++        records = metadata.get("voice_states")
++        if records is None:
++            return None, None
++        if not isinstance(records, Sequence) or isinstance(records, (str, bytes, Mapping)):
++            raise RuntimeContractError("Pocket voice_states metadata must be a sequence")
++        for record in records:
++            if not isinstance(record, Mapping):
++                raise RuntimeContractError("Pocket voice-state metadata must contain objects")
++            if record.get("name") != name:
++                continue
++            size = record.get("size")
++            sha256 = record.get("sha256")
++            if (
++                type(size) is not int
++                or size <= 0
++                or not isinstance(sha256, str)
++                or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
++            ):
++                raise RuntimeContractError(
++                    f"Pocket predefined voice {name!r} has invalid integrity metadata"
++                )
++            return size, sha256
++        return None, None
++
+     @property
+     def predefined_voices(self) -> tuple[str, ...]:
+         return self._predefined_voice_names(self._ensure_validated())
+@@ -493,9 +522,7 @@ class PocketAdapter(SystemAdapter):
+             result = np.expand_dims(result, axis=1)
+         while result.ndim > rank:
+             if result.shape[1] != 1:
+-                raise RuntimeContractError(
+-                    f"Cannot fit tensor shape {result.shape} to rank {rank}"
+-                )
++                raise RuntimeContractError(f"Cannot fit tensor shape {result.shape} to rank {rank}")
+             result = np.squeeze(result, axis=1)
+         return result
+
+@@ -658,8 +685,11 @@ class PocketAdapter(SystemAdapter):
+         name: str,
+         bundle_id: str,
+         source: HuggingFaceSource,
++        *,
++        expected_size: int | None,
++        expected_sha256: str | None,
+     ) -> tuple[Path, str]:
+-        cache_key = {
++        cache_key: dict[str, str | int] = {
+             "system": "pocket",
+             "asset_kind": "predefined_voice_state",
+             "model_repo": source.repository,
+@@ -668,6 +698,11 @@ class PocketAdapter(SystemAdapter):
+             "bundle_id": bundle_id,
+             "voice_name": name,
+         }
++        legacy_cache_key = dict(cache_key)
++        if expected_size is not None:
++            cache_key["expected_size"] = expected_size
++        if expected_sha256 is not None:
++            cache_key["expected_sha256"] = expected_sha256
+         cache_digest = hashlib.sha256(
+             json.dumps(cache_key, sort_keys=True, separators=(",", ":")).encode("utf-8")
+         ).hexdigest()
+@@ -698,6 +733,42 @@ class PocketAdapter(SystemAdapter):
+                     ) from exc
+                 return state_path, sha256
+
++            if cache_key != legacy_cache_key:
++                legacy_digest = hashlib.sha256(
++                    json.dumps(legacy_cache_key, sort_keys=True, separators=(",", ":")).encode(
++                        "utf-8"
++                    )
++                ).hexdigest()
++                legacy_dir = self._voice_cache_dir / legacy_digest[:2] / legacy_digest
++                legacy_state = legacy_dir / f"{name}.safetensors"
++                legacy_metadata = legacy_dir / f"{name}.json"
++                legacy_lock = self._voice_cache_dir / "locks" / f"{legacy_digest}.lock"
++                with FileLock(legacy_lock):
++                    if legacy_state.exists() or legacy_metadata.exists():
++                        if not legacy_state.is_file() or not legacy_metadata.is_file():
++                            raise PredefinedVoiceIntegrityError(
++                                f"Incomplete cached state for predefined Pocket voice {name!r}"
++                            )
++                        try:
++                            record = json.loads(legacy_metadata.read_text(encoding="utf-8"))
++                            if (
++                                not isinstance(record, dict)
++                                or record.get("key") != legacy_cache_key
++                            ):
++                                raise ValueError("legacy cache key mismatch")
++                            size = record["size"]
++                            sha256 = record["sha256"]
++                            if type(size) is not int or size <= 0 or not isinstance(sha256, str):
++                                raise ValueError("invalid legacy integrity metadata")
++                            verify_file(legacy_state, expected_size=size, sha256=sha256)
++                        except (OSError, KeyError, TypeError, ValueError, IntegrityError) as exc:
++                            raise PredefinedVoiceIntegrityError(
++                                f"Cached predefined Pocket voice {name!r} failed integrity validation"
++                            ) from exc
++                        if (expected_size is None or size == expected_size) and (
++                            expected_sha256 is None or sha256 == expected_sha256
++                        ):
++                            return legacy_state, sha256
+             with tempfile.TemporaryDirectory(prefix="onnxvoice-pocket-hf-") as download_dir:
+                 try:
+                     downloaded = download_huggingface_file(
+@@ -727,6 +798,14 @@ class PocketAdapter(SystemAdapter):
+                             f"Downloaded state for predefined Pocket voice {name!r} is empty"
+                         )
+                     sha256 = digest_file(temporary_state)
++                    if expected_size is not None and size != expected_size:
++                        raise PredefinedVoiceIntegrityError(
++                            f"Downloaded state for predefined Pocket voice {name!r} failed integrity validation"
++                        )
++                    if expected_sha256 is not None and sha256 != expected_sha256:
++                        raise PredefinedVoiceIntegrityError(
++                            f"Downloaded state for predefined Pocket voice {name!r} failed integrity validation"
++                        )
+                     os.replace(temporary_state, state_path)
+                     record = {"key": cache_key, "size": size, "sha256": sha256}
+                     fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
+@@ -841,6 +920,7 @@ class PocketAdapter(SystemAdapter):
+         except ValueError as exc:
+             raise RuntimeContractError(str(exc)) from exc
+         source = self._predefined_voice_source(metadata, name, bundle_name)
++        expected_size, expected_sha256 = self._predefined_voice_integrity(metadata, name)
+         cache_key = (
+             "pocket",
+             "predefined_voice_state",
+@@ -849,11 +929,19 @@ class PocketAdapter(SystemAdapter):
+             bundle_name,
+             name,
+             source.path,
++            expected_size,
++            expected_sha256,
+         )
+         cached = self._predefined_voice_states.get(cache_key)
+         if cached is not None:
+             return cached
+-        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, source)
++        state_path, sha256 = self._cached_predefined_voice_asset(
++            name,
++            bundle_name,
++            source,
++            expected_size=expected_size,
++            expected_sha256=expected_sha256,
++        )
+         model_state = self._predefined_model_state(state_path, name=name)
+         flow_state = _flow_state_from_model_state(model_state, self._flow_specs, name=name)
+         sample_rate = int(metadata["sample_rate"])
+diff --git a/onnxvoice/types.py b/onnxvoice/types.py
+index c971f55..d2fe8f0 100644
+--- a/onnxvoice/types.py
++++ b/onnxvoice/types.py
+@@ -175,10 +175,10 @@ class CatalogItem:
+
+ @dataclass(frozen=True, slots=True)
+ class VoiceRecord:
+-    """A stable selector identity projected onto current catalog state."""
++    """A catalog voice joined to its optional stable selector identity."""
+
+     identity: VoiceIdentity | None
+-    available: bool
++    available: bool  # current catalog presence; selector availability is separate
+     catalog_item: CatalogItem | None
+     languages: tuple[str, ...] = ()
+     gender: str = "unknown"
+@@ -214,6 +214,11 @@ class VoiceRecord:
+     def state(self) -> str:
+         return self.identity.state if self.identity is not None else "unassigned"
+
++    @property
++    def selector_available(self) -> bool:
++        """Whether the record has an active selector assignment in the catalog."""
++        return self.identity is not None and self.identity.state == "active" and self.available
++
+
+ @dataclass(frozen=True, slots=True)
+ class InstalledArtifact:
+@@ -393,6 +398,12 @@ class CacheUsage:
+     orphan_blob_count: int
+     orphan_blob_bytes: int
+
++    auxiliary_bytes: int = 0
++    pocket_voice_state_count: int = 0
++    pocket_voice_state_bytes: int = 0
++    orphan_auxiliary_count: int = 0
++    orphan_auxiliary_bytes: int = 0
++
+
+ @dataclass(frozen=True, slots=True)
+ class GcReport:
+@@ -400,6 +411,8 @@ class GcReport:
+
+     removed_blobs: int
+     removed_bytes: int
++    removed_auxiliary_count: int = 0
++    removed_auxiliary_bytes: int = 0
+
+
+ @dataclass(frozen=True, slots=True)
+diff --git a/onnxvoice/voice_selectors.py b/onnxvoice/voice_selectors.py
+index 6ff3881..fd31ee1 100644
+--- a/onnxvoice/voice_selectors.py
++++ b/onnxvoice/voice_selectors.py
+@@ -26,7 +26,15 @@ from .types import CatalogItem, VoiceIdentity, VoiceRecord
+ VOICE_ENGINE_CODES: dict[str, str] = {
+     "kokoro": "ko",
+     "piper": "pi",
++    "pocket": "po",
+ }
++
++
++def voice_selector_systems() -> tuple[str, ...]:
++    """Return systems with stable voice-selector catalog semantics."""
++    return tuple(sorted(VOICE_ENGINE_CODES))
++
++
+ ENGINE_CODE_SYSTEMS: dict[str, str] = {code: system for system, code in VOICE_ENGINE_CODES.items()}
+ _SUPPORTED_SCHEMA = 1
+ _LANGUAGE_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+@@ -394,6 +402,7 @@ __all__ = [
+     "get_voice_selector_registry",
+     "is_voice_selector",
+     "iter_voice_identities",
++    "voice_selector_systems",
+     "load_voice_selector_registry",
+     "make_voice_record",
+     "parse_voice_selector",
+diff --git a/pyproject.toml b/pyproject.toml
+index a71b00d..9695098 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -16,7 +16,7 @@ readme = "README.md"
+ requires-python = ">=3.10"
+ license = {file = "LICENSE"}
+ authors = [{name = "onnxvoice contributors"}]
+-keywords = ["onnx", "tts", "speech", "voice", "piper", "kokoro"]
++keywords = ["onnx", "tts", "speech", "voice", "piper", "kokoro", "pocket", "voice-selectors", "asset-cache"]
+ dependencies = [
+   "numpy>=1.23",
+   "platformdirs>=4,<5",
+diff --git a/tests/test_cache_usage.py b/tests/test_cache_usage.py
+index d79c929..95fd4d8 100644
+--- a/tests/test_cache_usage.py
++++ b/tests/test_cache_usage.py
+@@ -3,7 +3,11 @@
+ from __future__ import annotations
+
+ import hashlib
++import json
++from argparse import Namespace
++from types import SimpleNamespace
+
++import onnxvoice.cli as cli
+ from onnxvoice.store import AssetStore
+ from onnxvoice.types import Artifact, CatalogItem
+
+@@ -28,6 +32,109 @@ class TestCacheUsage:
+         assert usage.installation_count == 0
+         assert usage.install_logical_bytes == 0
+         assert usage.orphan_blob_count == 0
++        assert usage.auxiliary_bytes == 0
++        assert usage.pocket_voice_state_count == 0
++        assert usage.pocket_voice_state_bytes == 0
++        assert usage.orphan_auxiliary_count == 0
++        assert usage.orphan_auxiliary_bytes == 0
++
++    def test_pocket_auxiliary_metrics_and_cache_cli(self, tmp_path, monkeypatch, capsys):
++        state_payload = b"pocket voice state bytes"
++        state_sha = hashlib.sha256(state_payload).hexdigest()
++        source_record = {
++            "name": "alba",
++            "source": {
++                "provider": "huggingface",
++                "repository": "kyutai/pocket-tts",
++                "revision": "d" * 40,
++                "path": "languages/english_2026-04/embeddings/alba.safetensors",
++            },
++            "size": len(state_payload),
++            "sha256": state_sha,
++        }
++        bundle_file = tmp_path / "bundle.json"
++        bundle_file.write_bytes(b"bundle")
++        bundle_sha = hashlib.sha256(b"bundle").hexdigest()
++        item = CatalogItem(
++            system="pocket",
++            id="english_2026-04",
++            kind="bundle",
++            artifacts=(
++                Artifact(
++                    "bundle_metadata",
++                    bundle_file.name,
++                    bundle_file.as_uri(),
++                    bundle_file.stat().st_size,
++                    bundle_sha,
++                ),
++            ),
++            metadata={"predefined_voice_names": ["alba"], "voice_states": [source_record]},
++        )
++        store = AssetStore(tmp_path / "cache")
++        store.install(item)
++        key = {
++            "system": "pocket",
++            "asset_kind": "predefined_voice_state",
++            "model_repo": "kyutai/pocket-tts",
++            "model_revision": "d" * 40,
++            "asset_path": "languages/english_2026-04/embeddings/alba.safetensors",
++            "bundle_id": "english_2026-04",
++            "voice_name": "alba",
++            "expected_size": len(state_payload),
++            "expected_sha256": state_sha,
++        }
++        digest = hashlib.sha256(
++            json.dumps(key, sort_keys=True, separators=(",", ":")).encode("utf-8")
++        ).hexdigest()
++        state_dir = store.root / "pocket-voice-states" / digest[:2] / digest
++        state_dir.mkdir(parents=True)
++        state_path = state_dir / "alba.safetensors"
++        state_path.write_bytes(state_payload)
++        metadata_path = state_dir / "alba.json"
++        metadata_path.write_text(
++            json.dumps(
++                {"key": key, "size": len(state_payload), "sha256": state_sha},
++                sort_keys=True,
++            ),
++            encoding="utf-8",
++        )
++
++        referenced_usage = store.usage()
++        assert (
++            referenced_usage.auxiliary_bytes
++            == state_path.stat().st_size + metadata_path.stat().st_size
++        )
++        assert referenced_usage.pocket_voice_state_count == 1
++        assert referenced_usage.pocket_voice_state_bytes == len(state_payload)
++        assert referenced_usage.orphan_auxiliary_count == 0
++        store.remove("pocket", "english_2026-04")
++
++        monkeypatch.setattr(cli, "_manager", lambda args: SimpleNamespace(store=store))
++        assert cli._cmd_cache_info(Namespace(format="json")) == 0
++        json_usage = json.loads(capsys.readouterr().out)
++        assert (
++            json_usage["auxiliary_bytes"]
++            == state_path.stat().st_size + metadata_path.stat().st_size
++        )
++        assert json_usage["pocket_voice_state_count"] == 1
++        assert json_usage["pocket_voice_state_bytes"] == len(state_payload)
++        assert json_usage["orphan_auxiliary_count"] == 1
++        assert (
++            json_usage["orphan_auxiliary_bytes"]
++            == state_path.stat().st_size + metadata_path.stat().st_size
++        )
++
++        assert cli._cmd_cache_info(Namespace(format="table")) == 0
++        text_usage = capsys.readouterr().out
++        assert "Pocket voice states" in text_usage
++        assert "Reclaimable Pocket" in text_usage
++
++        assert cli._cmd_cache_gc(Namespace(dry_run=True)) == 0
++        assert "Would remove 1 Pocket voice states" in capsys.readouterr().out
++        assert cli._cmd_cache_gc(Namespace(dry_run=False)) == 0
++        gc_output = capsys.readouterr().out
++        assert "Removed 1 Pocket voice states" in gc_output
++        assert not state_path.exists()
+
+     def test_install_logical_bytes(self, tmp_path):
+         payload = b"x" * 1000
+diff --git a/tests/test_pocket_adapter.py b/tests/test_pocket_adapter.py
+index 10322ca..7ccf30f 100644
+--- a/tests/test_pocket_adapter.py
++++ b/tests/test_pocket_adapter.py
+@@ -2,8 +2,11 @@
+
+ from __future__ import annotations
+
++import hashlib
+ import json
++from concurrent.futures import ThreadPoolExecutor
+ from pathlib import Path
++from threading import Barrier, Event
+ from types import SimpleNamespace
+ from typing import Any
+ from unittest.mock import MagicMock, patch
+@@ -831,6 +834,55 @@ def _predefined_model_tensors() -> dict[str, np.ndarray]:
+     }
+
+
++def _explicit_voice_state_record(payload: bytes) -> dict[str, Any]:
++    return {
++        "name": "alba",
++        "compatible_bundle": "english_2026-04",
++        "source": {
++            "provider": "huggingface",
++            "repository": "kyutai/pocket-tts",
++            "revision": "d" * 40,
++            "path": "languages/english_2026-04/embeddings/alba.safetensors",
++        },
++        "access": {"gated": True, "distributable": False, "license": "cc-by-4.0"},
++        "format": "safetensors",
++        "size": len(payload),
++        "sha256": hashlib.sha256(payload).hexdigest(),
++        "url": None,
++        "resolver": "huggingface",
++    }
++
++
++def _write_legacy_voice_state_cache(cache_dir: Path, payload: bytes) -> Path:
++    key = {
++        "system": "pocket",
++        "asset_kind": "predefined_voice_state",
++        "model_repo": "kyutai/pocket-tts",
++        "model_revision": "d" * 40,
++        "asset_path": "languages/english_2026-04/embeddings/alba.safetensors",
++        "bundle_id": "english_2026-04",
++        "voice_name": "alba",
++    }
++    digest = hashlib.sha256(
++        json.dumps(key, sort_keys=True, separators=(",", ":")).encode("utf-8")
++    ).hexdigest()
++    record_dir = cache_dir / digest[:2] / digest
++    record_dir.mkdir(parents=True)
++    state_path = record_dir / "alba.safetensors"
++    state_path.write_bytes(payload)
++    (record_dir / "alba.json").write_text(
++        json.dumps(
++            {
++                "key": key,
++                "size": len(payload),
++                "sha256": hashlib.sha256(payload).hexdigest(),
++            }
++        ),
++        encoding="utf-8",
++    )
++    return state_path
++
++
+ def test_predefined_voice_download_uses_pinned_bundle_asset_and_runtime_cache(
+     tmp_path: Path,
+ ) -> None:
+@@ -887,7 +939,8 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
+     tmp_path: Path,
+ ) -> None:
+     remote_file = tmp_path / "voice.safetensors"
+-    remote_file.write_bytes(b"fake safetensors payload")
++    payload = b"fake safetensors payload"
++    remote_file.write_bytes(payload)
+     adapter = _predefined_adapter(tmp_path)
+     source_record = {
+         "name": "alba",
+@@ -900,8 +953,8 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
+         },
+         "access": {"gated": True, "distributable": False, "license": "cc-by-4.0"},
+         "format": "safetensors",
+-        "size": 123,
+-        "sha256": "a" * 64,
++        "size": len(payload),
++        "sha256": hashlib.sha256(payload).hexdigest(),
+         "url": None,
+         "resolver": "huggingface",
+     }
+@@ -923,10 +976,106 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
+     assert source.revision == "d" * 40
+     assert source.path == source_record["source"]["path"]
+     assert source.gated is True
++    cached_record = json.loads(
++        next(adapter._voice_cache_dir.rglob("alba.json")).read_text(encoding="utf-8")
++    )
++    assert cached_record["key"]["expected_size"] == len(payload)
++    assert cached_record["key"]["expected_sha256"] == hashlib.sha256(payload).hexdigest()
+     assert state.metadata["model_repo"] == "kyutai/pocket-tts"
+     assert state.metadata["model_revision"] == "d" * 40
+
+
++def test_pinned_explicit_voice_reuses_legacy_cache_offline(tmp_path: Path) -> None:
++    payload = b"cached pinned state"
++    cache_dir = tmp_path / "voice-cache"
++    legacy_state = _write_legacy_voice_state_cache(cache_dir, payload)
++    adapter = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
++    adapter.installation.metadata["voice_states"] = [_explicit_voice_state_record(payload)]
++
++    with (
++        patch("onnxvoice.systems.pocket.download_huggingface_file") as download,
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value=_predefined_model_tensors(),
++        ),
++    ):
++        state = adapter.prepare_predefined_voice("alba")
++
++    download.assert_not_called()
++    assert state.metadata["sha256"] == hashlib.sha256(payload).hexdigest()
++    assert legacy_state.is_file()
++
++
++def test_stale_legacy_voice_state_is_not_reused_for_changed_integrity_pin(
++    tmp_path: Path,
++) -> None:
++    old_payload = b"old pinned state"
++    new_payload = b"new pinned state with different size"
++    cache_dir = tmp_path / "voice-cache"
++    _write_legacy_voice_state_cache(cache_dir, old_payload)
++    adapter = _predefined_adapter(tmp_path, cache_dir=cache_dir)
++    adapter.installation.metadata["voice_states"] = [_explicit_voice_state_record(new_payload)]
++    remote_file = tmp_path / "new-state.safetensors"
++    remote_file.write_bytes(new_payload)
++
++    with (
++        patch(
++            "onnxvoice.systems.pocket.download_huggingface_file",
++            return_value=remote_file,
++        ) as download,
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value=_predefined_model_tensors(),
++        ),
++    ):
++        state = adapter.prepare_predefined_voice("alba")
++
++    download.assert_called_once()
++    assert state.metadata["sha256"] == hashlib.sha256(new_payload).hexdigest()
++
++
++def test_concurrent_predefined_voice_requests_share_one_atomic_download(tmp_path: Path) -> None:
++    source = tmp_path / "download.safetensors"
++    source.write_bytes(b"concurrent voice state")
++    cache_dir = tmp_path / "voice-cache"
++    adapters = [
++        _predefined_adapter(tmp_path, cache_dir=cache_dir),
++        _predefined_adapter(tmp_path, cache_dir=cache_dir),
++    ]
++    ready = Barrier(2)
++    download_started = Event()
++    finish_download = Event()
++
++    def download(*args, **kwargs):
++        download_started.set()
++        assert finish_download.wait(timeout=5)
++        return source
++
++    def prepare(adapter):
++        ready.wait(timeout=5)
++        return adapter.prepare_predefined_voice("alba")
++
++    with (
++        patch(
++            "onnxvoice.systems.pocket.download_huggingface_file",
++            side_effect=download,
++        ) as download_mock,
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value=_predefined_model_tensors(),
++        ) as load,
++        ThreadPoolExecutor(max_workers=2) as executor,
++    ):
++        futures = [executor.submit(prepare, adapter) for adapter in adapters]
++        assert download_started.wait(timeout=5)
++        finish_download.set()
++        states = [future.result(timeout=5) for future in futures]
++
++    download_mock.assert_called_once()
++    assert len(states) == 2
++    assert load.call_count == 2
++
++
+ def test_predefined_voice_uses_persistent_cache_offline(
+     tmp_path: Path,
+ ) -> None:
+diff --git a/tests/test_store.py b/tests/test_store.py
+index d1ecd70..0055ed8 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+
+ import hashlib
++import json
+ import os
+
+ import pytest
+@@ -74,6 +75,82 @@ def test_remove_then_gc(tmp_path):
+     assert report.removed_blobs == 1
+
+
++def test_pocket_state_gc_respects_references_from_all_installed_variants(tmp_path):
++    state_payload = b"pinned voice state"
++    state_sha = hashlib.sha256(state_payload).hexdigest()
++    source_record = {
++        "name": "alba",
++        "source": {
++            "provider": "huggingface",
++            "repository": "kyutai/pocket-tts",
++            "revision": "d" * 40,
++            "path": "languages/english_2026-04/embeddings/alba.safetensors",
++        },
++        "size": len(state_payload),
++        "sha256": state_sha,
++    }
++    bundle_payload = b"bundle metadata"
++    bundle_file = tmp_path / "bundle.json"
++    bundle_file.write_bytes(bundle_payload)
++    bundle_artifact = Artifact(
++        "bundle_metadata",
++        "bundle.json",
++        bundle_file.as_uri(),
++        len(bundle_payload),
++        hashlib.sha256(bundle_payload).hexdigest(),
++    )
++    store = AssetStore(tmp_path / "cache")
++
++    def item(cache_id: str) -> CatalogItem:
++        return CatalogItem(
++            system="pocket",
++            id="english_2026-04",
++            kind="bundle",
++            artifacts=(bundle_artifact,),
++            metadata={
++                "cache_id": cache_id,
++                "canonical_catalog": True,
++                "predefined_voice_names": ["alba"],
++                "voice_states": [source_record],
++            },
++        )
++
++    store.install(item("english-profile-a"))
++    store.install(item("english-profile-b"))
++    key = {
++        "system": "pocket",
++        "asset_kind": "predefined_voice_state",
++        "model_repo": "kyutai/pocket-tts",
++        "model_revision": "d" * 40,
++        "asset_path": "languages/english_2026-04/embeddings/alba.safetensors",
++        "bundle_id": "english_2026-04",
++        "voice_name": "alba",
++        "expected_size": len(state_payload),
++        "expected_sha256": state_sha,
++    }
++    digest = hashlib.sha256(
++        json.dumps(key, sort_keys=True, separators=(",", ":")).encode("utf-8")
++    ).hexdigest()
++    cache_dir = store.root / "pocket-voice-states" / digest[:2] / digest
++    cache_dir.mkdir(parents=True)
++    state_path = cache_dir / "alba.safetensors"
++    state_path.write_bytes(state_payload)
++    (cache_dir / "alba.json").write_text(
++        json.dumps({"key": key, "size": len(state_payload), "sha256": state_sha}),
++        encoding="utf-8",
++    )
++
++    assert store.gc().removed_auxiliary_count == 0
++    store.remove("pocket", "english-profile-a")
++    assert store.gc().removed_auxiliary_count == 0
++    store.remove("pocket", "english-profile-b")
++    report = store.gc()
++    assert report.removed_auxiliary_count == 1
++    assert report.removed_bytes == len(bundle_payload)
++    assert report.removed_auxiliary_bytes >= len(state_payload)
++    assert not state_path.exists()
++
++
+ def test_install_falls_back_to_copy_when_os_link_is_unavailable(tmp_path, monkeypatch):
+     payload = b"model"
+     source = tmp_path / "voice.onnx"
+diff --git a/tests/test_voice_selectors.py b/tests/test_voice_selectors.py
+index d297628..93ac0ca 100644
+--- a/tests/test_voice_selectors.py
++++ b/tests/test_voice_selectors.py
+@@ -1,15 +1,22 @@
+ from __future__ import annotations
+
++import argparse
+ import inspect
++import json
++from unittest.mock import patch
+
+ import pytest
+
+ from onnxvoice.catalog import parse_ref
+ from onnxvoice.catalog_tools.voice_selectors import (
++    _parse_catalog_arg,
++    append_unassigned_registry_entries,
+     check_registry_and_catalog,
+     missing_registry_voices,
+     unassigned_catalog_voices,
+ )
++from onnxvoice.catalog_tools.voice_selectors import build_parser as build_selector_tool_parser
++from onnxvoice.catalog_tools.voice_selectors import main as selector_tools_main
+ from onnxvoice.cli import _render_voice_records, build_parser
+ from onnxvoice.errors import (
+     VoiceSelectorError,
+@@ -20,6 +27,7 @@ from onnxvoice.errors import (
+ from onnxvoice.manager import OnnxVoice
+ from onnxvoice.types import Artifact, CatalogItem, VoiceRecord
+ from onnxvoice.voice_selectors import (
++    VOICE_ENGINE_CODES,
+     VoiceSelectorRegistry,
+     catalog_voice_keys,
+     format_voice_selector,
+@@ -28,6 +36,7 @@ from onnxvoice.voice_selectors import (
+     load_voice_selector_registry,
+     parse_voice_selector,
+     resolve_voice_selector,
++    voice_selector_systems,
+ )
+
+
+@@ -47,7 +56,11 @@ def _entry(
+
+ def _registry(*entries):
+     return VoiceSelectorRegistry.from_data(
+-        {"schema": 1, "engine_codes": {"kokoro": "ko", "piper": "pi"}, "entries": list(entries)}
++        {
++            "schema": 1,
++            "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
++            "entries": list(entries),
++        }
+     )
+
+
+@@ -61,6 +74,20 @@ def _piper_voice(voice_id: str, language: str = "de_DE") -> CatalogItem:
+     )
+
+
++def _pocket_bundle(bundle_id: str, voices: tuple[str, ...], language: str = "en") -> CatalogItem:
++    return CatalogItem(
++        system="pocket",
++        id=bundle_id,
++        kind="bundle",
++        artifacts=(),
++        voices=voices,
++        metadata={
++            "language": language,
++            "voice_states": [{"name": voice} for voice in voices],
++        },
++    )
++
++
+ def _kokoro_model(model_id: str, voices: tuple[str, ...]) -> CatalogItem:
+     return CatalogItem(
+         system="kokoro",
+@@ -147,6 +174,7 @@ def test_packaged_registry_contains_all_en_us_kokoro_assignments():
+
+
+ def test_engine_codes_and_packaged_baseline():
++    assert voice_selector_systems() == ("kokoro", "piper", "pocket")
+     assert resolve_voice_selector("de-ko-1").system == "kokoro"
+     assert resolve_voice_selector("de-ko-1").canonical_key == ("kokoro", "de-anna", "df_anna")
+     assert resolve_voice_selector("de-pi-1").canonical_key == (
+@@ -155,6 +183,7 @@ def test_engine_codes_and_packaged_baseline():
+         "de_DE-eva_k-x_low",
+     )
+     assert {identity.engine_code for identity in iter_voice_identities()} == {"ko", "pi"}
++    assert VOICE_ENGINE_CODES == {"kokoro": "ko", "piper": "pi", "pocket": "po"}
+     assert load_voice_selector_registry().identities == iter_voice_identities()
+
+
+@@ -276,6 +305,15 @@ def test_catalog_projection_reports_assigned_and_unassigned_voices():
+     assert any(record.selector is None and record.voice_id == "new_voice" for record in projected)
+     assert all(record.gender == "unknown" for record in projected)
+
++    assigned = next(record for record in projected if record.selector == "de-ko-1")
++    unassigned_record = next(
++        record for record in projected if record.selector is None and record.voice_id == "new_voice"
++    )
++    assert assigned.available and assigned.selector_available
++    assert unassigned_record.available
++    assert not unassigned_record.selector_available
++    assert unassigned_record.state == "unassigned"
++
+
+ def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
+     pocket = CatalogItem(
+@@ -288,6 +326,134 @@ def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
+     assert catalog_voice_keys([pocket]) == ((pocket, "english_2026-04", "alba"),)
+
+
++def test_pocket_selector_identity_uses_permanent_engine_code_and_bundle():
++    registry = _registry(_entry("en_us", "po", 1, "pocket", "bundle-a", "alba"))
++    selector = format_voice_selector("en-US", "po", 1)
++    assert selector == "en_us-po-1"
++    assert parse_voice_selector(selector).selector == selector
++    identity = registry.resolve(selector)
++    assert identity.system == "pocket"
++    assert identity.asset_id == "bundle-a"
++    assert identity.voice_id == "alba"
++    assert identity.backing_ref == "pocket:bundle-a"
++
++
++def test_append_unassigned_pocket_entries_is_deterministic_and_append_only():
++    original = _entry("en", "po", 2, "pocket", "retired-bundle", "old", "retired")
++    registry_data = {
++        "schema": 1,
++        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
++        "entries": [original],
++    }
++    bundles = [
++        _pocket_bundle("bundle-b", ("alba",)),
++        _pocket_bundle("bundle-a", ("alba",)),
++    ]
++    updated, additions = append_unassigned_registry_entries(bundles, registry_data)
++
++    assert updated["entries"][0] == original
++    assert [entry["slot"] for entry in additions] == [3, 4]
++    assert [(entry["asset_id"], entry["voice_id"]) for entry in additions] == [
++        ("bundle-a", "alba"),
++        ("bundle-b", "alba"),
++    ]
++    registry = VoiceSelectorRegistry.from_data(updated)
++    assert registry.resolve("en-po-3").canonical_key == ("pocket", "bundle-a", "alba")
++    assert registry.resolve("en-po-4").canonical_key == ("pocket", "bundle-b", "alba")
++
++
++def test_append_unassigned_requires_one_language_and_explicit_pocket_state():
++    data = {
++        "schema": 1,
++        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
++        "entries": [],
++    }
++    ambiguous = CatalogItem(
++        system="pocket",
++        id="bundle-a",
++        kind="bundle",
++        artifacts=(),
++        voices=("alba",),
++        metadata={
++            "language_codes": ["en", "fr"],
++            "voice_states": [{"name": "alba"}],
++        },
++    )
++    with pytest.raises(ValueError, match="exactly one language"):
++        append_unassigned_registry_entries([ambiguous], data)
++
++    implicit = CatalogItem(
++        system="pocket",
++        id="bundle-b",
++        kind="bundle",
++        artifacts=(),
++        voices=("alba",),
++        metadata={"language": "en", "predefined_voice_names": ["alba"]},
++    )
++    with pytest.raises(ValueError, match="explicit voice_states"):
++        append_unassigned_registry_entries([implicit], data)
++
++    names_only = CatalogItem(
++        system="pocket",
++        id="bundle-c",
++        kind="bundle",
++        artifacts=(),
++        voices=(),
++        metadata={"language": "en", "predefined_voice_names": ["alba"]},
++    )
++    unchanged, additions = append_unassigned_registry_entries([names_only], data)
++    assert additions == ()
++    assert unchanged["entries"] == []
++
++
++def test_selector_maintenance_accepts_pocket_catalog_and_append_modes(tmp_path, capsys):
++    assert _parse_catalog_arg("pocket=/tmp/pocket.json") == ("pocket", "/tmp/pocket.json")
++    with pytest.raises(argparse.ArgumentTypeError):
++        _parse_catalog_arg("unknown=/tmp/catalog.json")
++    args = build_selector_tool_parser().parse_args(
++        ["--catalog", "pocket=/tmp/pocket.json", "--append-unassigned"]
++    )
++    assert args.catalog == [("pocket", "/tmp/pocket.json")]
++    assert args.append_unassigned
++
++    registry_path = tmp_path / "registry.json"
++    data = {
++        "schema": 1,
++        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
++        "entries": [],
++    }
++    registry_path.write_text(json.dumps(data), encoding="utf-8")
++    bundle = _pocket_bundle("bundle-a", ("alba",), "en-US")
++    args = [
++        "--registry",
++        str(registry_path),
++        "--catalog",
++        "pocket=/tmp/pocket.json",
++        "--append-unassigned",
++        "--json",
++    ]
++    with patch(
++        "onnxvoice.catalog_tools.voice_selectors._load_catalog_items",
++        return_value=[bundle],
++    ):
++        assert selector_tools_main(args) == 0
++    preview = json.loads(capsys.readouterr().out)
++    assert preview["added"][0]["slot"] == 1
++    assert json.loads(registry_path.read_text(encoding="utf-8"))["entries"] == []
++
++    with patch(
++        "onnxvoice.catalog_tools.voice_selectors._load_catalog_items",
++        return_value=[bundle],
++    ):
++        assert selector_tools_main([*args, "--apply"]) == 0
++    applied = json.loads(capsys.readouterr().out)
++    assert applied["applied"] is True
++    assert (
++        json.loads(registry_path.read_text(encoding="utf-8"))["entries"][0]["asset_id"]
++        == "bundle-a"
++    )
++
++
+ def test_current_en_us_kokoro_catalog_has_no_unassigned_voices():
+     catalog = [
+         _kokoro_model(
+@@ -320,6 +486,9 @@ def test_cli_parser_and_json_projection():
+     assert args.voices_command == "list"
+     assert args.system == "piper"
+     assert args.format == "json"
++    for system in voice_selector_systems():
++        system_args = build_parser().parse_args(["voices", "list", "--system", system])
++        assert system_args.system == system
+     assert build_parser().parse_args(["voices", "show", "de-ko-1"]).selector == "de-ko-1"
+
+
+@@ -334,6 +503,33 @@ def test_voice_records_render_identity_fields(capsys):
+     assert '"backing_ref": "kokoro:de-anna"' in output
+
+
++def test_unassigned_voice_render_separates_catalog_and_selector_state(capsys):
++    item = CatalogItem(
++        system="pocket",
++        id="bundle-a",
++        kind="bundle",
++        artifacts=(),
++        voices=("alba",),
++    )
++    record = VoiceRecord(
++        identity=None,
++        available=True,
++        catalog_item=item,
++        languages=("en",),
++        catalog_voice_id="alba",
++    )
++
++    for output_format in ("table", "plain", "json", "tsv"):
++        _render_voice_records([record], output_format)
++        output = capsys.readouterr().out
++        assert "unassigned" in output
++        if output_format == "json":
++            payload = json.loads(output)["items"][0]
++            assert payload["available"] is True
++            assert payload["selector_available"] is False
++            assert payload["state"] == "unassigned"
++
++
+ def test_selector_module_has_no_onnx_runtime_dependency():
+     assert (
+         "onnxruntime"

@@ -1,0 +1,109 @@
+{
+  "candidate_count": 5,
+  "candidates": [
+    {
+      "additions": 1,
+      "deletions": 0,
+      "patch_file": "13163fe.patch",
+      "patch_sha256": "05032f082c0966ad8b84381f7cfcd9ad9d41bde153ae5aaf806050eac0074fd3",
+      "paths": ["onnxvoice/catalog_tools/pocket.py"],
+      "sha": "13163fe28703407ae8fb961ea4c9bf23598a224a",
+      "short_sha": "13163fe",
+      "source_ref": "git:13163fe28703407ae8fb961ea4c9bf23598a224a"
+    },
+    {
+      "additions": 3969,
+      "deletions": 17,
+      "patch_file": "6b3080a.patch",
+      "patch_sha256": "45c66770ee3dfec03583e555f80b814a56eba7b2fcef0d3a192a257d1fb6699f",
+      "paths": [
+        "onnxvoice/catalog.py",
+        "onnxvoice/data/voice_selectors.json",
+        "onnxvoice/errors.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/systems/pocket.py",
+        "pyproject.toml",
+        "tests/test_catalog.py",
+        "tests/test_pocket_adapter.py",
+        "tests/test_pocket_catalog.py",
+        "tests/test_pocket_network_boundaries.py",
+        "tests/test_voice_selectors.py"
+      ],
+      "sha": "6b3080a162b310688c5e486fad23a0da29029289",
+      "short_sha": "6b3080a",
+      "source_ref": "git:6b3080a162b310688c5e486fad23a0da29029289"
+    },
+    {
+      "additions": 1327,
+      "deletions": 239,
+      "patch_file": "577fe98.patch",
+      "patch_sha256": "15132b8f20f8c2eeae3987604258418406d2e6e637dda5d61397755a3e17aa06",
+      "paths": [
+        "README.md",
+        "docs/pocket-downloads.md",
+        "onnxvoice/catalog.py",
+        "onnxvoice/catalog_tools/pocket.py",
+        "onnxvoice/cli.py",
+        "onnxvoice/errors.py",
+        "onnxvoice/huggingface.py",
+        "onnxvoice/store.py",
+        "onnxvoice/systems/pocket.py",
+        "tests/test_cli.py",
+        "tests/test_huggingface.py",
+        "tests/test_pocket_adapter.py",
+        "tests/test_pocket_catalog.py",
+        "tests/test_pocket_catalog_tools.py",
+        "tests/test_pocket_contract.py",
+        "tests/test_store.py"
+      ],
+      "sha": "577fe9840787e07ff8fc6291a379d81357661836",
+      "short_sha": "577fe98",
+      "source_ref": "git:577fe9840787e07ff8fc6291a379d81357661836"
+    },
+    {
+      "additions": 86,
+      "deletions": 7,
+      "patch_file": "67d4fa7.patch",
+      "patch_sha256": "c8e0925da5507f73721e3cc79e5939625e30681bc7ec1875569301bf73e85bde",
+      "paths": ["onnxvoice/systems/pocket.py", "tests/test_pocket_adapter.py"],
+      "sha": "67d4fa7ccfb438703ad416cc5cd772eafe7513a4",
+      "short_sha": "67d4fa7",
+      "source_ref": "git:67d4fa7ccfb438703ad416cc5cd772eafe7513a4"
+    },
+    {
+      "additions": 1149,
+      "deletions": 58,
+      "patch_file": "5b474f7.patch",
+      "patch_sha256": "fd7c8fdd104244bb1322ce0d70f5a9c1efc7b7db88117a384120c0b47c90750a",
+      "paths": [
+        "README.md",
+        "docs/architecture.md",
+        "docs/pocket-downloads.md",
+        "onnxvoice/catalog_tools/voice_selectors.py",
+        "onnxvoice/cli.py",
+        "onnxvoice/data/voice_selectors.json",
+        "onnxvoice/manager.py",
+        "onnxvoice/store.py",
+        "onnxvoice/systems/pocket.py",
+        "onnxvoice/types.py",
+        "onnxvoice/voice_selectors.py",
+        "pyproject.toml",
+        "tests/test_cache_usage.py",
+        "tests/test_pocket_adapter.py",
+        "tests/test_store.py",
+        "tests/test_voice_selectors.py"
+      ],
+      "sha": "5b474f750fc7311edae9c205621805de9f3ccb2c",
+      "short_sha": "5b474f7",
+      "source_ref": "git:5b474f750fc7311edae9c205621805de9f3ccb2c"
+    }
+  ],
+  "git_base_ref": "b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891",
+  "git_base_sha": "b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891",
+  "git_head_ref": "5b474f750fc7311edae9c205621805de9f3ccb2c",
+  "git_head_sha": "5b474f750fc7311edae9c205621805de9f3ccb2c",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.1.11",
+  "schema_version": 1
+}

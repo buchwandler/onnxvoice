@@ -1,0 +1,2307 @@
+ README.md                          |  13 ++
+ docs/pocket-downloads.md           |  52 +++++
+ onnxvoice/catalog.py               |  47 +++-
+ onnxvoice/catalog_tools/pocket.py  |  36 +--
+ onnxvoice/cli.py                   |  28 +++
+ onnxvoice/errors.py                |  12 +
+ onnxvoice/huggingface.py           | 209 ++++++++++++++++++
+ onnxvoice/store.py                 |  53 ++++-
+ onnxvoice/systems/pocket.py        | 437 +++++++++++++++++++++++++------------
+ tests/test_cli.py                  |  20 ++
+ tests/test_huggingface.py          | 137 ++++++++++++
+ tests/test_pocket_adapter.py       | 280 +++++++++++++++++++-----
+ tests/test_pocket_catalog.py       |  37 +++-
+ tests/test_pocket_catalog_tools.py |  13 +-
+ tests/test_pocket_contract.py      |  83 +++++++
+ tests/test_store.py                | 109 ++++++++-
+ 16 files changed, 1327 insertions(+), 239 deletions(-)
+
+diff --git a/README.md b/README.md
+index cddd66d..11101f8 100644
+--- a/README.md
++++ b/README.md
+@@ -114,6 +114,19 @@ A local path or HTTP(S) URL is accepted.
+
+ ## CLI
+
++### Pocket downloads
++
++Install `onnxvoice[pocket]` for direct Pocket use, or use `pocketsynth[cpu]` / `pocketsynth[gpu]`. Public ONNX bundle artifacts do not require login. Predefined voice states are separate and may require access to a gated repository plus standard Hugging Face authentication (`hf auth login` or `HF_TOKEN`).
++
++The diagnostic is local-only and never displays a token or checks gated access over the network:
++
++```bash
++onnxvoice doctor --system pocket
++onnxvoice --offline doctor --system pocket --format json
++```
++
++See [`docs/pocket-downloads.md`](docs/pocket-downloads.md) for setup, access, offline caching, and troubleshooting details.
++
+ ### Inventory and discovery
+
+ ```bash
+diff --git a/docs/pocket-downloads.md b/docs/pocket-downloads.md
+new file mode 100644
+index 0000000..cd503d6
+--- /dev/null
++++ b/docs/pocket-downloads.md
+@@ -0,0 +1,52 @@
++# Pocket downloads and Hugging Face access
++
++Pocket model and voice-state downloads use the optional Hugging Face integration. Local bundles and assets already present in the OnnxVoice cache do not require `huggingface_hub` for opening or inference.
++
++## Installation
++
++For direct OnnxVoice use, install the Pocket extra and an ONNX Runtime provider:
++
++```bash
++python -m pip install "onnxvoice[pocket,cpu]"
++```
++
++PocketSynth's CPU and GPU extras install the required OnnxVoice Pocket support:
++
++```bash
++python -m pip install "pocketsynth[cpu]"
++# or
++python -m pip install "pocketsynth[gpu]"
++```
++
++## Public model files and gated voice states
++
++The canonical Pocket ONNX bundle repository is public, so downloading its pinned files does not require Hugging Face credentials. Predefined voice-state files are separate assets and may be gated. For a gated voice, first accept or request access on the upstream repository page, then authenticate the account used by the application:
++
++```bash
++hf auth login
++hf auth whoami
++```
++
++Alternatively, provide `HF_TOKEN` through the application's normal secret-management environment. OnnxVoice does not start an interactive login, save credentials, or include tokens in cache records, diagnostics, or errors. Do not print or paste token values while debugging.
++
++## Diagnostics
++
++The Pocket diagnostic reports whether the optional Hub package and credentials appear configured, whether offline mode is active, and whether implicit tokens are disabled. It does not make a network request and cannot confirm access to a gated repository:
++
++```bash
++onnxvoice doctor --system pocket
++onnxvoice --offline doctor --system pocket --format json
++```
++
++For a gated-access failure, verify account access on the repository page and confirm the active Hugging Face account with `hf auth whoami`. If the application runs in a service, container, or a different user environment, verify that it sees the intended `HF_HOME`, `HF_TOKEN_PATH`, or `HF_TOKEN` configuration without displaying token contents.
++
++## Offline and local use
++
++An online managed run downloads the model bundle and, when selected, its predefined voice state into OnnxVoice-managed storage. Once all required assets are cached, repeat the operation in offline mode:
++
++```bash
++pocketsynth synthesize --bundle english_2026-04 --voice alba --offline \
++  --output hello.wav "Hello from Pocket."
++```
++
++An offline cache miss is reported as an offline error. Explicit local bundles and previously installed assets remain usable without the Hub client. Canonical model artifacts continue to be checked against their catalog size and SHA-256 metadata; predefined voice states retain their OnnxVoice cache integrity record.
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index a5fb3bd..a9d266f 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -4,6 +4,7 @@ import json
+ import os
+ import re
+ import time
++import urllib.parse
+ import urllib.request
+ from collections.abc import Iterable, Mapping, Sequence
+ from dataclasses import dataclass
+@@ -14,7 +15,7 @@ from platformdirs import user_cache_path
+
+ from .errors import AssetNotFoundError, CatalogError, OfflineError
+ from .store import FileLock, ProgressCallback
+-from .types import Artifact, AssetProgress, CatalogItem
++from .types import Artifact, AssetProgress, CatalogItem, validate_relative_path
+
+ POCKET_ARTIFACT_ROLES = frozenset(
+     {
+@@ -29,6 +30,8 @@ POCKET_ARTIFACT_ROLES = frozenset(
+     }
+ )
+ _POCKET_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_POCKET_HF_REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
++_POCKET_HF_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+
+ POCKET_QUALIFIED_ROLES = frozenset(
+     {
+@@ -413,6 +416,13 @@ def _validate_canonical_pocket_integrity(
+         raise CatalogError(f"{bundle_id}/{role}: canonical artifact sha256 must be lowercase hex")
+
+
++def _pocket_voice_source_url(repository: str, revision: str, path: str) -> str:
++    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
++    encoded_revision = urllib.parse.quote(revision, safe="")
++    encoded_path = urllib.parse.quote(path, safe="/")
++    return f"https://huggingface.co/{repo}/resolve/{encoded_revision}/{encoded_path}?download=true"
++
++
+ def _parse_pocket_voice_states(
+     entry: Mapping[str, Any],
+     bundle_id: str,
+@@ -441,6 +451,19 @@ def _parse_pocket_voice_states(
+         for field in ("provider", "repository", "revision", "path"):
+             if not isinstance(source.get(field), str) or not source[field]:
+                 raise CatalogError(f"{bundle_id}/{name}: source.{field} is required")
++        if source["provider"] != "huggingface":
++            raise CatalogError(f"{bundle_id}/{name}: source provider must be huggingface")
++        source_repository = source["repository"]
++        if _POCKET_HF_REPOSITORY_RE.fullmatch(source_repository) is None:
++            raise CatalogError(f"{bundle_id}/{name}: invalid source repository")
++        source_revision = source["revision"]
++        if _POCKET_HF_REVISION_RE.fullmatch(source_revision) is None:
++            raise CatalogError(f"{bundle_id}/{name}: source revision must be a 40-character SHA")
++        source_path = source["path"]
++        try:
++            validate_relative_path(source_path, field_name="Pocket voice-state source path")
++        except ValueError as exc:
++            raise CatalogError(f"{bundle_id}/{name}: {exc}") from exc
+         access = raw.get("access")
+         if not isinstance(access, Mapping):
+             raise CatalogError(f"{bundle_id}/{name}: access must be an object")
+@@ -462,6 +485,10 @@ def _parse_pocket_voice_states(
+         resolver = raw.get("resolver")
+         if url is not None and (not isinstance(url, str) or not url):
+             raise CatalogError(f"{bundle_id}/{name}: url must be a non-empty string")
++        if url is not None and url != _pocket_voice_source_url(
++            source_repository, source_revision, source_path
++        ):
++            raise CatalogError(f"{bundle_id}/{name}: url is not pinned to its source")
+         if resolver is not None and (not isinstance(resolver, str) or not resolver):
+             raise CatalogError(f"{bundle_id}/{name}: resolver must be a non-empty string")
+         if access["distributable"] and not isinstance(url, str):
+@@ -533,6 +560,24 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+             metadata = dict(raw.get("metadata") or {})
+             if raw_path is not None:
+                 metadata.setdefault("path", raw_path)
++            if source.get("provider") == "huggingface":
++                if not isinstance(source.get("repository"), str) or not source["repository"]:
++                    raise CatalogError(f"{bundle_id}/{role}: Hugging Face repository is required")
++                if not isinstance(source.get("revision"), str) or not source["revision"]:
++                    raise CatalogError(f"{bundle_id}/{role}: Hugging Face revision is required")
++                if not isinstance(raw_path, str) or not raw_path:
++                    raise CatalogError(f"{bundle_id}/{role}: Hugging Face path is required")
++                try:
++                    validate_relative_path(raw_path, field_name="Hugging Face repository path")
++                except ValueError as exc:
++                    raise CatalogError(str(exc)) from exc
++                metadata["source"] = {
++                    "provider": "huggingface",
++                    "repository": source["repository"],
++                    "revision": source["revision"],
++                    "path": raw_path,
++                    "gated": False,
++                }
+             artifacts.append(
+                 Artifact(
+                     role=str(role),
+diff --git a/onnxvoice/catalog_tools/pocket.py b/onnxvoice/catalog_tools/pocket.py
+index 4e2653f..a833201 100644
+--- a/onnxvoice/catalog_tools/pocket.py
++++ b/onnxvoice/catalog_tools/pocket.py
+@@ -370,12 +370,7 @@ def _build_artifact(
+     }
+
+
+-def _normalize_voice_states(
+-    bundle_id: str,
+-    raw: Any,
+-    repository: str,
+-    revision: str,
+-) -> list[dict[str, Any]]:
++def _normalize_voice_states(bundle_id: str, raw: Any) -> list[dict[str, Any]]:
+     """Normalize explicitly declared predefined voice-state assets."""
+     if raw in (None, []):
+         return []
+@@ -409,25 +404,15 @@ def _normalize_voice_states(
+         source_repository = source.get("repository")
+         _require(
+             isinstance(source_repository, str)
+-            and re.fullmatch(r"[^/\\\\ ]+/[^/\\\\ ]+", source_repository) is not None,
++            and re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", source_repository) is not None,
+             f"{bundle_id}/{name}: invalid source repository",
+         )
+-        _require(
+-            source_repository == repository,
+-            f"{bundle_id}/{name}: source repository is not the catalog repository",
+-        )
+         source_revision = source.get("revision")
+         _require(
+             isinstance(source_revision, str) and _SHA_RE.fullmatch(source_revision) is not None,
+             f"{bundle_id}/{name}: source revision must be a 40-character SHA",
+         )
+-        source_path = source.get("path")
+-        _require(
+-            isinstance(source_path, str) and source_path.startswith("onnx/"),
+-            f"{bundle_id}/{name}: source path is required",
+-        )
+-        _safe_relative_path(source_path, f"{bundle_id}/{name}: source path")
+-        _require(source_revision == revision, f"{bundle_id}/{name}: source revision is not pinned")
++        source_path = _safe_relative_path(source.get("path"), f"{bundle_id}/{name}: source path")
+         access = value.get("access")
+         _require(isinstance(access, dict), f"{bundle_id}/{name}: access must be an object")
+         _require(
+@@ -645,9 +630,7 @@ def _parse_bundle_entry(
+                 f"{bundle_id}: profile {profile_name!r} references missing ({role!r}, {profile_roles[role]!r})",
+             )
+
+-    voice_states = _normalize_voice_states(
+-        bundle_id, bundle_data.get("voice_states"), repository, revision
+-    )
++    voice_states = _normalize_voice_states(bundle_id, bundle_data.get("voice_states"))
+     entry: dict[str, Any] = {
+         "id": bundle_id,
+         "aliases": aliases,
+@@ -736,14 +719,9 @@ def build_catalog(
+     return catalog
+
+
+-def _verify_voice_states(
+-    bundle: dict[str, Any],
+-    bundle_id: str,
+-    repository: str,
+-    revision: str,
+-) -> None:
++def _verify_voice_states(bundle: dict[str, Any], bundle_id: str) -> None:
+     raw = bundle.get("voice_states", [])
+-    normalized = _normalize_voice_states(bundle_id, raw, repository, revision)
++    normalized = _normalize_voice_states(bundle_id, raw)
+     _require(
+         raw == normalized,
+         f"{bundle_id}: voice_states must use the normalized record shape",
+@@ -864,7 +842,7 @@ def verify_catalog(catalog: Any) -> None:
+     for map_id, raw_bundle in bundles.items():
+         _require(isinstance(raw_bundle, dict), f"{map_id}: bundle must be an object")
+         bundle = cast(dict[str, Any], raw_bundle)
+-        _verify_voice_states(bundle, map_id, repository, revision)
++        _verify_voice_states(bundle, map_id)
+         for field in ("language", "layers", "bundle_schema", "profiles", "artifacts"):
+             _require(field in bundle, f"{map_id}: missing required field {field!r}")
+         _require(
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 0cea4bb..1f9435e 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -140,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
+         "--check-updates", action="store_true", help="Check for updates (requires network)"
+     )
+
++    # --- diagnostics ---
++    doctor_parser = sub.add_parser("doctor", help="Show non-secret download diagnostics")
++    doctor_parser.add_argument("--system", choices=["pocket"], default="pocket")
++    doctor_parser.add_argument("--format", choices=["plain", "json"], default="plain")
++
+     # --- path ---
+     path_parser = sub.add_parser("path", help="Print an installed model/voice path")
+     path_parser.add_argument("ref")
+@@ -567,6 +572,26 @@ def _cmd_update(args: argparse.Namespace) -> int:
+     return 0
+
+
++def _cmd_doctor(args: argparse.Namespace) -> int:
++    from .huggingface import huggingface_diagnostics
++
++    report = {
++        "system": args.system,
++        **huggingface_diagnostics(offline=args.offline),
++    }
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++        return 0
++
++    print("Pocket download diagnostics")
++    print(f"Hugging Face integration : {report['huggingface_hub']}")
++    print(f"Credentials             : {report['credentials']}")
++    print(f"Offline mode            : {'yes' if report['offline'] else 'no'}")
++    print(f"Implicit token disabled : {'yes' if report['implicit_token_disabled'] else 'no'}")
++    print(f"Gated repository access : {report['gated_access']}")
++    return 0
++
++
+ def _cmd_info(args: argparse.Namespace) -> int:
+     from ._table import format_bytes
+
+@@ -857,6 +882,9 @@ def main(argv: list[str] | None = None) -> int:
+                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
+
+         # Command dispatch
++        if args.command == "doctor":
++            return _cmd_doctor(args)
++
+         if args.command == "voices":
+             return _cmd_voices(args)
+
+diff --git a/onnxvoice/errors.py b/onnxvoice/errors.py
+index 8b6a1bd..f1a44a1 100644
+--- a/onnxvoice/errors.py
++++ b/onnxvoice/errors.py
+@@ -38,6 +38,18 @@ class AssetDownloadError(OnnxVoiceError):
+     """A remote asset could not be downloaded."""
+
+
++class AssetAccessError(AssetDownloadError):
++    """A remote asset requires credentials or repository access."""
++
++
++class AssetAuthenticationError(AssetAccessError):
++    """No usable authentication is configured for a remote asset."""
++
++
++class AssetPermissionError(AssetAccessError):
++    """Configured credentials lack permission to access a remote asset."""
++
++
+ class PredefinedVoiceError(OnnxVoiceError):
+     """A predefined voice state could not be resolved or loaded."""
+
+diff --git a/onnxvoice/huggingface.py b/onnxvoice/huggingface.py
+new file mode 100644
+index 0000000..1d4b08e
+--- /dev/null
++++ b/onnxvoice/huggingface.py
+@@ -0,0 +1,209 @@
++from __future__ import annotations
++
++import importlib
++import os
++import re
++from dataclasses import dataclass
++from pathlib import Path
++from types import ModuleType
++from typing import Any
++
++from .errors import (
++    AssetAuthenticationError,
++    AssetDownloadError,
++    AssetNotFoundError,
++    AssetPermissionError,
++    OfflineError,
++    OptionalDependencyError,
++)
++from .types import validate_relative_path
++
++_REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
++
++
++@dataclass(frozen=True, slots=True)
++class HuggingFaceSource:
++    repository: str
++    revision: str
++    path: str
++    gated: bool = False
++
++    def __post_init__(self) -> None:
++        if (
++            not isinstance(self.repository, str)
++            or _REPOSITORY_RE.fullmatch(self.repository) is None
++        ):
++            raise ValueError("Hugging Face repository must have the form 'owner/repository'")
++        if not isinstance(self.revision, str) or not self.revision:
++            raise ValueError("Hugging Face revision must be a non-empty string")
++        validate_relative_path(self.path, field_name="Hugging Face repository path")
++
++
++def download_huggingface_file(
++    source: HuggingFaceSource,
++    *,
++    local_dir: Path,
++    offline: bool,
++) -> Path:
++    """Download one pinned Hub file into caller-owned temporary storage."""
++    try:
++        hub = importlib.import_module("huggingface_hub")
++    except ImportError as exc:
++        raise OptionalDependencyError(
++            "Remote Pocket downloads require Hugging Face support. Install 'onnxvoice[pocket]'."
++        ) from exc
++
++    try:
++        downloaded = hub.hf_hub_download(
++            repo_id=source.repository,
++            filename=source.path,
++            revision=source.revision,
++            local_dir=str(local_dir),
++            local_files_only=offline,
++            token=None,
++            library_name="onnxvoice",
++        )
++    except Exception as exc:
++        _raise_huggingface_error(exc, source=source, offline=offline)
++
++    result = Path(downloaded)
++    if not result.is_file():
++        raise AssetDownloadError(
++            f"Hugging Face returned a missing file for "
++            f"{source.repository}@{source.revision}:{source.path}"
++        )
++    return result
++
++
++def _raise_huggingface_error(
++    exc: Exception,
++    *,
++    source: HuggingFaceSource,
++    offline: bool,
++) -> None:
++    error_types = _hub_error_types()
++    status = _http_status(exc)
++    label = f"{source.repository}@{source.revision}:{source.path}"
++
++    if _is_instance(exc, error_types["gated"]) or status == 403:
++        raise AssetPermissionError(
++            f"Pocket asset {label} requires access to a gated Hugging Face repository. "
++            "Accept or request access on the repository page, authenticate with "
++            "'hf auth login' or HF_TOKEN, verify with 'hf auth whoami', and retry."
++        ) from exc
++    if status == 401:
++        raise AssetAuthenticationError(
++            f"Authentication is required to download Pocket asset {label}. "
++            "Authenticate with 'hf auth login' or configure HF_TOKEN, then retry."
++        ) from exc
++    if _is_instance(exc, error_types["offline"]) or (
++        offline and _is_instance(exc, error_types["local_entry"])
++    ):
++        raise OfflineError(
++            f"Pocket asset {label} is not available in the local Hugging Face cache"
++        ) from exc
++    if _is_instance(exc, error_types["missing"]) or status == 404:
++        raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
++    if offline:
++        raise OfflineError(f"Pocket asset {label} could not be resolved while offline") from exc
++
++    error_name = type(exc).__name__
++    if error_name in {"GatedRepoError"}:
++        raise AssetPermissionError(
++            f"Pocket asset {label} requires access to a gated Hugging Face repository. "
++            "Accept or request access on the repository page, authenticate with "
++            "'hf auth login' or HF_TOKEN, verify with 'hf auth whoami', and retry."
++        ) from exc
++    if error_name in {
++        "RepositoryNotFoundError",
++        "RevisionNotFoundError",
++        "EntryNotFoundError",
++        "RemoteEntryNotFoundError",
++    }:
++        raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
++    if error_name == "LocalEntryNotFoundError":
++        raise OfflineError(
++            f"Pocket asset {label} is not available in the local Hugging Face cache"
++        ) from exc
++
++    raise AssetDownloadError(
++        f"Could not download Pocket asset {label} from Hugging Face ({error_name})"
++    ) from exc
++
++
++def _hub_error_types() -> dict[str, tuple[type[BaseException], ...]]:
++    modules: list[ModuleType] = []
++    for name in ("huggingface_hub.errors", "huggingface_hub.utils"):
++        try:
++            modules.append(importlib.import_module(name))
++        except ImportError:
++            continue
++
++    names = {
++        "gated": ("GatedRepoError",),
++        "offline": ("OfflineModeIsEnabled",),
++        "local_entry": ("LocalEntryNotFoundError",),
++        "missing": (
++            "RepositoryNotFoundError",
++            "RevisionNotFoundError",
++            "RemoteEntryNotFoundError",
++            "EntryNotFoundError",
++        ),
++    }
++    return {
++        key: tuple(
++            error_type
++            for module in modules
++            for name in type_names
++            if isinstance((error_type := getattr(module, name, None)), type)
++            and issubclass(error_type, BaseException)
++        )
++        for key, type_names in names.items()
++    }
++
++
++def _is_instance(exc: BaseException, classes: tuple[type[BaseException], ...]) -> bool:
++    return bool(classes) and isinstance(exc, classes)
++
++
++def _http_status(exc: BaseException) -> int | None:
++    response: Any = getattr(exc, "response", None)
++    status = getattr(response, "status_code", None)
++    return status if isinstance(status, int) else None
++
++
++def huggingface_diagnostics(*, offline: bool = False) -> dict[str, str | bool]:
++    try:
++        importlib.import_module("huggingface_hub")
++    except ImportError:
++        installed = False
++    else:
++        installed = True
++
++    token_path = os.environ.get("HF_TOKEN_PATH")
++    if token_path is None:
++        hf_home = os.environ.get("HF_HOME")
++        if hf_home is not None:
++            token_path = str(Path(hf_home).expanduser() / "token")
++        else:
++            cache_home = os.environ.get("XDG_CACHE_HOME")
++            base = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
++            token_path = str(base / "huggingface" / "token")
++    credentials = bool(os.environ.get("HF_TOKEN")) or Path(token_path).expanduser().is_file()
++    offline_environment = os.environ.get("HF_HUB_OFFLINE", "").casefold() in {
++        "1",
++        "true",
++        "yes",
++    }
++    implicit_token_disabled = os.environ.get("HF_HUB_DISABLE_IMPLICIT_TOKEN", "").casefold() in {
++        "1",
++        "true",
++        "yes",
++    }
++    return {
++        "huggingface_hub": "installed" if installed else "not installed",
++        "credentials": "configured" if credentials else "not configured",
++        "offline": offline or offline_environment,
++        "implicit_token_disabled": implicit_token_disabled,
++        "gated_access": "not checked; diagnostic makes no network request",
++    }
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index f3e27ab..d1ec656 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -7,7 +7,7 @@ import shutil
+ import tempfile
+ import time
+ import urllib.request
+-from collections.abc import Callable
++from collections.abc import Callable, Mapping
+ from contextlib import suppress
+ from pathlib import Path
+ from typing import Any
+@@ -16,6 +16,7 @@ from platformdirs import user_cache_path
+
+ from .checksums import digest_file, verify_file
+ from .errors import (
++    AssetDownloadError,
+     AssetNotFoundError,
+     IntegrityError,
+     LockError,
+@@ -23,6 +24,7 @@ from .errors import (
+     OfflineError,
+     UnsafePathError,
+ )
++from .huggingface import HuggingFaceSource, download_huggingface_file
+ from .types import (
+     MANIFEST_SCHEMA_VERSION,
+     Artifact,
+@@ -553,7 +555,24 @@ class AssetStore:
+         progress: ProgressCallback | None,
+         target: str,
+     ) -> tuple[Path, str]:
+-        if not artifact.url:
++        source_metadata = artifact.metadata.get("source")
++        hf_source = None
++        if (
++            isinstance(source_metadata, Mapping)
++            and source_metadata.get("provider") == "huggingface"
++        ):
++            try:
++                hf_source = HuggingFaceSource(
++                    repository=source_metadata["repository"],
++                    revision=source_metadata["revision"],
++                    path=source_metadata["path"],
++                    gated=source_metadata.get("gated", False),
++                )
++            except (KeyError, TypeError, ValueError) as exc:
++                raise AssetDownloadError(
++                    f"Invalid Hugging Face source metadata for {artifact.filename!r}"
++                ) from exc
++        if not artifact.url and hf_source is None:
+             raise AssetNotFoundError(f"Artifact {artifact.filename!r} has no URL")
+         if artifact.sha256:
+             known_blob = self._blob_path(artifact.sha256)
+@@ -605,16 +624,26 @@ class AssetStore:
+             ),
+         )
+         with tempfile.TemporaryDirectory(prefix="onnxvoice-download-") as temp_dir:
+-            temp = Path(temp_dir) / Path(artifact.filename).name
+-            self._download(
+-                artifact.url,
+-                temp,
+-                ref=ref,
+-                artifact=artifact.filename,
+-                role=artifact.role,
+-                target=target,
+-                progress=progress,
+-            )
++            if hf_source is not None:
++                if self.offline:
++                    raise OfflineError(
++                        f"Network access disabled while fetching {ref}:{artifact.filename}"
++                    )
++                temp = download_huggingface_file(
++                    hf_source, local_dir=Path(temp_dir), offline=self.offline
++                )
++            else:
++                assert artifact.url is not None
++                temp = Path(temp_dir) / Path(artifact.filename).name
++                self._download(
++                    artifact.url,
++                    temp,
++                    ref=ref,
++                    artifact=artifact.filename,
++                    role=artifact.role,
++                    target=target,
++                    progress=progress,
++                )
+             self._emit(
+                 progress,
+                 AssetProgress(
+diff --git a/onnxvoice/systems/pocket.py b/onnxvoice/systems/pocket.py
+index 3dcf9d8..ad38e60 100644
+--- a/onnxvoice/systems/pocket.py
++++ b/onnxvoice/systems/pocket.py
+@@ -5,6 +5,7 @@ from __future__ import annotations
+ import hashlib
+ import json
+ import os
++import re
+ import shutil
+ import tempfile
+ from collections.abc import Mapping, Sequence
+@@ -17,7 +18,9 @@ from platformdirs import user_cache_path
+
+ from ..checksums import digest_file, verify_file
+ from ..errors import (
++    AssetAccessError,
+     AssetDownloadError,
++    AssetNotFoundError,
+     IntegrityError,
+     OfflineError,
+     OptionalDependencyError,
+@@ -26,6 +29,7 @@ from ..errors import (
+     PredefinedVoiceNotFoundError,
+     RuntimeContractError,
+ )
++from ..huggingface import HuggingFaceSource, download_huggingface_file
+ from ..runtime import OnnxSession
+ from ..store import FileLock
+ from ..types import InferenceResult, Installation, validate_safe_component
+@@ -62,39 +66,12 @@ PREDEFINED_VOICE_REPOSITORY = "kyutai/pocket-tts"
+ PREDEFINED_VOICE_REVISION = "d18466fc6d3ad070afee1bde2f0db8992007c48f"
+
+
+-def _download_predefined_voice_file(
+-    repo_id: str,
+-    filename: str,
+-    revision: str,
+-    *,
+-    cache_dir: Path,
+-    local_files_only: bool,
+-) -> Path:
+-    try:
+-        from huggingface_hub import hf_hub_download
+-    except ImportError as exc:
+-        raise OptionalDependencyError(
+-            "Predefined Pocket voices require huggingface_hub and safetensors. "
+-            "Install onnxvoice[pocket]."
+-        ) from exc
+-    return Path(
+-        hf_hub_download(
+-            repo_id=repo_id,
+-            filename=filename,
+-            revision=revision,
+-            cache_dir=str(cache_dir),
+-            local_files_only=local_files_only,
+-        )
+-    )
+-
+-
+ def _load_safetensors(path: Path) -> Mapping[str, np.ndarray]:
+     try:
+         from safetensors.numpy import load_file
+     except ImportError as exc:
+         raise OptionalDependencyError(
+-            "Predefined Pocket voices require huggingface_hub and safetensors. "
+-            "Install onnxvoice[pocket]."
++            "Loading predefined Pocket voices requires safetensors. Install 'onnxvoice[pocket]'."
+         ) from exc
+     return load_file(str(path))
+
+@@ -109,6 +86,8 @@ class StateSpec:
+     shape: tuple[int, ...]
+     dtype: np.dtype
+     fill: str
++    module: str | None = None
++    key: str | None = None
+
+
+ def parse_state_manifest(raw: Any, *, name: str) -> tuple[StateSpec, ...]:
+@@ -160,10 +139,22 @@ def parse_state_manifest(raw: Any, *, name: str) -> tuple[StateSpec, ...]:
+             raise RuntimeContractError(
+                 f"{name} state entry {index} uses nan with non-floating dtype"
+             )
++        module = entry.get("module")
++        key = entry.get("key")
++        if (module is None) != (key is None):
++            raise RuntimeContractError(
++                f"{name} state entry {index} must declare module and key together"
++            )
++        if module is not None and (not isinstance(module, str) or not module):
++            raise RuntimeContractError(f"{name} state entry {index} has invalid module")
++        if key is not None and (not isinstance(key, str) or not key):
++            raise RuntimeContractError(f"{name} state entry {index} has invalid key")
+         indexes.add(index)
+         input_names.add(input_name)
+         output_names.add(output_name)
+-        specs.append(StateSpec(index, input_name, output_name, tuple(shape), dtype, fill))
++        specs.append(
++            StateSpec(index, input_name, output_name, tuple(shape), dtype, fill, module, key)
++        )
+     specs.sort(key=lambda spec: spec.index)
+     if [spec.index for spec in specs] != list(range(len(specs))):
+         raise RuntimeContractError(f"{name} state indexes must be contiguous and start at zero")
+@@ -186,6 +177,70 @@ def initialize_state(specs: Sequence[StateSpec]) -> dict[str, np.ndarray]:
+     return state
+
+
++def _derive_step(module_state: Mapping[str, Any]) -> np.ndarray:
++    if "step" in module_state:
++        return np.asarray(module_state["step"], dtype=np.int64).reshape(1)
++    if "offset" in module_state and "end_offset" not in module_state:
++        return np.asarray(module_state["offset"], dtype=np.int64).reshape(1)
++    if "current_end" in module_state:
++        return np.asarray([np.asarray(module_state["current_end"]).shape[0]], dtype=np.int64)
++    return np.asarray([0], dtype=np.int64)
++
++
++def _adapt_state_tensor(tensor: Any, spec: StateSpec) -> np.ndarray:
++    """Fit an imported tensor to a manifest's fixed state input shape."""
++    source = np.asarray(tensor, dtype=spec.dtype)
++    target = initialize_state((spec,))[spec.input_name]
++    if source.shape == spec.shape:
++        return source.copy()
++    if source.size == np.prod(spec.shape, dtype=np.int64):
++        return source.reshape(spec.shape).copy()
++    if source.ndim != len(spec.shape):
++        return target
++    slices = tuple(
++        slice(0, min(source_dim, target_dim))
++        for source_dim, target_dim in zip(source.shape, spec.shape, strict=True)
++    )
++    if any(selection.stop == 0 for selection in slices):
++        return target
++    adapted = target.copy()
++    adapted[slices] = source[slices]
++    return adapted
++
++
++def _flow_state_from_model_state(
++    model_state: Mapping[str, Mapping[str, Any]],
++    specs: Sequence[StateSpec],
++    *,
++    name: str,
++) -> dict[str, np.ndarray]:
++    if not specs:
++        raise PredefinedVoiceIntegrityError(
++            f"Pocket Flow-LM manifest cannot import predefined voice {name!r}: "
++            "the manifest is empty"
++        )
++    state = initialize_state(specs)
++    for spec in specs:
++        if spec.module is None or spec.key is None:
++            raise PredefinedVoiceIntegrityError(
++                f"Pocket Flow-LM manifest cannot import predefined voice {name!r}: "
++                f"state {spec.input_name!r} has no module/key mapping"
++            )
++        module_state = model_state.get(spec.module, {})
++        tensor = module_state.get(spec.key)
++        try:
++            if tensor is None and spec.key == "step":
++                tensor = _derive_step(module_state)
++            if tensor is not None:
++                state[spec.input_name] = _adapt_state_tensor(tensor, spec)
++        except (TypeError, ValueError, OverflowError) as exc:
++            raise PredefinedVoiceIntegrityError(
++                f"Predefined Pocket Flow-LM tensor {spec.module}/{spec.key} "
++                "could not be adapted to the bundle state manifest"
++            ) from exc
++    return state
++
++
+ def update_state_from_named_outputs(
+     state: dict[str, np.ndarray],
+     output_by_name: Mapping[str, Any],
+@@ -200,9 +255,10 @@ def update_state_from_named_outputs(
+
+ @dataclass(frozen=True, slots=True, init=False)
+ class PocketVoiceState:
+-    """Reusable voice embedding sequence produced by the Mimi encoder."""
++    """Reusable Pocket conditioning, either embeddings or Flow-LM state."""
+
+-    embeddings: np.ndarray
++    embeddings: np.ndarray | None
++    flow_state: Mapping[str, np.ndarray] | None
+     sample_rate: int
+     metadata: Mapping[str, Any]
+     values: Mapping[str, np.ndarray]
+@@ -213,19 +269,38 @@ class PocketVoiceState:
+         sample_rate: int = 24000,
+         metadata: Mapping[str, Any] | None = None,
+         *,
++        flow_state: Mapping[str, np.ndarray] | None = None,
+         values: Mapping[str, np.ndarray] | None = None,
+     ) -> None:
+         legacy_values = dict(values or {})
+-        if embeddings is None:
++        if embeddings is not None and flow_state is not None:
++            raise ValueError("PocketVoiceState accepts embeddings or Flow-LM state, not both")
++        if flow_state is not None and legacy_values:
++            raise ValueError("PocketVoiceState values cannot be combined with Flow-LM state")
++        if embeddings is None and flow_state is None:
+             if not legacy_values:
+-                raise TypeError("PocketVoiceState requires embeddings")
++                raise TypeError("PocketVoiceState requires embeddings or Flow-LM state")
+             embeddings = np.asarray(next(iter(legacy_values.values())), dtype=np.float32)
+-        object.__setattr__(self, "embeddings", np.asarray(embeddings, dtype=np.float32))
++
++        metadata_values = dict(metadata or {})
++        if embeddings is not None:
++            normalized_embeddings = np.asarray(embeddings, dtype=np.float32)
++            normalized_flow_state = None
++            compatible_values = legacy_values or {"embeddings": normalized_embeddings}
++        else:
++            if not isinstance(flow_state, Mapping):
++                raise TypeError("PocketVoiceState Flow-LM state must be a mapping")
++            normalized_embeddings = None
++            normalized_flow_state = {name: np.asarray(value) for name, value in flow_state.items()}
++            compatible_values = {}
++
++        object.__setattr__(self, "embeddings", normalized_embeddings)
++        object.__setattr__(self, "flow_state", normalized_flow_state)
+         object.__setattr__(
+-            self, "sample_rate", int((metadata or {}).get("sample_rate", sample_rate))
++            self, "sample_rate", int(metadata_values.get("sample_rate", sample_rate))
+         )
+-        object.__setattr__(self, "metadata", dict(metadata or {}))
+-        object.__setattr__(self, "values", legacy_values or {"embeddings": self.embeddings})
++        object.__setattr__(self, "metadata", metadata_values)
++        object.__setattr__(self, "values", compatible_values)
+
+
+ class PocketAdapter(SystemAdapter):
+@@ -251,7 +326,7 @@ class PocketAdapter(SystemAdapter):
+         self._validated_contracts: set[str] = set()
+         self._validated = False
+         self._predefined_voice_states: dict[
+-            tuple[str, str, str, str, str, str], PocketVoiceState
++            tuple[str, str, str, str, str, str, str], PocketVoiceState
+         ] = {}
+         self._voice_cache_dir = Path(
+             voice_cache_dir
+@@ -348,6 +423,51 @@ class PocketAdapter(SystemAdapter):
+             )
+         return bundle_names if bundle_names is not None else catalog_names or ()
+
++    @staticmethod
++    def _predefined_voice_source(
++        metadata: Mapping[str, Any], name: str, bundle_name: str
++    ) -> HuggingFaceSource:
++        records = metadata.get("voice_states")
++        if records is not None:
++            if not isinstance(records, Sequence) or isinstance(records, (str, bytes, Mapping)):
++                raise RuntimeContractError("Pocket voice_states metadata must be a sequence")
++            for record in records:
++                if not isinstance(record, Mapping):
++                    raise RuntimeContractError("Pocket voice-state metadata must contain objects")
++                if record.get("name") != name:
++                    continue
++                source = record.get("source")
++                access = record.get("access")
++                if not isinstance(source, Mapping) or not isinstance(access, Mapping):
++                    raise RuntimeContractError(
++                        f"Pocket predefined voice {name!r} has invalid source metadata"
++                    )
++                repository = source.get("repository")
++                revision = source.get("revision")
++                path = source.get("path")
++                gated = access.get("gated")
++                if (
++                    source.get("provider") != "huggingface"
++                    or not isinstance(repository, str)
++                    or not isinstance(revision, str)
++                    or re.fullmatch(r"[0-9a-f]{40}", revision) is None
++                    or not isinstance(path, str)
++                    or not isinstance(gated, bool)
++                ):
++                    raise RuntimeContractError(
++                        f"Pocket predefined voice {name!r} has invalid Hugging Face source metadata"
++                    )
++                try:
++                    return HuggingFaceSource(repository, revision, path, gated=gated)
++                except ValueError as exc:
++                    raise RuntimeContractError(str(exc)) from exc
++        return HuggingFaceSource(
++            PREDEFINED_VOICE_REPOSITORY,
++            PREDEFINED_VOICE_REVISION,
++            f"languages/{bundle_name}/embeddings/{name}.safetensors",
++            gated=True,
++        )
++
+     @property
+     def predefined_voices(self) -> tuple[str, ...]:
+         return self._predefined_voice_names(self._ensure_validated())
+@@ -517,13 +637,14 @@ class PocketAdapter(SystemAdapter):
+         self,
+         name: str,
+         bundle_id: str,
+-        asset_path: str,
++        source: HuggingFaceSource,
+     ) -> tuple[Path, str]:
+         cache_key = {
+             "system": "pocket",
+             "asset_kind": "predefined_voice_state",
+-            "model_repo": PREDEFINED_VOICE_REPOSITORY,
+-            "model_revision": PREDEFINED_VOICE_REVISION,
++            "model_repo": source.repository,
++            "model_revision": source.revision,
++            "asset_path": source.path,
+             "bundle_id": bundle_id,
+             "voice_name": name,
+         }
+@@ -557,83 +678,107 @@ class PocketAdapter(SystemAdapter):
+                     ) from exc
+                 return state_path, sha256
+
+-            try:
+-                downloaded = _download_predefined_voice_file(
+-                    PREDEFINED_VOICE_REPOSITORY,
+-                    asset_path,
+-                    PREDEFINED_VOICE_REVISION,
+-                    cache_dir=self._voice_cache_dir / "huggingface",
+-                    local_files_only=self._offline,
+-                )
+-            except OptionalDependencyError:
+-                raise
+-            except Exception as exc:
+-                self._raise_predefined_voice_download_error(exc, name=name, bundle_id=bundle_id)
+-            if not downloaded.is_file():
+-                raise PredefinedVoiceIntegrityError(
+-                    f"Downloaded state for predefined Pocket voice {name!r} is missing"
+-                )
+-            cache_dir.mkdir(parents=True, exist_ok=True)
+-            fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
+-            os.close(fd)
+-            temporary_state = Path(temporary_name)
+-            try:
+-                shutil.copyfile(downloaded, temporary_state)
+-                size = temporary_state.stat().st_size
+-                if size <= 0:
++            with tempfile.TemporaryDirectory(prefix="onnxvoice-pocket-hf-") as download_dir:
++                try:
++                    downloaded = download_huggingface_file(
++                        source,
++                        local_dir=Path(download_dir),
++                        offline=self._offline,
++                    )
++                except OptionalDependencyError:
++                    raise
++                except Exception as exc:
++                    self._raise_predefined_voice_download_error(
++                        exc, name=name, bundle_id=bundle_id, repository=source.repository
++                    )
++                if not downloaded.is_file():
+                     raise PredefinedVoiceIntegrityError(
+-                        f"Downloaded state for predefined Pocket voice {name!r} is empty"
++                        f"Downloaded state for predefined Pocket voice {name!r} is missing"
+                     )
+-                sha256 = digest_file(temporary_state)
+-                os.replace(temporary_state, state_path)
+-                record = {"key": cache_key, "size": size, "sha256": sha256}
++                cache_dir.mkdir(parents=True, exist_ok=True)
+                 fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
+                 os.close(fd)
+-                temporary_metadata = Path(temporary_name)
++                temporary_state = Path(temporary_name)
+                 try:
+-                    temporary_metadata.write_text(
+-                        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
+-                    )
+-                    os.replace(temporary_metadata, metadata_path)
++                    shutil.copyfile(downloaded, temporary_state)
++                    size = temporary_state.stat().st_size
++                    if size <= 0:
++                        raise PredefinedVoiceIntegrityError(
++                            f"Downloaded state for predefined Pocket voice {name!r} is empty"
++                        )
++                    sha256 = digest_file(temporary_state)
++                    os.replace(temporary_state, state_path)
++                    record = {"key": cache_key, "size": size, "sha256": sha256}
++                    fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
++                    os.close(fd)
++                    temporary_metadata = Path(temporary_name)
++                    try:
++                        temporary_metadata.write_text(
++                            json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
++                        )
++                        os.replace(temporary_metadata, metadata_path)
++                    finally:
++                        temporary_metadata.unlink(missing_ok=True)
+                 finally:
+-                    temporary_metadata.unlink(missing_ok=True)
+-            finally:
+-                temporary_state.unlink(missing_ok=True)
+-            return state_path, sha256
++                    temporary_state.unlink(missing_ok=True)
++                return state_path, sha256
+
+     @staticmethod
+     def _raise_predefined_voice_download_error(
+-        exc: Exception, *, name: str, bundle_id: str
++        exc: Exception, *, name: str, bundle_id: str, repository: str
+     ) -> NoReturn:
+         error_name = type(exc).__name__
+         status = getattr(getattr(exc, "response", None), "status_code", None)
+-        if error_name in {"LocalEntryNotFoundError", "OfflineModeIsEnabled"}:
++        if isinstance(exc, OfflineError) or error_name in {
++            "LocalEntryNotFoundError",
++            "OfflineModeIsEnabled",
++        }:
+             raise OfflineError(
+                 f"Predefined Pocket voice {name!r} is not available in the local cache "
+                 "and offline mode is enabled."
+             ) from exc
+-        if error_name == "GatedRepoError" or status in {401, 403}:
++        if (
++            isinstance(exc, AssetAccessError)
++            or error_name
++            in {
++                "PredefinedVoiceAccessError",
++                "AssetAccessError",
++                "AssetAuthenticationError",
++                "AssetPermissionError",
++                "GatedRepoError",
++            }
++            or status in {401, 403}
++        ):
+             raise PredefinedVoiceAccessError(
+                 f"Predefined Pocket voice {name!r} requires access to "
+-                f"{PREDEFINED_VOICE_REPOSITORY}. Accept the model terms and authenticate "
+-                "with Hugging Face, then retry."
++                f"{repository}. Accept or request access on the repository "
++                "page, authenticate with 'hf auth login' or HF_TOKEN, verify with "
++                "'hf auth whoami', and retry."
+             ) from exc
+         if (
+-            error_name in {"EntryNotFoundError", "RevisionNotFoundError", "RepositoryNotFoundError"}
++            isinstance(exc, AssetNotFoundError)
++            or error_name
++            in {
++                "AssetNotFoundError",
++                "EntryNotFoundError",
++                "RemoteEntryNotFoundError",
++                "RevisionNotFoundError",
++                "RepositoryNotFoundError",
++            }
+             or status == 404
+         ):
+             raise PredefinedVoiceNotFoundError(
+                 f"Predefined Pocket voice {name!r} is not present for bundle "
+                 f"{bundle_id!r} at the pinned upstream revision."
+             ) from exc
++        if isinstance(exc, AssetDownloadError):
++            raise exc
+         raise AssetDownloadError(
+             f"Could not download predefined Pocket voice {name!r} for bundle {bundle_id!r}."
+         ) from exc
+
+     @staticmethod
+-    def _predefined_voice_embeddings(
+-        state_path: Path, *, expected_dimension: int, name: str
+-    ) -> np.ndarray:
++    def _predefined_model_state(state_path: Path, *, name: str) -> dict[str, dict[str, np.ndarray]]:
+         try:
+             tensors = _load_safetensors(state_path)
+         except OptionalDependencyError:
+@@ -642,32 +787,23 @@ class PocketAdapter(SystemAdapter):
+             raise PredefinedVoiceIntegrityError(
+                 f"Could not load predefined Pocket voice state {name!r}"
+             ) from exc
+-        if not isinstance(tensors, Mapping) or len(tensors) != 1:
++        if not isinstance(tensors, Mapping) or not tensors:
+             raise PredefinedVoiceIntegrityError(
+-                f"Predefined Pocket voice state {name!r} must contain exactly one embedding tensor"
++                f"Predefined Pocket voice state {name!r} contains no model tensors"
+             )
+-        embeddings = np.asarray(next(iter(tensors.values())))
+-        if not np.issubdtype(embeddings.dtype, np.floating):
+-            raise PredefinedVoiceIntegrityError(
+-                f"Predefined Pocket voice state {name!r} must use a floating-point dtype"
+-            )
+-        if embeddings.ndim == 2:
+-            embeddings = embeddings[None, ...]
+-        if (
+-            embeddings.ndim != 3
+-            or embeddings.shape[0] != 1
+-            or embeddings.shape[1] == 0
+-            or embeddings.shape[2] != expected_dimension
+-        ):
+-            raise PredefinedVoiceIntegrityError(
+-                f"Predefined Pocket voice state {name!r} has shape {embeddings.shape}; "
+-                f"expected [1, sequence, {expected_dimension}]"
+-            )
+-        if not np.isfinite(embeddings).all():
+-            raise PredefinedVoiceIntegrityError(
+-                f"Predefined Pocket voice state {name!r} contains non-finite values"
+-            )
+-        return np.array(embeddings, dtype=np.float32, copy=True)
++        model_state: dict[str, dict[str, np.ndarray]] = {}
++        for tensor_path, tensor in tensors.items():
++            if not isinstance(tensor_path, str) or "/" not in tensor_path:
++                raise PredefinedVoiceIntegrityError(
++                    f"Predefined Pocket voice state {name!r} has an invalid tensor key"
++                )
++            module, key = tensor_path.split("/", 1)
++            if not module or not key:
++                raise PredefinedVoiceIntegrityError(
++                    f"Predefined Pocket voice state {name!r} has an invalid tensor key"
++                )
++            model_state.setdefault(module, {})[key] = np.asarray(tensor)
++        return model_state
+
+     def prepare_predefined_voice(self, name: str) -> PocketVoiceState:
+         metadata = self._ensure_validated()
+@@ -684,34 +820,34 @@ class PocketAdapter(SystemAdapter):
+             validate_safe_component(bundle_name, field_name="bundle id")
+         except ValueError as exc:
+             raise RuntimeContractError(str(exc)) from exc
++        source = self._predefined_voice_source(metadata, name, bundle_name)
+         cache_key = (
+             "pocket",
+             "predefined_voice_state",
+-            PREDEFINED_VOICE_REPOSITORY,
+-            PREDEFINED_VOICE_REVISION,
++            source.repository,
++            source.revision,
+             bundle_name,
+             name,
++            source.path,
+         )
+         cached = self._predefined_voice_states.get(cache_key)
+         if cached is not None:
+             return cached
+-        asset_path = f"languages/{bundle_name}/embeddings/{name}.safetensors"
+-        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, asset_path)
+-        expected_dimension = int(metadata["conditioning_dim"])
+-        embeddings = self._predefined_voice_embeddings(
+-            state_path, expected_dimension=expected_dimension, name=name
+-        )
++        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, source)
++        model_state = self._predefined_model_state(state_path, name=name)
++        flow_state = _flow_state_from_model_state(model_state, self._flow_specs, name=name)
+         sample_rate = int(metadata["sample_rate"])
+         voice_state = PocketVoiceState(
+-            embeddings=embeddings,
++            flow_state=flow_state,
+             sample_rate=sample_rate,
+             metadata={
+                 "sample_rate": sample_rate,
+                 "bundle_id": bundle_name,
+                 "voice_name": name,
+-                "model_repo": PREDEFINED_VOICE_REPOSITORY,
+-                "model_revision": PREDEFINED_VOICE_REVISION,
+-                "asset_path": asset_path,
++                "kind": "predefined_flow_state",
++                "model_repo": source.repository,
++                "model_revision": source.revision,
++                "asset_path": source.path,
+                 "sha256": sha256,
+             },
+         )
+@@ -795,6 +931,19 @@ class PocketAdapter(SystemAdapter):
+             return PocketAdapter._named_outputs(session, values)
+         return {f"output_{index}": np.asarray(value) for index, value in enumerate(values)}
+
++    def _condition_embeddings(
++        self,
++        session: OnnxSession,
++        state: dict[str, np.ndarray],
++        embeddings: np.ndarray,
++        latent_dim: int,
++    ) -> None:
++        empty_sequence = np.empty((1, 0, latent_dim), dtype=np.float32)
++        inputs = {"sequence": empty_sequence, "text_embeddings": embeddings, **state}
++        outputs = self._outputs(session, session.run(inputs))
++        if self._flow_specs:
++            update_state_from_named_outputs(state, outputs, self._flow_specs)
++
+     def _condition_prefix(
+         self,
+         session: OnnxSession,
+@@ -803,13 +952,8 @@ class PocketAdapter(SystemAdapter):
+         text_embeddings: np.ndarray,
+         latent_dim: int,
+     ) -> None:
+-        empty_sequence = np.empty((1, 0, latent_dim), dtype=np.float32)
+-        for embeddings in (voice_embeddings, text_embeddings):
+-            inputs = {"sequence": empty_sequence, "text_embeddings": embeddings, **state}
+-            outputs = self._outputs(session, session.run(inputs))
+-            update_state_from_named_outputs(
+-                state, outputs, self._flow_specs
+-            ) if self._flow_specs else None
++        self._condition_embeddings(session, state, voice_embeddings, latent_dim)
++        self._condition_embeddings(session, state, text_embeddings, latent_dim)
+
+     def _generate_latents(
+         self,
+@@ -946,23 +1090,42 @@ class PocketAdapter(SystemAdapter):
+         flow = self._get_session("flow_lm_flow")
+         decoder = self._get_session("mimi_decoder")
+         text_embeddings = self._encode_text(text_conditioner, token_ids)
+-        flow_state = initialize_state(self._flow_specs)
+         mimi_state = initialize_state(self._mimi_specs)
+         if voice_state is None:
++            flow_state = initialize_state(self._flow_specs)
+             voice_embeddings = self._normalize_embeddings(
+                 self._load_bos_conditioning(), label="BOS conditioning"
+             )
++            self._condition_prefix(
++                main, flow_state, voice_embeddings, text_embeddings, int(metadata["latent_dim"])
++            )
+         else:
+             if voice_state.sample_rate != metadata.get("sample_rate"):
+                 raise RuntimeContractError(
+                     "Pocket voice state sample rate does not match the bundle"
+                 )
+-            voice_embeddings = self._normalize_embeddings(
+-                voice_state.embeddings, label="Pocket voice embeddings"
+-            )
+-        self._condition_prefix(
+-            main, flow_state, voice_embeddings, text_embeddings, int(metadata["latent_dim"])
+-        )
++            if voice_state.flow_state is not None:
++                flow_state = {
++                    name: np.array(value, copy=True)
++                    for name, value in voice_state.flow_state.items()
++                }
++                self._condition_embeddings(
++                    main, flow_state, text_embeddings, int(metadata["latent_dim"])
++                )
++            else:
++                if voice_state.embeddings is None:
++                    raise RuntimeContractError("Pocket voice state has no conditioning data")
++                flow_state = initialize_state(self._flow_specs)
++                voice_embeddings = self._normalize_embeddings(
++                    voice_state.embeddings, label="Pocket voice embeddings"
++                )
++                self._condition_prefix(
++                    main,
++                    flow_state,
++                    voice_embeddings,
++                    text_embeddings,
++                    int(metadata["latent_dim"]),
++                )
+         latents, eos_detected, frame_count = self._generate_latents(
+             main,
+             flow,
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 60f3c48..3932972 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -120,3 +120,23 @@ class TestRenderInventory:
+         output = StringIO()
+         render_inventory(["A", "B"], [["x", "y"]], format="plain", file=output)
+         assert "x\ty" in output.getvalue()
++
++
++def test_doctor_reports_non_secret_huggingface_status(monkeypatch, capsys, tmp_path) -> None:
++    from onnxvoice.cli import main
++
++    secret = "hf_FAKE_SECRET_SENTINEL"
++    monkeypatch.setenv("HF_TOKEN", secret)
++    monkeypatch.setenv("HF_TOKEN_PATH", str(tmp_path / "token"))
++    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
++    monkeypatch.setenv("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
++
++    assert main(["--offline", "doctor", "--system", "pocket", "--format", "json"]) == 0
++    output = capsys.readouterr().out
++    report = json.loads(output)
++    assert report["system"] == "pocket"
++    assert report["credentials"] == "configured"
++    assert report["offline"] is True
++    assert report["implicit_token_disabled"] is True
++    assert report["gated_access"].startswith("not checked")
++    assert secret not in output
+diff --git a/tests/test_huggingface.py b/tests/test_huggingface.py
+new file mode 100644
+index 0000000..6164a2b
+--- /dev/null
++++ b/tests/test_huggingface.py
+@@ -0,0 +1,137 @@
++from __future__ import annotations
++
++import importlib
++import sys
++from pathlib import Path
++from types import ModuleType, SimpleNamespace
++
++import pytest
++
++from onnxvoice.errors import (
++    AssetAuthenticationError,
++    AssetDownloadError,
++    AssetNotFoundError,
++    AssetPermissionError,
++    OfflineError,
++    OptionalDependencyError,
++)
++from onnxvoice.huggingface import HuggingFaceSource, download_huggingface_file
++
++
++def _source() -> HuggingFaceSource:
++    return HuggingFaceSource(
++        repository="KevinAHM/pocket-tts-onnx",
++        revision="a" * 40,
++        path="onnx/english_2026-04/bundle.json",
++    )
++
++
++def _install_hub(monkeypatch, download) -> ModuleType:
++    hub = ModuleType("huggingface_hub")
++    hub.hf_hub_download = download
++    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
++    return hub
++
++
++def test_source_rejects_unsafe_repository_paths() -> None:
++    with pytest.raises(ValueError, match="Unsafe"):
++        HuggingFaceSource("owner/repo", "revision", "../secret")
++    with pytest.raises(ValueError, match="owner/repository"):
++        HuggingFaceSource("not-a-repository", "revision", "model.onnx")
++
++
++def test_missing_optional_dependency_has_install_instructions(monkeypatch, tmp_path: Path) -> None:
++    original_import = importlib.import_module
++
++    def import_without_hub(name: str, package: str | None = None):
++        if name == "huggingface_hub":
++            raise ModuleNotFoundError(name)
++        return original_import(name, package)
++
++    monkeypatch.setattr(importlib, "import_module", import_without_hub)
++    with pytest.raises(OptionalDependencyError, match=r"onnxvoice\[pocket\]"):
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++
++
++def test_download_uses_exact_pinned_source_and_temporary_local_dir(
++    monkeypatch, tmp_path: Path
++) -> None:
++    source = _source()
++    calls = []
++
++    def download(**kwargs):
++        calls.append(kwargs)
++        path = Path(kwargs["local_dir"]) / kwargs["filename"]
++        path.parent.mkdir(parents=True)
++        path.write_bytes(b"bundle")
++        return str(path)
++
++    _install_hub(monkeypatch, download)
++    result = download_huggingface_file(source, local_dir=tmp_path, offline=False)
++
++    assert result.read_bytes() == b"bundle"
++    assert calls == [
++        {
++            "repo_id": "KevinAHM/pocket-tts-onnx",
++            "filename": "onnx/english_2026-04/bundle.json",
++            "revision": "a" * 40,
++            "local_dir": str(tmp_path),
++            "local_files_only": False,
++            "token": None,
++            "library_name": "onnxvoice",
++        }
++    ]
++
++
++def test_download_missing_returned_file_is_an_asset_error(monkeypatch, tmp_path: Path) -> None:
++    _install_hub(monkeypatch, lambda **_kwargs: str(tmp_path / "missing"))
++    with pytest.raises(AssetDownloadError, match="returned a missing file"):
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++
++
++@pytest.mark.parametrize(
++    ("status", "error_type", "message"),
++    [
++        (401, AssetAuthenticationError, "hf auth login"),
++        (403, AssetPermissionError, "accept or request access"),
++        (404, AssetNotFoundError, "asset not found"),
++    ],
++)
++def test_http_errors_map_without_exposing_exception_text(
++    monkeypatch, tmp_path: Path, status: int, error_type: type[Exception], message: str
++) -> None:
++    secret = "hf_FAKE_SECRET_SENTINEL"
++
++    def download(**_kwargs):
++        error = RuntimeError(f"request failed with {secret}")
++        error.response = SimpleNamespace(status_code=status)
++        raise error
++
++    _install_hub(monkeypatch, download)
++    with pytest.raises(error_type) as raised:
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++    assert message in str(raised.value).lower()
++    assert secret not in str(raised.value)
++    assert secret not in repr(raised.value)
++
++
++def test_missing_revision_exception_maps_to_asset_not_found(monkeypatch, tmp_path: Path) -> None:
++    class RevisionNotFoundError(Exception):
++        pass
++
++    def download(**_kwargs):
++        raise RevisionNotFoundError("not found")
++
++    _install_hub(monkeypatch, download)
++    with pytest.raises(AssetNotFoundError, match="asset not found"):
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++
++
++def test_offline_local_cache_miss_maps_to_offline_error(monkeypatch, tmp_path: Path) -> None:
++    def download(**kwargs):
++        assert kwargs["local_files_only"] is True
++        raise RuntimeError("local cache miss")
++
++    _install_hub(monkeypatch, download)
++    with pytest.raises(OfflineError, match="while offline"):
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=True)
+diff --git a/tests/test_pocket_adapter.py b/tests/test_pocket_adapter.py
+index 106dc3d..95ea20c 100644
+--- a/tests/test_pocket_adapter.py
++++ b/tests/test_pocket_adapter.py
+@@ -70,6 +70,20 @@ class TestPocketVoiceState:
+         with pytest.raises(AttributeError):
+             state.values = {}  # type: ignore
+
++    def test_flow_state_representation_is_distinct(self) -> None:
++        flow_state = {"cache": np.ones((1, 2), dtype=np.float32)}
++        state = PocketVoiceState(flow_state=flow_state)
++        assert state.embeddings is None
++        assert state.flow_state is not None
++        assert state.values == {}
++
++    def test_rejects_both_conditioning_representations(self) -> None:
++        with pytest.raises(ValueError, match="not both"):
++            PocketVoiceState(
++                np.ones((1, 2, 3), dtype=np.float32),
++                flow_state={"cache": np.ones((1,), dtype=np.float32)},
++            )
++
+
+ class TestPocketAdapterInit:
+     """Test PocketAdapter initialization."""
+@@ -537,6 +551,7 @@ def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
+ ) -> None:
+     sessions: dict[str, MagicMock] = {}
+     main_calls = 0
++    main_inputs: list[dict[str, np.ndarray]] = []
+
+     def create_session(path: Any, **kwargs: Any) -> MagicMock:
+         nonlocal main_calls
+@@ -553,6 +568,9 @@ def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
+             def main_run(inputs: dict[str, Any]) -> list[np.ndarray]:
+                 nonlocal main_calls
+                 main_calls += 1
++                main_inputs.append(
++                    {name: np.array(value, copy=True) for name, value in inputs.items()}
++                )
+                 eos = np.asarray([1.0 if main_calls == 4 else 0.0], dtype=np.float32)
+                 return [np.ones((1, 1, 3), dtype=np.float32), eos]
+
+@@ -596,6 +614,8 @@ def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
+
+     assert result.audio.shape == (16,)
+     assert result.sample_rate == 24000
++    assert np.array_equal(main_inputs[0]["text_embeddings"], np.zeros((1, 1, 4), dtype=np.float32))
++    assert np.array_equal(main_inputs[1]["text_embeddings"], np.ones((1, 2, 4), dtype=np.float32))
+     assert main_calls == 4  # two prefix calls plus two generated frames
+     assert sessions["flow_lm_flow"].run.call_count == 2
+     assert sessions["mimi_decoder"].run.call_count == 2
+@@ -603,6 +623,89 @@ def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
+     assert set(sessions["flow_lm_flow"].run.call_args.args[0]) == {"c", "s", "t", "x"}
+
+
++def test_predefined_flow_state_uses_text_prefix_and_defensive_copy(tmp_path: Path) -> None:
++    from onnxvoice.systems.pocket import parse_state_manifest
++
++    text_embeddings = np.full((1, 2, 4), 2.0, dtype=np.float32)
++    text = MagicMock()
++    text.input_names = ("token_ids",)
++    text.output_names = ("embeddings",)
++    text.run.return_value = [text_embeddings]
++
++    main_inputs: list[dict[str, np.ndarray]] = []
++    main_state_inputs: list[np.ndarray] = []
++    main = MagicMock()
++    main.input_names = ("sequence", "text_embeddings", "state_0")
++    main.output_names = ("conditioning", "eos", "out_state_0")
++
++    def run_main(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
++        main_state_inputs.append(inputs["state_0"])
++        main_inputs.append({name: np.array(value, copy=True) for name, value in inputs.items()})
++        return [
++            np.ones((1, 1, 3), dtype=np.float32),
++            np.asarray([1.0], dtype=np.float32),
++            np.asarray(inputs["state_0"]) + 1.0,
++        ]
++
++    main.run.side_effect = run_main
++
++    flow = MagicMock()
++    flow.input_names = ("c", "s", "t", "x")
++    flow.output_names = ("velocity",)
++    flow.run.return_value = [np.zeros((1, 1, 3), dtype=np.float32)]
++
++    decoder = MagicMock()
++    decoder.input_names = ("latent",)
++    decoder.output_names = ("audio",)
++    decoder.run.return_value = [np.ones((1, 1, 8), dtype=np.float32)]
++
++    sessions = {
++        "text_conditioner": text,
++        "flow_lm_main": main,
++        "flow_lm_flow": flow,
++        "mimi_decoder": decoder,
++    }
++    adapter = PocketAdapter(_make_installation())
++    adapter._flow_specs = parse_state_manifest(
++        [
++            {
++                "index": 0,
++                "input_name": "state_0",
++                "output_name": "out_state_0",
++                "module": "module",
++                "key": "cache",
++                "shape": [1],
++                "dtype": "float32",
++                "fill": "zeros",
++            }
++        ],
++        name="flow_lm",
++    )
++    metadata = {
++        "sample_rate": 24000,
++        "samples_per_frame": 1,
++        "latent_dim": 3,
++        "conditioning_dim": 4,
++        "decoder_chunk_frames": 1,
++    }
++    imported_state = np.asarray([5.0], dtype=np.float32)
++    voice_state = PocketVoiceState(flow_state={"state_0": imported_state})
++
++    with (
++        patch.object(adapter, "_ensure_validated", return_value=metadata),
++        patch.object(adapter, "_get_session", side_effect=sessions.__getitem__),
++    ):
++        result = adapter.infer([1], voice_state=voice_state, frames_after_eos=0)
++
++    assert result.audio.shape == (8,)
++    assert len(main_inputs) == 2
++    assert np.array_equal(main_inputs[0]["text_embeddings"], text_embeddings)
++    assert np.array_equal(main_inputs[0]["state_0"], [5.0])
++    assert np.array_equal(main_inputs[1]["state_0"], [6.0])
++    assert not np.shares_memory(main_state_inputs[0], imported_state)
++    assert np.array_equal(voice_state.flow_state["state_0"], [5.0])
++
++
+ def _predefined_adapter(
+     tmp_path: Path,
+     *,
+@@ -619,7 +722,38 @@ def _predefined_adapter(
+         "samples_per_frame": 1920,
+         "latent_dim": 3,
+         "conditioning_dim": conditioning_dim,
+-        "flow_lm_state_manifest": [],
++        "flow_lm_state_manifest": [
++            {
++                "index": 0,
++                "input_name": "state_0",
++                "output_name": "out_state_0",
++                "module": "transformer.layers.0.self_attn",
++                "key": "cache",
++                "shape": [2, 1, 4, 1, 2],
++                "dtype": "float32",
++                "fill": "nan",
++            },
++            {
++                "index": 1,
++                "input_name": "state_1",
++                "output_name": "out_state_1",
++                "module": "transformer.layers.0.self_attn",
++                "key": "current_end",
++                "shape": [0],
++                "dtype": "float32",
++                "fill": "empty",
++            },
++            {
++                "index": 2,
++                "input_name": "state_2",
++                "output_name": "out_state_2",
++                "module": "transformer.layers.0.self_attn",
++                "key": "step",
++                "shape": [1],
++                "dtype": "int64",
++                "fill": "zeros",
++            },
++        ],
+         "mimi_state_manifest": [],
+         "insert_bos_before_voice": False,
+         "bos_before_voice_file": "bos_before_voice.npy",
+@@ -638,6 +772,14 @@ def _predefined_adapter(
+     )
+
+
++def _predefined_model_tensors() -> dict[str, np.ndarray]:
++    return {
++        "transformer.layers.0.self_attn/cache": np.ones((2, 1, 3, 1, 2), dtype=np.float32),
++        "transformer.layers.0.self_attn/current_end": np.zeros(3, dtype=np.float32),
++        "unused/module_tensor": np.ones(1, dtype=np.float32),
++    }
++
++
+ def test_predefined_voice_download_uses_pinned_bundle_asset_and_runtime_cache(
+     tmp_path: Path,
+ ) -> None:
+@@ -648,71 +790,129 @@ def test_predefined_voice_download_uses_pinned_bundle_asset_and_runtime_cache(
+
+     source = tmp_path / "download.safetensors"
+     source.write_bytes(b"fake safetensors payload")
+-    expected_embeddings = np.ones((1, 6, 4), dtype=np.float32)
+     adapter = _predefined_adapter(tmp_path)
+     with (
+         patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            "onnxvoice.systems.pocket.download_huggingface_file",
+             return_value=source,
+         ) as download,
+         patch(
+             "onnxvoice.systems.pocket._load_safetensors",
+-            return_value={"voice_embeddings": expected_embeddings},
++            return_value=_predefined_model_tensors(),
+         ) as load,
+     ):
+         state = adapter.prepare_predefined_voice("alba")
+         assert adapter.prepare_predefined_voice("alba") is state
+
+-    download.assert_called_once_with(
+-        PREDEFINED_VOICE_REPOSITORY,
+-        "languages/english_2026-04/embeddings/alba.safetensors",
+-        PREDEFINED_VOICE_REVISION,
+-        cache_dir=adapter._voice_cache_dir / "huggingface",
+-        local_files_only=False,
+-    )
++    download.assert_called_once()
++    source = download.call_args.args[0]
++    assert source.repository == PREDEFINED_VOICE_REPOSITORY
++    assert source.revision == PREDEFINED_VOICE_REVISION
++    assert source.path == "languages/english_2026-04/embeddings/alba.safetensors"
++    assert source.gated is True
++    assert download.call_args.kwargs["offline"] is False
++    assert not download.call_args.kwargs["local_dir"].exists()
++    assert not (adapter._voice_cache_dir / "huggingface").exists()
+     load.assert_called_once()
+-    assert state.embeddings.shape == (1, 6, 4)
++    assert state.embeddings is None
++    assert state.flow_state is not None
++    assert state.flow_state["state_0"].shape == (2, 1, 4, 1, 2)
++    assert np.array_equal(
++        state.flow_state["state_0"][:, :, :3], np.ones((2, 1, 3, 1, 2), np.float32)
++    )
++    assert np.isnan(state.flow_state["state_0"][:, :, 3:]).all()
++    assert state.flow_state["state_1"].shape == (0,)
++    assert np.array_equal(state.flow_state["state_2"], [3])
+     assert state.sample_rate == 24000
+     assert state.metadata["bundle_id"] == "english_2026-04"
+     assert state.metadata["voice_name"] == "alba"
++    assert state.metadata["kind"] == "predefined_flow_state"
+     assert state.metadata["model_revision"] == PREDEFINED_VOICE_REVISION
+     assert "cache_path" not in state.metadata
+     assert "token" not in state.metadata
+
+
++def test_predefined_voice_uses_declared_separate_huggingface_source(
++    tmp_path: Path,
++) -> None:
++    remote_file = tmp_path / "voice.safetensors"
++    remote_file.write_bytes(b"fake safetensors payload")
++    adapter = _predefined_adapter(tmp_path)
++    source_record = {
++        "name": "alba",
++        "compatible_bundle": "english_2026-04",
++        "source": {
++            "provider": "huggingface",
++            "repository": "kyutai/pocket-tts",
++            "revision": "d" * 40,
++            "path": "languages/english_2026-04/embeddings/alba.safetensors",
++        },
++        "access": {"gated": True, "distributable": False, "license": "cc-by-4.0"},
++        "format": "safetensors",
++        "size": 123,
++        "sha256": "a" * 64,
++        "url": None,
++        "resolver": "huggingface",
++    }
++    adapter.installation.metadata["voice_states"] = [source_record]
++    with (
++        patch(
++            "onnxvoice.systems.pocket.download_huggingface_file",
++            return_value=remote_file,
++        ) as download,
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value=_predefined_model_tensors(),
++        ),
++    ):
++        state = adapter.prepare_predefined_voice("alba")
++
++    source = download.call_args.args[0]
++    assert source.repository == "kyutai/pocket-tts"
++    assert source.revision == "d" * 40
++    assert source.path == source_record["source"]["path"]
++    assert source.gated is True
++    assert state.metadata["model_repo"] == "kyutai/pocket-tts"
++    assert state.metadata["model_revision"] == "d" * 40
++
++
+ def test_predefined_voice_uses_persistent_cache_offline(
+     tmp_path: Path,
+ ) -> None:
+     source = tmp_path / "download.safetensors"
+     source.write_bytes(b"fake safetensors payload")
+     cache_dir = tmp_path / "voice-cache"
+-    embeddings = np.ones((1, 6, 4), dtype=np.float32)
+     online = _predefined_adapter(tmp_path, cache_dir=cache_dir)
+     with (
+         patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            "onnxvoice.systems.pocket.download_huggingface_file",
+             return_value=source,
+         ) as download,
+         patch(
+             "onnxvoice.systems.pocket._load_safetensors",
+-            return_value={"embedding": embeddings},
++            return_value=_predefined_model_tensors(),
+         ),
+     ):
+         online_state = online.prepare_predefined_voice("alba")
+
+     offline = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
+     with (
+-        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download_offline,
++        patch("onnxvoice.systems.pocket.download_huggingface_file") as download_offline,
+         patch(
+             "onnxvoice.systems.pocket._load_safetensors",
+-            return_value={"embedding": embeddings},
++            return_value=_predefined_model_tensors(),
+         ),
+     ):
+         offline_state = offline.prepare_predefined_voice("alba")
+
+     download.assert_called_once()
+     download_offline.assert_not_called()
+-    assert np.array_equal(offline_state.embeddings, online_state.embeddings)
++    assert offline_state.flow_state is not None
++    assert online_state.flow_state is not None
++    for key in online_state.flow_state:
++        assert np.array_equal(
++            offline_state.flow_state[key], online_state.flow_state[key], equal_nan=True
++        )
+
+
+ def test_predefined_voice_rejects_unknown_name_before_download(tmp_path: Path) -> None:
+@@ -720,7 +920,7 @@ def test_predefined_voice_rejects_unknown_name_before_download(tmp_path: Path) -
+
+     adapter = _predefined_adapter(tmp_path)
+     with (
+-        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download,
++        patch("onnxvoice.systems.pocket.download_huggingface_file") as download,
+         pytest.raises(RuntimeContractError, match="Available voices: alba"),
+     ):
+         adapter.prepare_predefined_voice("abla")
+@@ -736,27 +936,7 @@ def test_predefined_voice_rejects_bundle_catalog_name_mismatch(tmp_path: Path) -
+         _ = adapter.predefined_voices
+
+
+-def test_predefined_voice_rejects_incompatible_embedding_shape(tmp_path: Path) -> None:
+-    from onnxvoice.errors import PredefinedVoiceIntegrityError
+-
+-    source = tmp_path / "download.safetensors"
+-    source.write_bytes(b"fake safetensors payload")
+-    adapter = _predefined_adapter(tmp_path)
+-    with (
+-        patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
+-            return_value=source,
+-        ),
+-        patch(
+-            "onnxvoice.systems.pocket._load_safetensors",
+-            return_value={"embedding": np.ones((1, 6, 3), dtype=np.float32)},
+-        ),
+-        pytest.raises(PredefinedVoiceIntegrityError, match="expected \\[1, sequence, 4\\]"),
+-    ):
+-        adapter.prepare_predefined_voice("alba")
+-
+-
+-def test_predefined_voice_rejects_non_float_embedding(tmp_path: Path) -> None:
++def test_predefined_voice_rejects_malformed_model_state_key(tmp_path: Path) -> None:
+     from onnxvoice.errors import PredefinedVoiceIntegrityError
+
+     source = tmp_path / "download.safetensors"
+@@ -764,14 +944,14 @@ def test_predefined_voice_rejects_non_float_embedding(tmp_path: Path) -> None:
+     adapter = _predefined_adapter(tmp_path)
+     with (
+         patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            "onnxvoice.systems.pocket.download_huggingface_file",
+             return_value=source,
+         ),
+         patch(
+             "onnxvoice.systems.pocket._load_safetensors",
+-            return_value={"embedding": np.ones((1, 6, 4), dtype=np.int64)},
++            return_value={"not-a-namespaced-key": np.ones(1, dtype=np.float32)},
+         ),
+-        pytest.raises(PredefinedVoiceIntegrityError, match="floating-point"),
++        pytest.raises(PredefinedVoiceIntegrityError, match="invalid tensor key"),
+     ):
+         adapter.prepare_predefined_voice("alba")
+
+@@ -785,7 +965,7 @@ def test_predefined_voice_gated_access_is_distinct(tmp_path: Path) -> None:
+     adapter = _predefined_adapter(tmp_path)
+     with (
+         patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            "onnxvoice.systems.pocket.download_huggingface_file",
+             side_effect=GatedRepoError("private error detail"),
+         ),
+         pytest.raises(
+@@ -807,7 +987,7 @@ def test_predefined_voice_missing_asset_is_distinct(tmp_path: Path) -> None:
+     adapter = _predefined_adapter(tmp_path)
+     with (
+         patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            "onnxvoice.systems.pocket.download_huggingface_file",
+             side_effect=EntryNotFoundError(),
+         ),
+         pytest.raises(PredefinedVoiceNotFoundError, match="not present for bundle"),
+@@ -824,13 +1004,13 @@ def test_predefined_voice_offline_cache_miss_is_distinct(tmp_path: Path) -> None
+     adapter = _predefined_adapter(tmp_path, offline=True)
+     with (
+         patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            "onnxvoice.systems.pocket.download_huggingface_file",
+             side_effect=LocalEntryNotFoundError(),
+         ) as download,
+         pytest.raises(OfflineError, match="not available in the local cache"),
+     ):
+         adapter.prepare_predefined_voice("alba")
+-    assert download.call_args.kwargs["local_files_only"] is True
++    assert download.call_args.kwargs["offline"] is True
+
+
+ def test_predefined_voice_cached_corruption_is_reported(tmp_path: Path) -> None:
+@@ -842,12 +1022,12 @@ def test_predefined_voice_cached_corruption_is_reported(tmp_path: Path) -> None:
+     online = _predefined_adapter(tmp_path, cache_dir=cache_dir)
+     with (
+         patch(
+-            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            "onnxvoice.systems.pocket.download_huggingface_file",
+             return_value=source,
+         ),
+         patch(
+             "onnxvoice.systems.pocket._load_safetensors",
+-            return_value={"embedding": np.ones((1, 6, 4), dtype=np.float32)},
++            return_value=_predefined_model_tensors(),
+         ),
+     ):
+         online.prepare_predefined_voice("alba")
+@@ -856,7 +1036,7 @@ def test_predefined_voice_cached_corruption_is_reported(tmp_path: Path) -> None:
+
+     offline = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
+     with (
+-        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download,
++        patch("onnxvoice.systems.pocket.download_huggingface_file") as download,
+         pytest.raises(PredefinedVoiceIntegrityError, match="failed integrity validation"),
+     ):
+         offline.prepare_predefined_voice("alba")
+diff --git a/tests/test_pocket_catalog.py b/tests/test_pocket_catalog.py
+index 3a00570..2e61a55 100644
+--- a/tests/test_pocket_catalog.py
++++ b/tests/test_pocket_catalog.py
+@@ -12,6 +12,7 @@ from onnxvoice.catalog import (
+     _parse_pocket,
+     _select_pocket_profile,
+ )
++from onnxvoice.catalog_tools.pocket import huggingface_resolve_url
+ from onnxvoice.errors import CatalogError
+
+ SAMPLE_CATALOG = {
+@@ -429,27 +430,31 @@ def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
+     item = _parse_pocket(catalog)[0]
+     assert item.voices == ()
+     assert item.metadata["predefined_voice_names"] == ["alba"]
++    state_path = "languages/english_2026-04/embeddings/alba.safetensors"
+     entry["voice_states"] = [
+         {
+             "name": "alba",
+             "compatible_bundle": entry["id"],
+             "source": {
+                 "provider": "huggingface",
+-                "repository": SAMPLE_CATALOG["source"]["repository"],
+-                "revision": SAMPLE_CATALOG["source"]["revision"],
+-                "path": "onnx/english_2026-04/alba.safetensors",
++                "repository": "kyutai/pocket-tts",
++                "revision": "d" * 40,
++                "path": state_path,
+             },
+             "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
+             "format": "safetensors",
+             "size": 123,
+             "sha256": "b" * 64,
+-            "url": "https://example.com/alba.safetensors",
++            "url": huggingface_resolve_url("kyutai/pocket-tts", "d" * 40, state_path),
+             "resolver": None,
+         }
+     ]
+     item = _parse_pocket(catalog)[0]
+     assert item.voices == ("alba",)
+     assert item.metadata["voice_states"][0]["access"]["gated"] is False
++    assert item.metadata["voice_states"][0]["source"]["repository"] == "kyutai/pocket-tts"
++    assert item.metadata["voice_states"][0]["source"]["revision"] == "d" * 40
++    assert item.metadata["voice_states"][0]["source"]["path"] == state_path
+
+
+ def test_canonical_object_map_rejects_key_id_mismatch() -> None:
+@@ -466,3 +471,27 @@ def test_canonical_kind_rejects_list_and_wrong_kind() -> None:
+         _parse_pocket(
+             {"schema": 1, "kind": "pocket-bundle-catalog", "bundles": {entry["id"]: entry}}
+         )
++
++
++def test_pocket_artifact_preserves_structured_huggingface_source() -> None:
++    catalog = copy.deepcopy(SAMPLE_CATALOG)
++    catalog["source"]["provider"] = "huggingface"
++    for artifact in catalog["bundles"][0]["artifacts"]:
++        artifact["path"] = f"onnx/english_2026-04/{artifact['filename']}"
++    item = _parse_pocket(catalog)[0]
++    artifact = item.artifact("bundle_metadata")
++    assert artifact.metadata["source"] == {
++        "provider": "huggingface",
++        "repository": "KevinAHM/pocket-tts-onnx",
++        "revision": "abc123def456abc123def456abc123def456abc1",
++        "path": "onnx/english_2026-04/bundle.json",
++        "gated": False,
++    }
++
++
++def test_pocket_huggingface_source_rejects_unsafe_repository_path() -> None:
++    catalog = copy.deepcopy(SAMPLE_CATALOG)
++    catalog["source"]["provider"] = "huggingface"
++    catalog["bundles"][0]["artifacts"][0]["path"] = "../bundle.json"
++    with pytest.raises(CatalogError, match="Unsafe"):
++        _parse_pocket(catalog)
+diff --git a/tests/test_pocket_catalog_tools.py b/tests/test_pocket_catalog_tools.py
+index d2811ef..d32f0ec 100644
+--- a/tests/test_pocket_catalog_tools.py
++++ b/tests/test_pocket_catalog_tools.py
+@@ -308,23 +308,22 @@ def test_build_catalog_normalizes_declared_missing_integrity() -> None:
+
+ def test_build_catalog_preserves_explicit_voice_state_contract() -> None:
+     upstream = _upstream_bundle()
+-    state_path = f"{BASE}/alba.safetensors"
++    state_path = "languages/english_2026-04/embeddings/alba.safetensors"
+     upstream["voice_states"] = [
+         {
+             "name": "alba",
+             "compatible_bundle": "english_2026-04",
+             "source": {
+                 "provider": "huggingface",
+-                "repository": REPOSITORY,
+-                "revision": REVISION,
++                "repository": "kyutai/pocket-tts",
++                "revision": "d" * 40,
+                 "path": state_path,
+             },
+             "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
+             "format": "safetensors",
+             "size": 123,
+             "sha256": "c" * 64,
+-            "url": huggingface_resolve_url(REPOSITORY, REVISION, state_path),
+-            "resolver": None,
++            "url": huggingface_resolve_url("kyutai/pocket-tts", "d" * 40, state_path),
+         }
+     ]
+     tree = [
+@@ -344,6 +343,10 @@ def test_build_catalog_preserves_explicit_voice_state_contract() -> None:
+         result = build_catalog(resolved_revision=REVISION)
+     verify_catalog(result)
+     assert result["bundles"]["english_2026-04"]["voice_states"][0]["name"] == "alba"
++    state = result["bundles"]["english_2026-04"]["voice_states"][0]
++    assert state["source"]["repository"] == "kyutai/pocket-tts"
++    assert state["source"]["revision"] == "d" * 40
++    assert state["source"]["path"] == state_path
+
+
+ def test_build_catalog_requires_bundles() -> None:
+diff --git a/tests/test_pocket_contract.py b/tests/test_pocket_contract.py
+index 1d5fea5..3a2e987 100644
+--- a/tests/test_pocket_contract.py
++++ b/tests/test_pocket_contract.py
+@@ -11,6 +11,9 @@ from onnxvoice.errors import RuntimeContractError
+ from onnxvoice.systems.pocket import (
+     PocketAdapter,
+     StateSpec,
++    _adapt_state_tensor,
++    _derive_step,
++    _flow_state_from_model_state,
+     initialize_state,
+     parse_state_manifest,
+     update_state_from_named_outputs,
+@@ -25,6 +28,8 @@ MANIFEST = [
+         "shape": [2, 1, 4, 1, 2],
+         "dtype": "float32",
+         "fill": "nan",
++        "module": "transformer.layers.0.self_attn",
++        "key": "cache",
+     },
+     {
+         "index": 1,
+@@ -33,6 +38,8 @@ MANIFEST = [
+         "shape": [0],
+         "dtype": "float32",
+         "fill": "empty",
++        "module": "transformer.layers.0.self_attn",
++        "key": "current_end",
+     },
+     {
+         "index": 2,
+@@ -41,6 +48,8 @@ MANIFEST = [
+         "shape": [1],
+         "dtype": "int64",
+         "fill": "zeros",
++        "module": "transformer.layers.0.self_attn",
++        "key": "step",
+     },
+ ]
+
+@@ -76,6 +85,80 @@ def test_manifest_parses_and_initializes_declared_fills() -> None:
+     assert np.array_equal(state["state_2"], [0])
+
+
++def test_manifest_source_mappings_are_optional_but_paired() -> None:
++    specs = parse_state_manifest(MANIFEST, name="flow_lm")
++    assert specs[0].module == "transformer.layers.0.self_attn"
++    assert specs[0].key == "cache"
++
++    legacy_manifest = [
++        {key: value for key, value in entry.items() if key not in {"module", "key"}}
++        for entry in MANIFEST
++    ]
++    assert all(
++        spec.module is None and spec.key is None
++        for spec in parse_state_manifest(legacy_manifest, name="flow_lm")
++    )
++
++
++@pytest.mark.parametrize(
++    "source",
++    [
++        {**MANIFEST[0], "key": None},
++        {**MANIFEST[0], "module": None},
++        {**MANIFEST[0], "module": "", "key": "cache"},
++        {**MANIFEST[0], "module": "module", "key": ""},
++        {**MANIFEST[0], "module": 1},
++        {**MANIFEST[0], "key": 1},
++    ],
++)
++def test_manifest_rejects_invalid_source_mappings(source: dict[str, object]) -> None:
++    with pytest.raises(RuntimeContractError, match="module|key"):
++        parse_state_manifest([source], name="flow_lm")
++
++
++def test_predefined_flow_state_import_adapts_manifest_tensors() -> None:
++    specs = parse_state_manifest(MANIFEST, name="flow_lm")
++    cache = np.ones((2, 1, 3, 1, 2), dtype=np.float32)
++    state = _flow_state_from_model_state(
++        {
++            "transformer.layers.0.self_attn": {
++                "cache": cache,
++                "current_end": np.zeros(3, dtype=np.float32),
++            }
++        },
++        specs,
++        name="alba",
++    )
++
++    assert state["state_0"].shape == (2, 1, 4, 1, 2)
++    assert np.array_equal(state["state_0"][:, :, :3], cache)
++    assert np.isnan(state["state_0"][:, :, 3:]).all()
++    assert state["state_1"].shape == (0,)
++    assert np.array_equal(state["state_2"], [3])
++    assert np.array_equal(_derive_step({"step": np.asarray(7)}), [7])
++    assert np.array_equal(_derive_step({}), [0])
++    assert np.array_equal(_derive_step({"offset": np.asarray(4)}), [4])
++    assert np.array_equal(
++        _derive_step(
++            {"offset": np.asarray(4), "end_offset": np.asarray(9), "current_end": np.zeros(6)}
++        ),
++        [6],
++    )
++    partial = _flow_state_from_model_state(
++        {"transformer.layers.0.self_attn": {"current_end": np.zeros(3, dtype=np.float32)}},
++        specs,
++        name="alba",
++    )
++    assert np.isnan(partial["state_0"]).all()
++
++
++def test_state_tensor_adaptation_keeps_initialized_state_on_rank_mismatch() -> None:
++    spec = parse_state_manifest(MANIFEST[:1], name="flow_lm")[0]
++    state = _adapt_state_tensor(np.ones((3, 2), dtype=np.float32), spec)
++    assert state.shape == spec.shape
++    assert np.isnan(state).all()
++
++
+ def test_manifest_updates_by_named_outputs() -> None:
+     specs = parse_state_manifest(MANIFEST, name="flow_lm")
+     state = initialize_state(specs)
+diff --git a/tests/test_store.py b/tests/test_store.py
+index 220a041..d1ecd70 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -5,7 +5,7 @@ import os
+
+ import pytest
+
+-from onnxvoice.errors import IntegrityError
++from onnxvoice.errors import IntegrityError, OfflineError
+ from onnxvoice.store import AssetStore
+ from onnxvoice.types import Artifact, CatalogItem
+
+@@ -155,3 +155,110 @@ def test_new_install_persists_timing_metadata(tmp_path):
+     reloaded = store.get("kokoro", "v1.0")
+
+     assert reloaded.timing_output == "durations"
++
++
++def _huggingface_artifact(payload: bytes, *, filename: str = "model.onnx") -> Artifact:
++    return Artifact(
++        role="flow_lm_main",
++        filename=filename,
++        url="https://huggingface.co/owner/repo/resolve/revision/model.onnx",
++        size=len(payload),
++        sha256=hashlib.sha256(payload).hexdigest(),
++        metadata={
++            "source": {
++                "provider": "huggingface",
++                "repository": "owner/repo",
++                "revision": "a" * 40,
++                "path": "onnx/bundle/model.onnx",
++                "gated": False,
++            }
++        },
++    )
++
++
++def test_pocket_huggingface_artifact_uses_structured_source_and_integrity(
++    tmp_path, monkeypatch
++) -> None:
++    import onnxvoice.store as store_module
++
++    payload = b"expected model bytes"
++    calls = []
++    store = AssetStore(tmp_path / "cache")
++    item = CatalogItem(
++        system="pocket",
++        id="bundle",
++        kind="bundle",
++        artifacts=(_huggingface_artifact(payload),),
++        metadata={"canonical_catalog": True},
++    )
++
++    def download(source, *, local_dir, offline):
++        calls.append((source, local_dir, offline))
++        path = local_dir / source.path
++        path.parent.mkdir(parents=True)
++        path.write_bytes(payload)
++        return path
++
++    monkeypatch.setattr(store_module, "download_huggingface_file", download)
++    monkeypatch.setattr(store, "_download", lambda *_args, **_kwargs: pytest.fail("used urllib"))
++    events = []
++    installed = store.install(item, progress=events.append)
++
++    assert installed.artifact("flow_lm_main").path.read_bytes() == payload
++    source, local_dir, offline = calls[0]
++    assert source.repository == "owner/repo"
++    assert source.revision == "a" * 40
++    assert source.path == "onnx/bundle/model.onnx"
++    assert local_dir.name.startswith("onnxvoice-download-")
++    assert not local_dir.exists()
++    assert offline is False
++    assert [event.phase for event in events if event.phase.startswith("download_")] == [
++        "download_started",
++        "download_completed",
++    ]
++
++
++def test_pocket_huggingface_download_still_checks_checksum(tmp_path, monkeypatch) -> None:
++    import onnxvoice.store as store_module
++
++    store = AssetStore(tmp_path / "cache")
++    payload = b"expected model bytes"
++    item = CatalogItem(
++        system="pocket",
++        id="bad-digest",
++        kind="bundle",
++        artifacts=(_huggingface_artifact(payload[:-1] + b"!"),),
++        metadata={"canonical_catalog": True},
++    )
++
++    def download(source, *, local_dir, offline):
++        path = local_dir / source.path
++        path.parent.mkdir(parents=True)
++        path.write_bytes(payload)
++        return path
++
++    monkeypatch.setattr(store_module, "download_huggingface_file", download)
++    with pytest.raises(IntegrityError):
++        store.install(item)
++
++
++def test_offline_pocket_cache_miss_does_not_invoke_huggingface(tmp_path, monkeypatch) -> None:
++    import onnxvoice.store as store_module
++
++    store = AssetStore(tmp_path / "cache", offline=True)
++    payload = b"expected model bytes"
++    item = CatalogItem(
++        system="pocket",
++        id="offline-miss",
++        kind="bundle",
++        artifacts=(_huggingface_artifact(payload),),
++        metadata={"canonical_catalog": True},
++    )
++    monkeypatch.setattr(
++        store_module,
++        "download_huggingface_file",
++        lambda *_args, **_kwargs: pytest.fail("offline cache miss attempted a Hub download"),
++    )
++
++    with pytest.raises(OfflineError):
++        store.install(item)

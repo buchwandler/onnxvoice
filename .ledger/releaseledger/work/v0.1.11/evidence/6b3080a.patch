@@ -1,0 +1,4202 @@
+ onnxvoice/catalog.py                    |   17 +
+ onnxvoice/data/voice_selectors.json     | 3258 +++++++++++++++++++++++++++++++
+ onnxvoice/errors.py                     |   20 +
+ onnxvoice/manager.py                    |   32 +-
+ onnxvoice/systems/pocket.py             |  323 ++-
+ pyproject.toml                          |    1 +
+ tests/test_catalog.py                   |   23 +
+ tests/test_pocket_adapter.py            |  261 +++
+ tests/test_pocket_catalog.py            |    1 +
+ tests/test_pocket_network_boundaries.py |   35 +
+ tests/test_voice_selectors.py           |   15 +-
+ 11 files changed, 3969 insertions(+), 17 deletions(-)
+
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index e58aa13..a5fb3bd 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -381,6 +381,9 @@ def _parse_kokoro(data: dict[str, Any]) -> list[CatalogItem]:
+         raise CatalogError("Kokoro catalog is missing the 'models' mapping")
+     result: list[CatalogItem] = []
+     for model_id, entry in models.items():
++        distributions = entry.get("distributions", ())
++        if not any(distribution.get("runtime_ready", True) for distribution in distributions):
++            continue
+         result.append(_parse_kokoro_entry(model_id, entry))
+     return result
+
+@@ -545,6 +548,19 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+             )
+         voice_names, voice_states = _parse_pocket_voice_states(entry, bundle_id)
+
++        raw_predefined_names = entry.get("predefined_voice_names") or []
++        if not isinstance(raw_predefined_names, Sequence) or isinstance(
++            raw_predefined_names, (str, bytes)
++        ):
++            raise CatalogError(f"{bundle_id}: predefined_voice_names must be a sequence")
++        predefined_voice_names: list[str] = []
++        for name in raw_predefined_names:
++            if not isinstance(name, str):
++                raise CatalogError(f"{bundle_id}: predefined voice names must be strings")
++            _require_pocket_safe_id(name, f"{bundle_id} predefined voice name")
++            if name in predefined_voice_names:
++                raise CatalogError(f"{bundle_id}: duplicate predefined voice {name!r}")
++            predefined_voice_names.append(name)
+         metadata = {
+             **(entry.get("metadata") or {}),
+             "language": entry.get("language"),
+@@ -559,6 +575,7 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+             "remove_semicolons": entry.get("remove_semicolons"),
+             "pad_with_spaces_for_short_inputs": entry.get("pad_with_spaces_for_short_inputs"),
+             "voice_states": voice_states,
++            "predefined_voice_names": predefined_voice_names,
+             "canonical_catalog": canonical,
+         }
+         result.append(
+diff --git a/onnxvoice/data/voice_selectors.json b/onnxvoice/data/voice_selectors.json
+index e57663d..fa99a87 100644
+--- a/onnxvoice/data/voice_selectors.json
++++ b/onnxvoice/data/voice_selectors.json
+@@ -373,6 +373,3264 @@
+       "asset_id": "v1.1-zh",
+       "voice_id": "af_sol",
+       "state": "active"
++    },
++    {
++      "language": "ar",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "ar-nabra",
++      "voice_id": "default",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "en-oddadmix-7m-distill",
++      "voice_id": "af_msa",
++      "state": "active"
++    },
++    {
++      "language": "kk",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "kk-anuarsv",
++      "voice_id": "km_m1",
++      "state": "active"
++    },
++    {
++      "language": "pt_pt",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "pt-eu-logus2k",
++      "voice_id": "pt_eu",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bf_alice",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bf_emma",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bf_isabella",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 4,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bf_janegoodall",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 5,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bf_lily",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 6,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bm_daniel",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 7,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bm_davidattenborough",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 8,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bm_fable",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 9,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bm_george",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 10,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "bm_lewis",
++      "state": "active"
++    },
++    {
++      "language": "en_gb",
++      "engine_code": "ko",
++      "slot": 11,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "bf_vale",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "ef_dora",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "em_alex",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "em_santa",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "ff_siwis",
++      "state": "active"
++    },
++    {
++      "language": "hi",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "hf_alpha",
++      "state": "active"
++    },
++    {
++      "language": "hi",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "hf_beta",
++      "state": "active"
++    },
++    {
++      "language": "hi",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "hm_omega",
++      "state": "active"
++    },
++    {
++      "language": "hi",
++      "engine_code": "ko",
++      "slot": 4,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "hm_psi",
++      "state": "active"
++    },
++    {
++      "language": "it",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "if_sara",
++      "state": "active"
++    },
++    {
++      "language": "it",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "im_nicola",
++      "state": "active"
++    },
++    {
++      "language": "ja",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "jf_alpha",
++      "state": "active"
++    },
++    {
++      "language": "ja",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "jf_gongitsune",
++      "state": "active"
++    },
++    {
++      "language": "ja",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "jf_nezumi",
++      "state": "active"
++    },
++    {
++      "language": "ja",
++      "engine_code": "ko",
++      "slot": 4,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "jf_tebukuro",
++      "state": "active"
++    },
++    {
++      "language": "ja",
++      "engine_code": "ko",
++      "slot": 5,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "jm_kumo",
++      "state": "active"
++    },
++    {
++      "language": "pt_br",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "pf_dora",
++      "state": "active"
++    },
++    {
++      "language": "pt_br",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "pm_alex",
++      "state": "active"
++    },
++    {
++      "language": "pt_br",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "pm_santa",
++      "state": "active"
++    },
++    {
++      "language": "ru",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "ru-zaakirio-base",
++      "voice_id": "masha",
++      "state": "active"
++    },
++    {
++      "language": "ru",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "ru-zaakirio-base",
++      "voice_id": "sveta",
++      "state": "active"
++    },
++    {
++      "language": "ru",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "ru-zaakirio-dima",
++      "voice_id": "dima",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Alice",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Anton",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Björn",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 4,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Ebba",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 5,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Elsa",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 6,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Greta",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 7,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Lars",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 8,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Nils",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 9,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Oskar",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "ko",
++      "slot": 10,
++      "system": "kokoro",
++      "asset_id": "sv-joakim",
++      "voice_id": "Stina",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_elderly_low",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_elderly_soft",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_mid_clear",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 4,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_mid_warm",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 5,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_teen_bright",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 6,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_young_bright",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 7,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_young_clear",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 8,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "f_young_warm",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 9,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "m_elderly_deep",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 10,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "m_mid_warm",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 11,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "m_teen_bright",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "ko",
++      "slot": 12,
++      "system": "kokoro",
++      "asset_id": "th-wayu",
++      "voice_id": "m_young_clear",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "diem_trinh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "duc_an",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "duc_duy",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 4,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "hung_thinh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 5,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "mai_linh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 6,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "mai_loan",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 7,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "manh_dung",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 8,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "my_yen",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 9,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "ngoc_huyen",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 10,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "phat_tai",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 11,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "storyvert",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 12,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "thanh_dat",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 13,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "thuc_trinh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 14,
++      "system": "kokoro",
++      "asset_id": "vi-anphunl",
++      "voice_id": "tuan_ngoc",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 15,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "diem_trinh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 16,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "duc_an",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 17,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "duc_duy",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 18,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "hung_thinh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 19,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "mai_linh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 20,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "mai_loan",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 21,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "manh_dung",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 22,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "my_yen",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 23,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "ngoc_huyen",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 24,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "phat_tai",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 25,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "storyvert",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 26,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "thanh_dat",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 27,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "thuc_trinh",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 28,
++      "system": "kokoro",
++      "asset_id": "vi-contextbox",
++      "voice_id": "tuan_ngoc",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "ko",
++      "slot": 29,
++      "system": "kokoro",
++      "asset_id": "vi-ngoc-huyen",
++      "voice_id": "ngoc_huyen",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 1,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zf_xiaobei",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 2,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zf_xiaoni",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 3,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zf_xiaoxiao",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 4,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zf_xiaoyi",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 5,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zm_yunjian",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 6,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zm_yunxi",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 7,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zm_yunxia",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 8,
++      "system": "kokoro",
++      "asset_id": "v1.0",
++      "voice_id": "zm_yunyang",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 9,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_001",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 10,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_002",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 11,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_003",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 12,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_004",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 13,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_005",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 14,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_006",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 15,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_007",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 16,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_008",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 17,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_017",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 18,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_018",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 19,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_019",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 20,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_021",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 21,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_022",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 22,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_023",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 23,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_024",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 24,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_026",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 25,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_027",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 26,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_028",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 27,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_032",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 28,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_036",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 29,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_038",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 30,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_039",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 31,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_040",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 32,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_042",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 33,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_043",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 34,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_044",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 35,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_046",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 36,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_047",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 37,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_048",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 38,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_049",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 39,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_051",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 40,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_059",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 41,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_060",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 42,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_067",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 43,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_070",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 44,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_071",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 45,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_072",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 46,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_073",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 47,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_074",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 48,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_075",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 49,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_076",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 50,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_077",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 51,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_078",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 52,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_079",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 53,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_083",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 54,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_084",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 55,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_085",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 56,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_086",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 57,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_087",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 58,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_088",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 59,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_090",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 60,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_092",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 61,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_093",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 62,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_094",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 63,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zf_099",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 64,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_009",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 65,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_010",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 66,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_011",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 67,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_012",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 68,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_013",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 69,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_014",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 70,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_015",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 71,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_016",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 72,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_020",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 73,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_025",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 74,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_029",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 75,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_030",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 76,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_031",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 77,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_033",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 78,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_034",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 79,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_035",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 80,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_037",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 81,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_041",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 82,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_045",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 83,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_050",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 84,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_052",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 85,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_053",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 86,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_054",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 87,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_055",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 88,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_056",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 89,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_057",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 90,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_058",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 91,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_061",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 92,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_062",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 93,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_063",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 94,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_064",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 95,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_065",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 96,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_066",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 97,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_068",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 98,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_069",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 99,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_080",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 100,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_081",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 101,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_082",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 102,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_089",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 103,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_091",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 104,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_095",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 105,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_096",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 106,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_097",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 107,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_098",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "ko",
++      "slot": 108,
++      "system": "kokoro",
++      "asset_id": "v1.1-zh",
++      "voice_id": "zm_100",
++      "state": "active"
++    },
++    {
++      "language": "ar",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ar_JO-kareem-low",
++      "voice_id": "ar_JO-kareem-low",
++      "state": "active"
++    },
++    {
++      "language": "ar",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "ar_JO-kareem-medium",
++      "voice_id": "ar_JO-kareem-medium",
++      "state": "active"
++    },
++    {
++      "language": "bg",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "bg_BG-dimitar-medium",
++      "voice_id": "bg_BG-dimitar-medium",
++      "state": "active"
++    },
++    {
++      "language": "bn",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "bn_BD-google-medium",
++      "voice_id": "bn_BD-google-medium",
++      "state": "active"
++    },
++    {
++      "language": "ca",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ca_ES-upc_ona-medium",
++      "voice_id": "ca_ES-upc_ona-medium",
++      "state": "active"
++    },
++    {
++      "language": "ca",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "ca_ES-upc_ona-x_low",
++      "voice_id": "ca_ES-upc_ona-x_low",
++      "state": "active"
++    },
++    {
++      "language": "ca",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "ca_ES-upc_pau-x_low",
++      "voice_id": "ca_ES-upc_pau-x_low",
++      "state": "active"
++    },
++    {
++      "language": "cs",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "cs_CZ-jirka-low",
++      "voice_id": "cs_CZ-jirka-low",
++      "state": "active"
++    },
++    {
++      "language": "cs",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "cs_CZ-jirka-medium",
++      "voice_id": "cs_CZ-jirka-medium",
++      "state": "active"
++    },
++    {
++      "language": "cs",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "cs_CZ-kasandra-medium",
++      "voice_id": "cs_CZ-kasandra-medium",
++      "state": "active"
++    },
++    {
++      "language": "cy",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "cy_GB-bu_tts-medium",
++      "voice_id": "cy_GB-bu_tts-medium",
++      "state": "active"
++    },
++    {
++      "language": "cy",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "cy_GB-gwryw_gogleddol-medium",
++      "voice_id": "cy_GB-gwryw_gogleddol-medium",
++      "state": "active"
++    },
++    {
++      "language": "da",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "da_DK-talesyntese-medium",
++      "voice_id": "da_DK-talesyntese-medium",
++      "state": "active"
++    },
++    {
++      "language": "el",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "el_GR-joy-medium",
++      "voice_id": "el_GR-joy-medium",
++      "state": "active"
++    },
++    {
++      "language": "el",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "el_GR-rapunzelina-low",
++      "voice_id": "el_GR-rapunzelina-low",
++      "state": "active"
++    },
++    {
++      "language": "el",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "el_GR-rapunzelina-medium",
++      "voice_id": "el_GR-rapunzelina-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "en_GB-alan-low",
++      "voice_id": "en_GB-alan-low",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "en_GB-alan-medium",
++      "voice_id": "en_GB-alan-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "en_GB-alba-medium",
++      "voice_id": "en_GB-alba-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "en_GB-aru-medium",
++      "voice_id": "en_GB-aru-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "en_GB-cori-high",
++      "voice_id": "en_GB-cori-high",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 6,
++      "system": "piper",
++      "asset_id": "en_GB-cori-medium",
++      "voice_id": "en_GB-cori-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 7,
++      "system": "piper",
++      "asset_id": "en_GB-jenny_dioco-medium",
++      "voice_id": "en_GB-jenny_dioco-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 8,
++      "system": "piper",
++      "asset_id": "en_GB-northern_english_male-medium",
++      "voice_id": "en_GB-northern_english_male-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 9,
++      "system": "piper",
++      "asset_id": "en_GB-semaine-medium",
++      "voice_id": "en_GB-semaine-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 10,
++      "system": "piper",
++      "asset_id": "en_GB-southern_english_female-low",
++      "voice_id": "en_GB-southern_english_female-low",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 11,
++      "system": "piper",
++      "asset_id": "en_GB-vctk-medium",
++      "voice_id": "en_GB-vctk-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 12,
++      "system": "piper",
++      "asset_id": "en_US-amy-low",
++      "voice_id": "en_US-amy-low",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 13,
++      "system": "piper",
++      "asset_id": "en_US-amy-medium",
++      "voice_id": "en_US-amy-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 14,
++      "system": "piper",
++      "asset_id": "en_US-arctic-medium",
++      "voice_id": "en_US-arctic-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 15,
++      "system": "piper",
++      "asset_id": "en_US-bryce-medium",
++      "voice_id": "en_US-bryce-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 16,
++      "system": "piper",
++      "asset_id": "en_US-danny-low",
++      "voice_id": "en_US-danny-low",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 17,
++      "system": "piper",
++      "asset_id": "en_US-hfc_female-medium",
++      "voice_id": "en_US-hfc_female-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 18,
++      "system": "piper",
++      "asset_id": "en_US-hfc_male-medium",
++      "voice_id": "en_US-hfc_male-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 19,
++      "system": "piper",
++      "asset_id": "en_US-joe-medium",
++      "voice_id": "en_US-joe-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 20,
++      "system": "piper",
++      "asset_id": "en_US-john-medium",
++      "voice_id": "en_US-john-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 21,
++      "system": "piper",
++      "asset_id": "en_US-kathleen-low",
++      "voice_id": "en_US-kathleen-low",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 22,
++      "system": "piper",
++      "asset_id": "en_US-kristin-medium",
++      "voice_id": "en_US-kristin-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 23,
++      "system": "piper",
++      "asset_id": "en_US-kusal-medium",
++      "voice_id": "en_US-kusal-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 24,
++      "system": "piper",
++      "asset_id": "en_US-l2arctic-medium",
++      "voice_id": "en_US-l2arctic-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 25,
++      "system": "piper",
++      "asset_id": "en_US-lessac-high",
++      "voice_id": "en_US-lessac-high",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 26,
++      "system": "piper",
++      "asset_id": "en_US-lessac-low",
++      "voice_id": "en_US-lessac-low",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 27,
++      "system": "piper",
++      "asset_id": "en_US-lessac-medium",
++      "voice_id": "en_US-lessac-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 28,
++      "system": "piper",
++      "asset_id": "en_US-libritts-high",
++      "voice_id": "en_US-libritts-high",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 29,
++      "system": "piper",
++      "asset_id": "en_US-libritts_r-medium",
++      "voice_id": "en_US-libritts_r-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 30,
++      "system": "piper",
++      "asset_id": "en_US-ljspeech-high",
++      "voice_id": "en_US-ljspeech-high",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 31,
++      "system": "piper",
++      "asset_id": "en_US-ljspeech-medium",
++      "voice_id": "en_US-ljspeech-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 32,
++      "system": "piper",
++      "asset_id": "en_US-mike-medium",
++      "voice_id": "en_US-mike-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 33,
++      "system": "piper",
++      "asset_id": "en_US-norman-medium",
++      "voice_id": "en_US-norman-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 34,
++      "system": "piper",
++      "asset_id": "en_US-reza_ibrahim-medium",
++      "voice_id": "en_US-reza_ibrahim-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 35,
++      "system": "piper",
++      "asset_id": "en_US-ryan-high",
++      "voice_id": "en_US-ryan-high",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 36,
++      "system": "piper",
++      "asset_id": "en_US-ryan-low",
++      "voice_id": "en_US-ryan-low",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 37,
++      "system": "piper",
++      "asset_id": "en_US-ryan-medium",
++      "voice_id": "en_US-ryan-medium",
++      "state": "active"
++    },
++    {
++      "language": "en",
++      "engine_code": "pi",
++      "slot": 38,
++      "system": "piper",
++      "asset_id": "en_US-sam-medium",
++      "voice_id": "en_US-sam-medium",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "es_AR-daniela-high",
++      "voice_id": "es_AR-daniela-high",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "es_ES-carlfm-x_low",
++      "voice_id": "es_ES-carlfm-x_low",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "es_ES-davefx-medium",
++      "voice_id": "es_ES-davefx-medium",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "es_ES-mls_10246-low",
++      "voice_id": "es_ES-mls_10246-low",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "es_ES-mls_9972-low",
++      "voice_id": "es_ES-mls_9972-low",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 6,
++      "system": "piper",
++      "asset_id": "es_ES-sharvard-medium",
++      "voice_id": "es_ES-sharvard-medium",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 7,
++      "system": "piper",
++      "asset_id": "es_MX-ald-medium",
++      "voice_id": "es_MX-ald-medium",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 8,
++      "system": "piper",
++      "asset_id": "es_MX-ald-x_low",
++      "voice_id": "es_MX-ald-x_low",
++      "state": "active"
++    },
++    {
++      "language": "es",
++      "engine_code": "pi",
++      "slot": 9,
++      "system": "piper",
++      "asset_id": "es_MX-claude-high",
++      "voice_id": "es_MX-claude-high",
++      "state": "active"
++    },
++    {
++      "language": "et",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "et_EE-news-medium",
++      "voice_id": "et_EE-news-medium",
++      "state": "active"
++    },
++    {
++      "language": "eu",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "eu_ES-antton-medium",
++      "voice_id": "eu_ES-antton-medium",
++      "state": "active"
++    },
++    {
++      "language": "eu",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "eu_ES-maider-medium",
++      "voice_id": "eu_ES-maider-medium",
++      "state": "active"
++    },
++    {
++      "language": "fa",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "fa_IR-amir-medium",
++      "voice_id": "fa_IR-amir-medium",
++      "state": "active"
++    },
++    {
++      "language": "fa",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "fa_IR-ganji-medium",
++      "voice_id": "fa_IR-ganji-medium",
++      "state": "active"
++    },
++    {
++      "language": "fa",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "fa_IR-ganji_adabi-medium",
++      "voice_id": "fa_IR-ganji_adabi-medium",
++      "state": "active"
++    },
++    {
++      "language": "fa",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "fa_IR-gyro-medium",
++      "voice_id": "fa_IR-gyro-medium",
++      "state": "active"
++    },
++    {
++      "language": "fa",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "fa_IR-reza_ibrahim-medium",
++      "voice_id": "fa_IR-reza_ibrahim-medium",
++      "state": "active"
++    },
++    {
++      "language": "fi",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "fi_FI-harri-low",
++      "voice_id": "fi_FI-harri-low",
++      "state": "active"
++    },
++    {
++      "language": "fi",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "fi_FI-harri-medium",
++      "voice_id": "fi_FI-harri-medium",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "fr_FR-gilles-low",
++      "voice_id": "fr_FR-gilles-low",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "fr_FR-mls-medium",
++      "voice_id": "fr_FR-mls-medium",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "fr_FR-mls_1840-low",
++      "voice_id": "fr_FR-mls_1840-low",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "fr_FR-siwis-low",
++      "voice_id": "fr_FR-siwis-low",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "fr_FR-siwis-medium",
++      "voice_id": "fr_FR-siwis-medium",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "pi",
++      "slot": 6,
++      "system": "piper",
++      "asset_id": "fr_FR-tom-medium",
++      "voice_id": "fr_FR-tom-medium",
++      "state": "active"
++    },
++    {
++      "language": "fr",
++      "engine_code": "pi",
++      "slot": 7,
++      "system": "piper",
++      "asset_id": "fr_FR-upmc-medium",
++      "voice_id": "fr_FR-upmc-medium",
++      "state": "active"
++    },
++    {
++      "language": "he",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "he_IL-saspeech-medium",
++      "voice_id": "he_IL-saspeech-medium",
++      "state": "active"
++    },
++    {
++      "language": "hi",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "hi_IN-pratham-medium",
++      "voice_id": "hi_IN-pratham-medium",
++      "state": "active"
++    },
++    {
++      "language": "hi",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "hi_IN-priyamvada-medium",
++      "voice_id": "hi_IN-priyamvada-medium",
++      "state": "active"
++    },
++    {
++      "language": "hi",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "hi_IN-rohan-medium",
++      "voice_id": "hi_IN-rohan-medium",
++      "state": "active"
++    },
++    {
++      "language": "hu",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "hu_HU-anna-medium",
++      "voice_id": "hu_HU-anna-medium",
++      "state": "active"
++    },
++    {
++      "language": "hu",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "hu_HU-berta-medium",
++      "voice_id": "hu_HU-berta-medium",
++      "state": "active"
++    },
++    {
++      "language": "hu",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "hu_HU-imre-medium",
++      "voice_id": "hu_HU-imre-medium",
++      "state": "active"
++    },
++    {
++      "language": "hy",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "hy_AM-gor-medium",
++      "voice_id": "hy_AM-gor-medium",
++      "state": "active"
++    },
++    {
++      "language": "id",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "id_ID-news_tts-medium",
++      "voice_id": "id_ID-news_tts-medium",
++      "state": "active"
++    },
++    {
++      "language": "is",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "is_IS-bui-medium",
++      "voice_id": "is_IS-bui-medium",
++      "state": "active"
++    },
++    {
++      "language": "is",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "is_IS-salka-medium",
++      "voice_id": "is_IS-salka-medium",
++      "state": "active"
++    },
++    {
++      "language": "is",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "is_IS-steinn-medium",
++      "voice_id": "is_IS-steinn-medium",
++      "state": "active"
++    },
++    {
++      "language": "is",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "is_IS-ugla-medium",
++      "voice_id": "is_IS-ugla-medium",
++      "state": "active"
++    },
++    {
++      "language": "it",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "it_IT-paola-medium",
++      "voice_id": "it_IT-paola-medium",
++      "state": "active"
++    },
++    {
++      "language": "it",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "it_IT-riccardo-x_low",
++      "voice_id": "it_IT-riccardo-x_low",
++      "state": "active"
++    },
++    {
++      "language": "it",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "it_IT-serena-high",
++      "voice_id": "it_IT-serena-high",
++      "state": "active"
++    },
++    {
++      "language": "it",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "it_IT-serena-medium",
++      "voice_id": "it_IT-serena-medium",
++      "state": "active"
++    },
++    {
++      "language": "ja",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ja_JP-hi_fi_captain-medium",
++      "voice_id": "ja_JP-hi_fi_captain-medium",
++      "state": "active"
++    },
++    {
++      "language": "ka",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ka_GE-natia-medium",
++      "voice_id": "ka_GE-natia-medium",
++      "state": "active"
++    },
++    {
++      "language": "kk",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "kk_KZ-iseke-x_low",
++      "voice_id": "kk_KZ-iseke-x_low",
++      "state": "active"
++    },
++    {
++      "language": "kk",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "kk_KZ-issai-high",
++      "voice_id": "kk_KZ-issai-high",
++      "state": "active"
++    },
++    {
++      "language": "kk",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "kk_KZ-raya-x_low",
++      "voice_id": "kk_KZ-raya-x_low",
++      "state": "active"
++    },
++    {
++      "language": "ko",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ko_KR-kss-medium",
++      "voice_id": "ko_KR-kss-medium",
++      "state": "active"
++    },
++    {
++      "language": "ku",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ku_TR-berfin_renas-medium",
++      "voice_id": "ku_TR-berfin_renas-medium",
++      "state": "active"
++    },
++    {
++      "language": "lb",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "lb_LU-marylux-medium",
++      "voice_id": "lb_LU-marylux-medium",
++      "state": "active"
++    },
++    {
++      "language": "lt",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "lt_LT-reginute1-medium",
++      "voice_id": "lt_LT-reginute1-medium",
++      "state": "active"
++    },
++    {
++      "language": "lv",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "lv_LV-aivars-medium",
++      "voice_id": "lv_LV-aivars-medium",
++      "state": "active"
++    },
++    {
++      "language": "ml",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ml_IN-arjun-medium",
++      "voice_id": "ml_IN-arjun-medium",
++      "state": "active"
++    },
++    {
++      "language": "ml",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "ml_IN-meera-medium",
++      "voice_id": "ml_IN-meera-medium",
++      "state": "active"
++    },
++    {
++      "language": "mr",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "mr_IN-google-medium",
++      "voice_id": "mr_IN-google-medium",
++      "state": "active"
++    },
++    {
++      "language": "ne",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ne_NP-chitwan-medium",
++      "voice_id": "ne_NP-chitwan-medium",
++      "state": "active"
++    },
++    {
++      "language": "ne",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "ne_NP-google-medium",
++      "voice_id": "ne_NP-google-medium",
++      "state": "active"
++    },
++    {
++      "language": "ne",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "ne_NP-google-x_low",
++      "voice_id": "ne_NP-google-x_low",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "nl_BE-nathalie-medium",
++      "voice_id": "nl_BE-nathalie-medium",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "nl_BE-nathalie-x_low",
++      "voice_id": "nl_BE-nathalie-x_low",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "nl_BE-rdh-medium",
++      "voice_id": "nl_BE-rdh-medium",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "nl_BE-rdh-x_low",
++      "voice_id": "nl_BE-rdh-x_low",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "nl_NL-alex-medium",
++      "voice_id": "nl_NL-alex-medium",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 6,
++      "system": "piper",
++      "asset_id": "nl_NL-mls-medium",
++      "voice_id": "nl_NL-mls-medium",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 7,
++      "system": "piper",
++      "asset_id": "nl_NL-mls_5809-low",
++      "voice_id": "nl_NL-mls_5809-low",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 8,
++      "system": "piper",
++      "asset_id": "nl_NL-mls_7432-low",
++      "voice_id": "nl_NL-mls_7432-low",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 9,
++      "system": "piper",
++      "asset_id": "nl_NL-pim-medium",
++      "voice_id": "nl_NL-pim-medium",
++      "state": "active"
++    },
++    {
++      "language": "nl",
++      "engine_code": "pi",
++      "slot": 10,
++      "system": "piper",
++      "asset_id": "nl_NL-ronnie-medium",
++      "voice_id": "nl_NL-ronnie-medium",
++      "state": "active"
++    },
++    {
++      "language": "no",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "no_NO-nvcc-medium",
++      "voice_id": "no_NO-nvcc-medium",
++      "state": "active"
++    },
++    {
++      "language": "no",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "no_NO-talesyntese-medium",
++      "voice_id": "no_NO-talesyntese-medium",
++      "state": "active"
++    },
++    {
++      "language": "pl",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "pl_PL-bass-high",
++      "voice_id": "pl_PL-bass-high",
++      "state": "active"
++    },
++    {
++      "language": "pl",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "pl_PL-darkman-medium",
++      "voice_id": "pl_PL-darkman-medium",
++      "state": "active"
++    },
++    {
++      "language": "pl",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "pl_PL-gosia-medium",
++      "voice_id": "pl_PL-gosia-medium",
++      "state": "active"
++    },
++    {
++      "language": "pl",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "pl_PL-mc_speech-medium",
++      "voice_id": "pl_PL-mc_speech-medium",
++      "state": "active"
++    },
++    {
++      "language": "pl",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "pl_PL-mls_6892-low",
++      "voice_id": "pl_PL-mls_6892-low",
++      "state": "active"
++    },
++    {
++      "language": "pt",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "pt_BR-cadu-medium",
++      "voice_id": "pt_BR-cadu-medium",
++      "state": "active"
++    },
++    {
++      "language": "pt",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "pt_BR-edresson-low",
++      "voice_id": "pt_BR-edresson-low",
++      "state": "active"
++    },
++    {
++      "language": "pt",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "pt_BR-faber-medium",
++      "voice_id": "pt_BR-faber-medium",
++      "state": "active"
++    },
++    {
++      "language": "pt",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "pt_BR-jeff-medium",
++      "voice_id": "pt_BR-jeff-medium",
++      "state": "active"
++    },
++    {
++      "language": "pt",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "pt_PT-tugão-medium",
++      "voice_id": "pt_PT-tugão-medium",
++      "state": "active"
++    },
++    {
++      "language": "ro",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ro_RO-mihai-medium",
++      "voice_id": "ro_RO-mihai-medium",
++      "state": "active"
++    },
++    {
++      "language": "ru",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ru_RU-denis-medium",
++      "voice_id": "ru_RU-denis-medium",
++      "state": "active"
++    },
++    {
++      "language": "ru",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "ru_RU-dmitri-medium",
++      "voice_id": "ru_RU-dmitri-medium",
++      "state": "active"
++    },
++    {
++      "language": "ru",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "ru_RU-irina-medium",
++      "voice_id": "ru_RU-irina-medium",
++      "state": "active"
++    },
++    {
++      "language": "ru",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "ru_RU-ruslan-medium",
++      "voice_id": "ru_RU-ruslan-medium",
++      "state": "active"
++    },
++    {
++      "language": "sk",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "sk_SK-lili-medium",
++      "voice_id": "sk_SK-lili-medium",
++      "state": "active"
++    },
++    {
++      "language": "sl",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "sl_SI-artur-medium",
++      "voice_id": "sl_SI-artur-medium",
++      "state": "active"
++    },
++    {
++      "language": "sq",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "sq_AL-edon-medium",
++      "voice_id": "sq_AL-edon-medium",
++      "state": "active"
++    },
++    {
++      "language": "sr",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "sr_RS-serbski_institut-medium",
++      "voice_id": "sr_RS-serbski_institut-medium",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "sv_SE-alma-medium",
++      "voice_id": "sv_SE-alma-medium",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "sv_SE-lisa-medium",
++      "voice_id": "sv_SE-lisa-medium",
++      "state": "active"
++    },
++    {
++      "language": "sv",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "sv_SE-nst-medium",
++      "voice_id": "sv_SE-nst-medium",
++      "state": "active"
++    },
++    {
++      "language": "sw",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "sw_CD-lanfrica-medium",
++      "voice_id": "sw_CD-lanfrica-medium",
++      "state": "active"
++    },
++    {
++      "language": "te",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "te_IN-maya-medium",
++      "voice_id": "te_IN-maya-medium",
++      "state": "active"
++    },
++    {
++      "language": "te",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "te_IN-padmavathi-medium",
++      "voice_id": "te_IN-padmavathi-medium",
++      "state": "active"
++    },
++    {
++      "language": "te",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "te_IN-venkatesh-medium",
++      "voice_id": "te_IN-venkatesh-medium",
++      "state": "active"
++    },
++    {
++      "language": "th",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "th_TH-tsync2-medium",
++      "voice_id": "th_TH-tsync2-medium",
++      "state": "active"
++    },
++    {
++      "language": "tr",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "tr_TR-dfki-medium",
++      "voice_id": "tr_TR-dfki-medium",
++      "state": "active"
++    },
++    {
++      "language": "uk",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "uk_UA-lada-x_low",
++      "voice_id": "uk_UA-lada-x_low",
++      "state": "active"
++    },
++    {
++      "language": "uk",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "uk_UA-mykyta-high",
++      "voice_id": "uk_UA-mykyta-high",
++      "state": "active"
++    },
++    {
++      "language": "uk",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "uk_UA-oleksa-high",
++      "voice_id": "uk_UA-oleksa-high",
++      "state": "active"
++    },
++    {
++      "language": "uk",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "uk_UA-tetiana-high",
++      "voice_id": "uk_UA-tetiana-high",
++      "state": "active"
++    },
++    {
++      "language": "uk",
++      "engine_code": "pi",
++      "slot": 5,
++      "system": "piper",
++      "asset_id": "uk_UA-ukrainian_tts-medium",
++      "voice_id": "uk_UA-ukrainian_tts-medium",
++      "state": "active"
++    },
++    {
++      "language": "ur",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "ur_PK-aegis_female-medium",
++      "voice_id": "ur_PK-aegis_female-medium",
++      "state": "active"
++    },
++    {
++      "language": "ur",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "ur_PK-fasih-medium",
++      "voice_id": "ur_PK-fasih-medium",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "vi_VN-25hours_single-low",
++      "voice_id": "vi_VN-25hours_single-low",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "vi_VN-vais1000-medium",
++      "voice_id": "vi_VN-vais1000-medium",
++      "state": "active"
++    },
++    {
++      "language": "vi",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "vi_VN-vivos-x_low",
++      "voice_id": "vi_VN-vivos-x_low",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "pi",
++      "slot": 1,
++      "system": "piper",
++      "asset_id": "zh_CN-chaowen-medium",
++      "voice_id": "zh_CN-chaowen-medium",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "pi",
++      "slot": 2,
++      "system": "piper",
++      "asset_id": "zh_CN-huayan-medium",
++      "voice_id": "zh_CN-huayan-medium",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "pi",
++      "slot": 3,
++      "system": "piper",
++      "asset_id": "zh_CN-huayan-x_low",
++      "voice_id": "zh_CN-huayan-x_low",
++      "state": "active"
++    },
++    {
++      "language": "zh",
++      "engine_code": "pi",
++      "slot": 4,
++      "system": "piper",
++      "asset_id": "zh_CN-xiao_ya-medium",
++      "voice_id": "zh_CN-xiao_ya-medium",
++      "state": "active"
+     }
+   ]
+ }
+diff --git a/onnxvoice/errors.py b/onnxvoice/errors.py
+index a699d41..8b6a1bd 100644
+--- a/onnxvoice/errors.py
++++ b/onnxvoice/errors.py
+@@ -34,6 +34,26 @@ class IntegrityError(OnnxVoiceError):
+     """Downloaded or cached content failed integrity validation."""
+
+
++class AssetDownloadError(OnnxVoiceError):
++    """A remote asset could not be downloaded."""
++
++
++class PredefinedVoiceError(OnnxVoiceError):
++    """A predefined voice state could not be resolved or loaded."""
++
++
++class PredefinedVoiceAccessError(PredefinedVoiceError):
++    """A gated predefined voice asset requires authorization."""
++
++
++class PredefinedVoiceNotFoundError(PredefinedVoiceError):
++    """A pinned predefined voice asset does not exist."""
++
++
++class PredefinedVoiceIntegrityError(PredefinedVoiceError):
++    """A predefined voice asset is corrupt or incompatible with its bundle."""
++
++
+ class ManifestError(OnnxVoiceError):
+     """An installation manifest is malformed or unsupported."""
+
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 9e134fd..5bfe4d9 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -228,12 +228,15 @@ class OnnxVoice:
+                 raise ValueError("Use provider or providers, not both")
+             providers = provider
+         adapter = get_adapter(installation.system)
+-        return adapter(
+-            installation,
+-            providers=providers,
+-            provider_options=provider_options,
+-            session_options=session_options,
+-        )
++        adapter_kwargs: dict[str, Any] = {
++            "providers": providers,
++            "provider_options": provider_options,
++            "session_options": session_options,
++        }
++        if installation.system == "pocket":
++            adapter_kwargs["voice_cache_dir"] = self.store.root / "pocket-voice-states"
++            adapter_kwargs["offline"] = self.store.offline
++        return adapter(installation, **adapter_kwargs)
+
+     @staticmethod
+     def open_local(
+@@ -252,6 +255,8 @@ class OnnxVoice:
+         provider: str | None = None,
+         provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
+         session_options: Any | None = None,
++        voice_cache_dir: str | Path | None = None,
++        offline: bool = False,
+     ):
+         """Open explicit local files without registering or copying them."""
+         if provider is not None:
+@@ -323,12 +328,15 @@ class OnnxVoice:
+             metadata=merged_metadata,
+         )
+         adapter = get_adapter(system)
+-        return adapter(
+-            installation,
+-            providers=providers,
+-            provider_options=provider_options,
+-            session_options=session_options,
+-        )
++        adapter_kwargs: dict[str, Any] = {
++            "providers": providers,
++            "provider_options": provider_options,
++            "session_options": session_options,
++        }
++        if system == "pocket":
++            adapter_kwargs["voice_cache_dir"] = voice_cache_dir
++            adapter_kwargs["offline"] = offline
++        return adapter(installation, **adapter_kwargs)
+
+     def resolve(
+         self,
+diff --git a/onnxvoice/systems/pocket.py b/onnxvoice/systems/pocket.py
+index b3bfa01..3dcf9d8 100644
+--- a/onnxvoice/systems/pocket.py
++++ b/onnxvoice/systems/pocket.py
+@@ -2,16 +2,33 @@
+
+ from __future__ import annotations
+
++import hashlib
+ import json
++import os
++import shutil
++import tempfile
+ from collections.abc import Mapping, Sequence
+ from dataclasses import dataclass
+-from typing import Any
++from pathlib import Path
++from typing import Any, NoReturn
+
+ import numpy as np
++from platformdirs import user_cache_path
+
+-from ..errors import RuntimeContractError
++from ..checksums import digest_file, verify_file
++from ..errors import (
++    AssetDownloadError,
++    IntegrityError,
++    OfflineError,
++    OptionalDependencyError,
++    PredefinedVoiceAccessError,
++    PredefinedVoiceIntegrityError,
++    PredefinedVoiceNotFoundError,
++    RuntimeContractError,
++)
+ from ..runtime import OnnxSession
+-from ..types import InferenceResult, Installation
++from ..store import FileLock
++from ..types import InferenceResult, Installation, validate_safe_component
+ from .base import SystemAdapter
+
+ POCKET_REQUIRED_METADATA_FIELDS = frozenset(
+@@ -41,6 +58,46 @@ _SUPPORTED_DTYPES = {
+     "uint8",
+ }
+
++PREDEFINED_VOICE_REPOSITORY = "kyutai/pocket-tts"
++PREDEFINED_VOICE_REVISION = "d18466fc6d3ad070afee1bde2f0db8992007c48f"
++
++
++def _download_predefined_voice_file(
++    repo_id: str,
++    filename: str,
++    revision: str,
++    *,
++    cache_dir: Path,
++    local_files_only: bool,
++) -> Path:
++    try:
++        from huggingface_hub import hf_hub_download
++    except ImportError as exc:
++        raise OptionalDependencyError(
++            "Predefined Pocket voices require huggingface_hub and safetensors. "
++            "Install onnxvoice[pocket]."
++        ) from exc
++    return Path(
++        hf_hub_download(
++            repo_id=repo_id,
++            filename=filename,
++            revision=revision,
++            cache_dir=str(cache_dir),
++            local_files_only=local_files_only,
++        )
++    )
++
++
++def _load_safetensors(path: Path) -> Mapping[str, np.ndarray]:
++    try:
++        from safetensors.numpy import load_file
++    except ImportError as exc:
++        raise OptionalDependencyError(
++            "Predefined Pocket voices require huggingface_hub and safetensors. "
++            "Install onnxvoice[pocket]."
++        ) from exc
++    return load_file(str(path))
++
+
+ @dataclass(frozen=True, slots=True)
+ class StateSpec:
+@@ -177,7 +234,14 @@ class PocketAdapter(SystemAdapter):
+     system = "pocket"
+     DEFAULT_MAX_FRAMES = 200
+
+-    def __init__(self, installation: Installation, **kwargs: Any) -> None:
++    def __init__(
++        self,
++        installation: Installation,
++        *,
++        voice_cache_dir: str | Path | None = None,
++        offline: bool = False,
++        **kwargs: Any,
++    ) -> None:
+         super().__init__(installation, **kwargs)
+         self._sessions: dict[str, OnnxSession] = {}
+         self._bundle_metadata: dict[str, Any] | None = None
+@@ -186,6 +250,15 @@ class PocketAdapter(SystemAdapter):
+         self._mimi_specs: tuple[StateSpec, ...] = ()
+         self._validated_contracts: set[str] = set()
+         self._validated = False
++        self._predefined_voice_states: dict[
++            tuple[str, str, str, str, str, str], PocketVoiceState
++        ] = {}
++        self._voice_cache_dir = Path(
++            voice_cache_dir
++            if voice_cache_dir is not None
++            else Path(user_cache_path("onnxvoice")) / "pocket-voice-states"
++        )
++        self._offline = offline
+
+     def _validate_bundle_metadata(self) -> dict[str, Any]:
+         if self._bundle_metadata is not None:
+@@ -243,6 +316,42 @@ class PocketAdapter(SystemAdapter):
+         self._validated = True
+         return metadata
+
++    @staticmethod
++    def _predefined_voice_names(metadata: Mapping[str, Any]) -> tuple[str, ...]:
++        def parse(raw: Any, field_name: str) -> tuple[str, ...] | None:
++            if raw is None:
++                return None
++            if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, Mapping)):
++                raise RuntimeContractError(f"Pocket {field_name} must be a sequence")
++            names: list[str] = []
++            for name in raw:
++                if not isinstance(name, str):
++                    raise RuntimeContractError(f"Pocket {field_name} must contain strings")
++                try:
++                    validate_safe_component(name, field_name="predefined voice name")
++                except ValueError as exc:
++                    raise RuntimeContractError(str(exc)) from exc
++                if name in names:
++                    raise RuntimeContractError(f"Pocket {field_name} contains duplicate {name!r}")
++                names.append(name)
++            return tuple(names)
++
++        bundle_names = parse(metadata.get("predefined_voices"), "predefined_voices")
++        catalog_names = parse(metadata.get("predefined_voice_names"), "predefined_voice_names")
++        if (
++            bundle_names is not None
++            and catalog_names is not None
++            and set(bundle_names) != set(catalog_names)
++        ):
++            raise RuntimeContractError(
++                "Pocket bundle metadata and catalog disagree about predefined voice names"
++            )
++        return bundle_names if bundle_names is not None else catalog_names or ()
++
++    @property
++    def predefined_voices(self) -> tuple[str, ...]:
++        return self._predefined_voice_names(self._ensure_validated())
++
+     @staticmethod
+     def _names(session: Any, attribute: str) -> tuple[str, ...]:
+         value = getattr(session, attribute, ())
+@@ -404,6 +513,211 @@ class PocketAdapter(SystemAdapter):
+             )
+         return embeddings
+
++    def _cached_predefined_voice_asset(
++        self,
++        name: str,
++        bundle_id: str,
++        asset_path: str,
++    ) -> tuple[Path, str]:
++        cache_key = {
++            "system": "pocket",
++            "asset_kind": "predefined_voice_state",
++            "model_repo": PREDEFINED_VOICE_REPOSITORY,
++            "model_revision": PREDEFINED_VOICE_REVISION,
++            "bundle_id": bundle_id,
++            "voice_name": name,
++        }
++        cache_digest = hashlib.sha256(
++            json.dumps(cache_key, sort_keys=True, separators=(",", ":")).encode("utf-8")
++        ).hexdigest()
++        cache_dir = self._voice_cache_dir / cache_digest[:2] / cache_digest
++        state_path = cache_dir / f"{name}.safetensors"
++        metadata_path = cache_dir / f"{name}.json"
++        lock_path = self._voice_cache_dir / "locks" / f"{cache_digest}.lock"
++        with FileLock(lock_path):
++            if state_path.exists() or metadata_path.exists():
++                if not state_path.is_file() or not metadata_path.is_file():
++                    raise PredefinedVoiceIntegrityError(
++                        f"Incomplete cached state for predefined Pocket voice {name!r}"
++                    )
++                try:
++                    cache_record = json.loads(metadata_path.read_text(encoding="utf-8"))
++                    if not isinstance(cache_record, dict):
++                        raise ValueError("invalid cached metadata")
++                    if cache_record.get("key") != cache_key:
++                        raise ValueError("cache key mismatch")
++                    size = cache_record["size"]
++                    sha256 = cache_record["sha256"]
++                    if type(size) is not int or size <= 0 or not isinstance(sha256, str):
++                        raise ValueError("invalid cached integrity metadata")
++                    verify_file(state_path, expected_size=size, sha256=sha256)
++                except (OSError, KeyError, TypeError, ValueError, IntegrityError) as exc:
++                    raise PredefinedVoiceIntegrityError(
++                        f"Cached predefined Pocket voice {name!r} failed integrity validation"
++                    ) from exc
++                return state_path, sha256
++
++            try:
++                downloaded = _download_predefined_voice_file(
++                    PREDEFINED_VOICE_REPOSITORY,
++                    asset_path,
++                    PREDEFINED_VOICE_REVISION,
++                    cache_dir=self._voice_cache_dir / "huggingface",
++                    local_files_only=self._offline,
++                )
++            except OptionalDependencyError:
++                raise
++            except Exception as exc:
++                self._raise_predefined_voice_download_error(exc, name=name, bundle_id=bundle_id)
++            if not downloaded.is_file():
++                raise PredefinedVoiceIntegrityError(
++                    f"Downloaded state for predefined Pocket voice {name!r} is missing"
++                )
++            cache_dir.mkdir(parents=True, exist_ok=True)
++            fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
++            os.close(fd)
++            temporary_state = Path(temporary_name)
++            try:
++                shutil.copyfile(downloaded, temporary_state)
++                size = temporary_state.stat().st_size
++                if size <= 0:
++                    raise PredefinedVoiceIntegrityError(
++                        f"Downloaded state for predefined Pocket voice {name!r} is empty"
++                    )
++                sha256 = digest_file(temporary_state)
++                os.replace(temporary_state, state_path)
++                record = {"key": cache_key, "size": size, "sha256": sha256}
++                fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
++                os.close(fd)
++                temporary_metadata = Path(temporary_name)
++                try:
++                    temporary_metadata.write_text(
++                        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
++                    )
++                    os.replace(temporary_metadata, metadata_path)
++                finally:
++                    temporary_metadata.unlink(missing_ok=True)
++            finally:
++                temporary_state.unlink(missing_ok=True)
++            return state_path, sha256
++
++    @staticmethod
++    def _raise_predefined_voice_download_error(
++        exc: Exception, *, name: str, bundle_id: str
++    ) -> NoReturn:
++        error_name = type(exc).__name__
++        status = getattr(getattr(exc, "response", None), "status_code", None)
++        if error_name in {"LocalEntryNotFoundError", "OfflineModeIsEnabled"}:
++            raise OfflineError(
++                f"Predefined Pocket voice {name!r} is not available in the local cache "
++                "and offline mode is enabled."
++            ) from exc
++        if error_name == "GatedRepoError" or status in {401, 403}:
++            raise PredefinedVoiceAccessError(
++                f"Predefined Pocket voice {name!r} requires access to "
++                f"{PREDEFINED_VOICE_REPOSITORY}. Accept the model terms and authenticate "
++                "with Hugging Face, then retry."
++            ) from exc
++        if (
++            error_name in {"EntryNotFoundError", "RevisionNotFoundError", "RepositoryNotFoundError"}
++            or status == 404
++        ):
++            raise PredefinedVoiceNotFoundError(
++                f"Predefined Pocket voice {name!r} is not present for bundle "
++                f"{bundle_id!r} at the pinned upstream revision."
++            ) from exc
++        raise AssetDownloadError(
++            f"Could not download predefined Pocket voice {name!r} for bundle {bundle_id!r}."
++        ) from exc
++
++    @staticmethod
++    def _predefined_voice_embeddings(
++        state_path: Path, *, expected_dimension: int, name: str
++    ) -> np.ndarray:
++        try:
++            tensors = _load_safetensors(state_path)
++        except OptionalDependencyError:
++            raise
++        except Exception as exc:
++            raise PredefinedVoiceIntegrityError(
++                f"Could not load predefined Pocket voice state {name!r}"
++            ) from exc
++        if not isinstance(tensors, Mapping) or len(tensors) != 1:
++            raise PredefinedVoiceIntegrityError(
++                f"Predefined Pocket voice state {name!r} must contain exactly one embedding tensor"
++            )
++        embeddings = np.asarray(next(iter(tensors.values())))
++        if not np.issubdtype(embeddings.dtype, np.floating):
++            raise PredefinedVoiceIntegrityError(
++                f"Predefined Pocket voice state {name!r} must use a floating-point dtype"
++            )
++        if embeddings.ndim == 2:
++            embeddings = embeddings[None, ...]
++        if (
++            embeddings.ndim != 3
++            or embeddings.shape[0] != 1
++            or embeddings.shape[1] == 0
++            or embeddings.shape[2] != expected_dimension
++        ):
++            raise PredefinedVoiceIntegrityError(
++                f"Predefined Pocket voice state {name!r} has shape {embeddings.shape}; "
++                f"expected [1, sequence, {expected_dimension}]"
++            )
++        if not np.isfinite(embeddings).all():
++            raise PredefinedVoiceIntegrityError(
++                f"Predefined Pocket voice state {name!r} contains non-finite values"
++            )
++        return np.array(embeddings, dtype=np.float32, copy=True)
++
++    def prepare_predefined_voice(self, name: str) -> PocketVoiceState:
++        metadata = self._ensure_validated()
++        available = self._predefined_voice_names(metadata)
++        if not isinstance(name, str) or name not in available:
++            names = ", ".join(available) or "none"
++            bundle_name = metadata.get("bundle_name") or self.installation.id
++            raise RuntimeContractError(
++                f"Unknown predefined Pocket voice {name!r} for bundle {bundle_name!r}. "
++                f"Available voices: {names}."
++            )
++        bundle_name = str(metadata.get("bundle_name") or self.installation.id)
++        try:
++            validate_safe_component(bundle_name, field_name="bundle id")
++        except ValueError as exc:
++            raise RuntimeContractError(str(exc)) from exc
++        cache_key = (
++            "pocket",
++            "predefined_voice_state",
++            PREDEFINED_VOICE_REPOSITORY,
++            PREDEFINED_VOICE_REVISION,
++            bundle_name,
++            name,
++        )
++        cached = self._predefined_voice_states.get(cache_key)
++        if cached is not None:
++            return cached
++        asset_path = f"languages/{bundle_name}/embeddings/{name}.safetensors"
++        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, asset_path)
++        expected_dimension = int(metadata["conditioning_dim"])
++        embeddings = self._predefined_voice_embeddings(
++            state_path, expected_dimension=expected_dimension, name=name
++        )
++        sample_rate = int(metadata["sample_rate"])
++        voice_state = PocketVoiceState(
++            embeddings=embeddings,
++            sample_rate=sample_rate,
++            metadata={
++                "sample_rate": sample_rate,
++                "bundle_id": bundle_name,
++                "voice_name": name,
++                "model_repo": PREDEFINED_VOICE_REPOSITORY,
++                "model_revision": PREDEFINED_VOICE_REVISION,
++                "asset_path": asset_path,
++                "sha256": sha256,
++            },
++        )
++        self._predefined_voice_states[cache_key] = voice_state
++        return voice_state
++
+     def prepare_voice(self, audio: np.ndarray, *, sample_rate: int) -> PocketVoiceState:
+         metadata = self._ensure_validated()
+         expected_rate = metadata.get("sample_rate")
+@@ -723,3 +1037,4 @@ class PocketAdapter(SystemAdapter):
+         self._mimi_specs = ()
+         self._validated_contracts.clear()
+         self._validated = False
++        self._predefined_voice_states.clear()
+diff --git a/pyproject.toml b/pyproject.toml
+index cc3c76e..a71b00d 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -54,6 +54,7 @@ coreml = []  # Supplied by the supported macOS ONNX Runtime build.
+ nnapi = []  # Supplied by a compatible mobile ONNX Runtime build.
+ xnnpack = []  # Supplied by a compatible ONNX Runtime build.
+ mobile = []  # Convenience marker for platform-managed mobile providers.
++pocket = ["huggingface_hub>=0.24,<2", "safetensors>=0.4,<1"]
+ dev = [
+   "pytest>=8",
+   "pytest-cov>=5",
+diff --git a/tests/test_catalog.py b/tests/test_catalog.py
+index 45f8ea6..39e0167 100644
+--- a/tests/test_catalog.py
++++ b/tests/test_catalog.py
+@@ -226,6 +226,29 @@ def test_kokoro_list_uses_each_models_own_default_distribution(tmp_path):
+     assert by_id["v1.1-zh"].metadata["distribution_id"] == "dist-zh"
+
+
++def test_kokoro_list_skips_models_without_runtime_ready_distribution(tmp_path):
++    raw = {
++        "models": {
++            "kokoro-en-us": {
++                "language_codes": ["en-US"],
++                "runtime": {"voices": ["af_heart"]},
++                "distributions": [{"id": "cpu", "artifacts": [{"role": "model", "id": "en.onnx"}]}],
++            },
++            "he-hebrew-nc": {
++                "language_codes": ["he"],
++                "distributions": [{"id": "unsupported", "runtime_ready": False, "artifacts": []}],
++            },
++        }
++    }
++    source = tmp_path / "kokoro.json"
++    source.write_text(json.dumps(raw), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
++
++    assert [item.id for item in client.list("kokoro")] == ["kokoro-en-us"]
++    with pytest.raises(CatalogError, match="no runtime-ready distributions"):
++        client.resolve("kokoro:he-hebrew-nc")
++
++
+ def test_kokoro_timing_contract_is_normalized(tmp_path):
+     raw = {
+         "models": {
+diff --git a/tests/test_pocket_adapter.py b/tests/test_pocket_adapter.py
+index ad5dbfe..106dc3d 100644
+--- a/tests/test_pocket_adapter.py
++++ b/tests/test_pocket_adapter.py
+@@ -2,6 +2,7 @@
+
+ from __future__ import annotations
+
++import json
+ from pathlib import Path
+ from typing import Any
+ from unittest.mock import MagicMock, patch
+@@ -600,3 +601,263 @@ def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
+     assert sessions["mimi_decoder"].run.call_count == 2
+     assert "token_ids" in sessions["text_conditioner"].run.call_args.args[0]
+     assert set(sessions["flow_lm_flow"].run.call_args.args[0]) == {"c", "s", "t", "x"}
++
++
++def _predefined_adapter(
++    tmp_path: Path,
++    *,
++    voices: tuple[str, ...] = ("alba",),
++    cache_dir: Path | None = None,
++    offline: bool = False,
++    conditioning_dim: int = 4,
++) -> PocketAdapter:
++    bundle_metadata = {
++        "bundle_name": "english_2026-04",
++        "language": "en",
++        "schema_version": 2,
++        "sample_rate": 24000,
++        "samples_per_frame": 1920,
++        "latent_dim": 3,
++        "conditioning_dim": conditioning_dim,
++        "flow_lm_state_manifest": [],
++        "mimi_state_manifest": [],
++        "insert_bos_before_voice": False,
++        "bos_before_voice_file": "bos_before_voice.npy",
++        "predefined_voices": list(voices),
++    }
++    metadata_path = tmp_path / "bundle.json"
++    metadata_path.write_text(json.dumps(bundle_metadata), encoding="utf-8")
++    installation = _make_installation(
++        artifacts={"bundle_metadata": metadata_path},
++        metadata={"predefined_voice_names": list(voices)},
++    )
++    return PocketAdapter(
++        installation,
++        voice_cache_dir=cache_dir or tmp_path / "voice-cache",
++        offline=offline,
++    )
++
++
++def test_predefined_voice_download_uses_pinned_bundle_asset_and_runtime_cache(
++    tmp_path: Path,
++) -> None:
++    from onnxvoice.systems.pocket import (
++        PREDEFINED_VOICE_REPOSITORY,
++        PREDEFINED_VOICE_REVISION,
++    )
++
++    source = tmp_path / "download.safetensors"
++    source.write_bytes(b"fake safetensors payload")
++    expected_embeddings = np.ones((1, 6, 4), dtype=np.float32)
++    adapter = _predefined_adapter(tmp_path)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            return_value=source,
++        ) as download,
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value={"voice_embeddings": expected_embeddings},
++        ) as load,
++    ):
++        state = adapter.prepare_predefined_voice("alba")
++        assert adapter.prepare_predefined_voice("alba") is state
++
++    download.assert_called_once_with(
++        PREDEFINED_VOICE_REPOSITORY,
++        "languages/english_2026-04/embeddings/alba.safetensors",
++        PREDEFINED_VOICE_REVISION,
++        cache_dir=adapter._voice_cache_dir / "huggingface",
++        local_files_only=False,
++    )
++    load.assert_called_once()
++    assert state.embeddings.shape == (1, 6, 4)
++    assert state.sample_rate == 24000
++    assert state.metadata["bundle_id"] == "english_2026-04"
++    assert state.metadata["voice_name"] == "alba"
++    assert state.metadata["model_revision"] == PREDEFINED_VOICE_REVISION
++    assert "cache_path" not in state.metadata
++    assert "token" not in state.metadata
++
++
++def test_predefined_voice_uses_persistent_cache_offline(
++    tmp_path: Path,
++) -> None:
++    source = tmp_path / "download.safetensors"
++    source.write_bytes(b"fake safetensors payload")
++    cache_dir = tmp_path / "voice-cache"
++    embeddings = np.ones((1, 6, 4), dtype=np.float32)
++    online = _predefined_adapter(tmp_path, cache_dir=cache_dir)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            return_value=source,
++        ) as download,
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value={"embedding": embeddings},
++        ),
++    ):
++        online_state = online.prepare_predefined_voice("alba")
++
++    offline = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
++    with (
++        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download_offline,
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value={"embedding": embeddings},
++        ),
++    ):
++        offline_state = offline.prepare_predefined_voice("alba")
++
++    download.assert_called_once()
++    download_offline.assert_not_called()
++    assert np.array_equal(offline_state.embeddings, online_state.embeddings)
++
++
++def test_predefined_voice_rejects_unknown_name_before_download(tmp_path: Path) -> None:
++    from onnxvoice.errors import RuntimeContractError
++
++    adapter = _predefined_adapter(tmp_path)
++    with (
++        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download,
++        pytest.raises(RuntimeContractError, match="Available voices: alba"),
++    ):
++        adapter.prepare_predefined_voice("abla")
++    download.assert_not_called()
++
++
++def test_predefined_voice_rejects_bundle_catalog_name_mismatch(tmp_path: Path) -> None:
++    from onnxvoice.errors import RuntimeContractError
++
++    adapter = _predefined_adapter(tmp_path)
++    adapter.installation.metadata["predefined_voice_names"] = ["other"]
++    with pytest.raises(RuntimeContractError, match="catalog disagree"):
++        _ = adapter.predefined_voices
++
++
++def test_predefined_voice_rejects_incompatible_embedding_shape(tmp_path: Path) -> None:
++    from onnxvoice.errors import PredefinedVoiceIntegrityError
++
++    source = tmp_path / "download.safetensors"
++    source.write_bytes(b"fake safetensors payload")
++    adapter = _predefined_adapter(tmp_path)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            return_value=source,
++        ),
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value={"embedding": np.ones((1, 6, 3), dtype=np.float32)},
++        ),
++        pytest.raises(PredefinedVoiceIntegrityError, match="expected \\[1, sequence, 4\\]"),
++    ):
++        adapter.prepare_predefined_voice("alba")
++
++
++def test_predefined_voice_rejects_non_float_embedding(tmp_path: Path) -> None:
++    from onnxvoice.errors import PredefinedVoiceIntegrityError
++
++    source = tmp_path / "download.safetensors"
++    source.write_bytes(b"fake safetensors payload")
++    adapter = _predefined_adapter(tmp_path)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            return_value=source,
++        ),
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value={"embedding": np.ones((1, 6, 4), dtype=np.int64)},
++        ),
++        pytest.raises(PredefinedVoiceIntegrityError, match="floating-point"),
++    ):
++        adapter.prepare_predefined_voice("alba")
++
++
++def test_predefined_voice_gated_access_is_distinct(tmp_path: Path) -> None:
++    from onnxvoice.errors import PredefinedVoiceAccessError
++
++    class GatedRepoError(Exception):
++        pass
++
++    adapter = _predefined_adapter(tmp_path)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            side_effect=GatedRepoError("private error detail"),
++        ),
++        pytest.raises(
++            PredefinedVoiceAccessError,
++            match="requires access to kyutai/pocket-tts",
++        ) as caught,
++    ):
++        adapter.prepare_predefined_voice("alba")
++    assert isinstance(caught.value.__cause__, GatedRepoError)
++    assert "private error detail" not in str(caught.value)
++
++
++def test_predefined_voice_missing_asset_is_distinct(tmp_path: Path) -> None:
++    from onnxvoice.errors import PredefinedVoiceNotFoundError
++
++    class EntryNotFoundError(Exception):
++        pass
++
++    adapter = _predefined_adapter(tmp_path)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            side_effect=EntryNotFoundError(),
++        ),
++        pytest.raises(PredefinedVoiceNotFoundError, match="not present for bundle"),
++    ):
++        adapter.prepare_predefined_voice("alba")
++
++
++def test_predefined_voice_offline_cache_miss_is_distinct(tmp_path: Path) -> None:
++    from onnxvoice.errors import OfflineError
++
++    class LocalEntryNotFoundError(Exception):
++        pass
++
++    adapter = _predefined_adapter(tmp_path, offline=True)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            side_effect=LocalEntryNotFoundError(),
++        ) as download,
++        pytest.raises(OfflineError, match="not available in the local cache"),
++    ):
++        adapter.prepare_predefined_voice("alba")
++    assert download.call_args.kwargs["local_files_only"] is True
++
++
++def test_predefined_voice_cached_corruption_is_reported(tmp_path: Path) -> None:
++    from onnxvoice.errors import PredefinedVoiceIntegrityError
++
++    source = tmp_path / "download.safetensors"
++    source.write_bytes(b"fake safetensors payload")
++    cache_dir = tmp_path / "voice-cache"
++    online = _predefined_adapter(tmp_path, cache_dir=cache_dir)
++    with (
++        patch(
++            "onnxvoice.systems.pocket._download_predefined_voice_file",
++            return_value=source,
++        ),
++        patch(
++            "onnxvoice.systems.pocket._load_safetensors",
++            return_value={"embedding": np.ones((1, 6, 4), dtype=np.float32)},
++        ),
++    ):
++        online.prepare_predefined_voice("alba")
++    cached_state = next(cache_dir.rglob("alba.safetensors"))
++    cached_state.write_bytes(b"x" * cached_state.stat().st_size)
++
++    offline = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
++    with (
++        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download,
++        pytest.raises(PredefinedVoiceIntegrityError, match="failed integrity validation"),
++    ):
++        offline.prepare_predefined_voice("alba")
++    download.assert_not_called()
+diff --git a/tests/test_pocket_catalog.py b/tests/test_pocket_catalog.py
+index 91a3585..3a00570 100644
+--- a/tests/test_pocket_catalog.py
++++ b/tests/test_pocket_catalog.py
+@@ -428,6 +428,7 @@ def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
+     }
+     item = _parse_pocket(catalog)[0]
+     assert item.voices == ()
++    assert item.metadata["predefined_voice_names"] == ["alba"]
+     entry["voice_states"] = [
+         {
+             "name": "alba",
+diff --git a/tests/test_pocket_network_boundaries.py b/tests/test_pocket_network_boundaries.py
+index 940e00f..d01c7bb 100644
+--- a/tests/test_pocket_network_boundaries.py
++++ b/tests/test_pocket_network_boundaries.py
+@@ -375,3 +375,38 @@ class TestNoNetworkAccessForLocalOpening:
+
+         assert runtime is not None
+         runtime.close()
++
++
++def test_manager_passes_voice_cache_and_offline_settings_to_pocket(tmp_path: Path) -> None:
++    runtime = OnnxVoice(cache_dir=tmp_path / "managed-cache", offline=True)
++    installation = _make_installation()
++    with (
++        patch("onnxvoice.manager.get_adapter", return_value=MagicMock()) as get_adapter,
++        patch.object(runtime.store, "verify"),
++    ):
++        runtime.open(installation)
++
++    managed_adapter = get_adapter.return_value
++    managed_adapter.assert_called_once_with(
++        installation,
++        providers=None,
++        provider_options=None,
++        session_options=None,
++        voice_cache_dir=runtime.store.root / "pocket-voice-states",
++        offline=True,
++    )
++
++    model = tmp_path / "local.onnx"
++    model.write_bytes(b"local")
++    voice_cache = tmp_path / "local-voice-cache"
++    with patch("onnxvoice.manager.get_adapter", return_value=MagicMock()) as get_adapter:
++        OnnxVoice.open_local(
++            system="pocket",
++            model=model,
++            voice_cache_dir=voice_cache,
++            offline=True,
++        )
++
++    local_adapter = get_adapter.return_value
++    assert local_adapter.call_args.kwargs["voice_cache_dir"] == voice_cache
++    assert local_adapter.call_args.kwargs["offline"] is True
+diff --git a/tests/test_voice_selectors.py b/tests/test_voice_selectors.py
+index 4901aa2..d297628 100644
+--- a/tests/test_voice_selectors.py
++++ b/tests/test_voice_selectors.py
+@@ -171,6 +171,18 @@ def test_packaged_german_selectors_remain_unchanged():
+     ] == expected
+
+
++def test_newly_available_kokoro_voices_have_stable_selectors():
++    expected = (
++        ("ar-ko-1", "ar-nabra", "default"),
++        ("en-ko-1", "en-oddadmix-7m-distill", "af_msa"),
++        ("kk-ko-1", "kk-anuarsv", "km_m1"),
++        ("pt_pt-ko-1", "pt-eu-logus2k", "pt_eu"),
++    )
++    for selector, asset_id, voice_id in expected:
++        identity = resolve_voice_selector(selector)
++        assert identity.canonical_key == ("kokoro", asset_id, voice_id)
++
++
+ def test_registry_rejects_duplicate_slots_identity_and_mismatch():
+     with pytest.raises(VoiceSelectorRegistryError):
+         _registry(
+@@ -298,7 +310,8 @@ def test_catalog_drift_check_reports_missing_and_unassigned():
+     issues = check_registry_and_catalog([_piper_voice("de_DE-eva_k-x_low")])
+     assert any("missing from catalog" in issue for issue in issues)
+     assert not any("unassigned catalog voice" in issue for issue in issues)
+-    assert len(missing_registry_voices([_piper_voice("de_DE-eva_k-x_low")])) == 40
++    missing = missing_registry_voices([_piper_voice("de_DE-eva_k-x_low")])
++    assert len(missing) == len(iter_voice_identities()) - 1
+
+
+ def test_cli_parser_and_json_projection():

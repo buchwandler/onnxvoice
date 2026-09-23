@@ -1,0 +1,15 @@
+ onnxvoice/catalog_tools/pocket.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/onnxvoice/catalog_tools/pocket.py b/onnxvoice/catalog_tools/pocket.py
+index 6a02746..4e2653f 100644
+--- a/onnxvoice/catalog_tools/pocket.py
++++ b/onnxvoice/catalog_tools/pocket.py
+@@ -583,6 +583,7 @@ def _parse_bundle_entry(
+             isinstance(tree_metadata, dict),
+             f"{bundle_id}/{role}: artifact path is not present in pinned tree: {upstream_path}",
+         )
++        assert isinstance(tree_metadata, dict)
+         size, sha256 = _file_integrity(
+             repository,
+             revision,
