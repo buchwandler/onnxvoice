@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -600,3 +601,263 @@ def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
     assert sessions["mimi_decoder"].run.call_count == 2
     assert "token_ids" in sessions["text_conditioner"].run.call_args.args[0]
     assert set(sessions["flow_lm_flow"].run.call_args.args[0]) == {"c", "s", "t", "x"}
+
+
+def _predefined_adapter(
+    tmp_path: Path,
+    *,
+    voices: tuple[str, ...] = ("alba",),
+    cache_dir: Path | None = None,
+    offline: bool = False,
+    conditioning_dim: int = 4,
+) -> PocketAdapter:
+    bundle_metadata = {
+        "bundle_name": "english_2026-04",
+        "language": "en",
+        "schema_version": 2,
+        "sample_rate": 24000,
+        "samples_per_frame": 1920,
+        "latent_dim": 3,
+        "conditioning_dim": conditioning_dim,
+        "flow_lm_state_manifest": [],
+        "mimi_state_manifest": [],
+        "insert_bos_before_voice": False,
+        "bos_before_voice_file": "bos_before_voice.npy",
+        "predefined_voices": list(voices),
+    }
+    metadata_path = tmp_path / "bundle.json"
+    metadata_path.write_text(json.dumps(bundle_metadata), encoding="utf-8")
+    installation = _make_installation(
+        artifacts={"bundle_metadata": metadata_path},
+        metadata={"predefined_voice_names": list(voices)},
+    )
+    return PocketAdapter(
+        installation,
+        voice_cache_dir=cache_dir or tmp_path / "voice-cache",
+        offline=offline,
+    )
+
+
+def test_predefined_voice_download_uses_pinned_bundle_asset_and_runtime_cache(
+    tmp_path: Path,
+) -> None:
+    from onnxvoice.systems.pocket import (
+        PREDEFINED_VOICE_REPOSITORY,
+        PREDEFINED_VOICE_REVISION,
+    )
+
+    source = tmp_path / "download.safetensors"
+    source.write_bytes(b"fake safetensors payload")
+    expected_embeddings = np.ones((1, 6, 4), dtype=np.float32)
+    adapter = _predefined_adapter(tmp_path)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            return_value=source,
+        ) as download,
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value={"voice_embeddings": expected_embeddings},
+        ) as load,
+    ):
+        state = adapter.prepare_predefined_voice("alba")
+        assert adapter.prepare_predefined_voice("alba") is state
+
+    download.assert_called_once_with(
+        PREDEFINED_VOICE_REPOSITORY,
+        "languages/english_2026-04/embeddings/alba.safetensors",
+        PREDEFINED_VOICE_REVISION,
+        cache_dir=adapter._voice_cache_dir / "huggingface",
+        local_files_only=False,
+    )
+    load.assert_called_once()
+    assert state.embeddings.shape == (1, 6, 4)
+    assert state.sample_rate == 24000
+    assert state.metadata["bundle_id"] == "english_2026-04"
+    assert state.metadata["voice_name"] == "alba"
+    assert state.metadata["model_revision"] == PREDEFINED_VOICE_REVISION
+    assert "cache_path" not in state.metadata
+    assert "token" not in state.metadata
+
+
+def test_predefined_voice_uses_persistent_cache_offline(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "download.safetensors"
+    source.write_bytes(b"fake safetensors payload")
+    cache_dir = tmp_path / "voice-cache"
+    embeddings = np.ones((1, 6, 4), dtype=np.float32)
+    online = _predefined_adapter(tmp_path, cache_dir=cache_dir)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            return_value=source,
+        ) as download,
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value={"embedding": embeddings},
+        ),
+    ):
+        online_state = online.prepare_predefined_voice("alba")
+
+    offline = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
+    with (
+        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download_offline,
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value={"embedding": embeddings},
+        ),
+    ):
+        offline_state = offline.prepare_predefined_voice("alba")
+
+    download.assert_called_once()
+    download_offline.assert_not_called()
+    assert np.array_equal(offline_state.embeddings, online_state.embeddings)
+
+
+def test_predefined_voice_rejects_unknown_name_before_download(tmp_path: Path) -> None:
+    from onnxvoice.errors import RuntimeContractError
+
+    adapter = _predefined_adapter(tmp_path)
+    with (
+        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download,
+        pytest.raises(RuntimeContractError, match="Available voices: alba"),
+    ):
+        adapter.prepare_predefined_voice("abla")
+    download.assert_not_called()
+
+
+def test_predefined_voice_rejects_bundle_catalog_name_mismatch(tmp_path: Path) -> None:
+    from onnxvoice.errors import RuntimeContractError
+
+    adapter = _predefined_adapter(tmp_path)
+    adapter.installation.metadata["predefined_voice_names"] = ["other"]
+    with pytest.raises(RuntimeContractError, match="catalog disagree"):
+        _ = adapter.predefined_voices
+
+
+def test_predefined_voice_rejects_incompatible_embedding_shape(tmp_path: Path) -> None:
+    from onnxvoice.errors import PredefinedVoiceIntegrityError
+
+    source = tmp_path / "download.safetensors"
+    source.write_bytes(b"fake safetensors payload")
+    adapter = _predefined_adapter(tmp_path)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            return_value=source,
+        ),
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value={"embedding": np.ones((1, 6, 3), dtype=np.float32)},
+        ),
+        pytest.raises(PredefinedVoiceIntegrityError, match="expected \\[1, sequence, 4\\]"),
+    ):
+        adapter.prepare_predefined_voice("alba")
+
+
+def test_predefined_voice_rejects_non_float_embedding(tmp_path: Path) -> None:
+    from onnxvoice.errors import PredefinedVoiceIntegrityError
+
+    source = tmp_path / "download.safetensors"
+    source.write_bytes(b"fake safetensors payload")
+    adapter = _predefined_adapter(tmp_path)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            return_value=source,
+        ),
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value={"embedding": np.ones((1, 6, 4), dtype=np.int64)},
+        ),
+        pytest.raises(PredefinedVoiceIntegrityError, match="floating-point"),
+    ):
+        adapter.prepare_predefined_voice("alba")
+
+
+def test_predefined_voice_gated_access_is_distinct(tmp_path: Path) -> None:
+    from onnxvoice.errors import PredefinedVoiceAccessError
+
+    class GatedRepoError(Exception):
+        pass
+
+    adapter = _predefined_adapter(tmp_path)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            side_effect=GatedRepoError("private error detail"),
+        ),
+        pytest.raises(
+            PredefinedVoiceAccessError,
+            match="requires access to kyutai/pocket-tts",
+        ) as caught,
+    ):
+        adapter.prepare_predefined_voice("alba")
+    assert isinstance(caught.value.__cause__, GatedRepoError)
+    assert "private error detail" not in str(caught.value)
+
+
+def test_predefined_voice_missing_asset_is_distinct(tmp_path: Path) -> None:
+    from onnxvoice.errors import PredefinedVoiceNotFoundError
+
+    class EntryNotFoundError(Exception):
+        pass
+
+    adapter = _predefined_adapter(tmp_path)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            side_effect=EntryNotFoundError(),
+        ),
+        pytest.raises(PredefinedVoiceNotFoundError, match="not present for bundle"),
+    ):
+        adapter.prepare_predefined_voice("alba")
+
+
+def test_predefined_voice_offline_cache_miss_is_distinct(tmp_path: Path) -> None:
+    from onnxvoice.errors import OfflineError
+
+    class LocalEntryNotFoundError(Exception):
+        pass
+
+    adapter = _predefined_adapter(tmp_path, offline=True)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            side_effect=LocalEntryNotFoundError(),
+        ) as download,
+        pytest.raises(OfflineError, match="not available in the local cache"),
+    ):
+        adapter.prepare_predefined_voice("alba")
+    assert download.call_args.kwargs["local_files_only"] is True
+
+
+def test_predefined_voice_cached_corruption_is_reported(tmp_path: Path) -> None:
+    from onnxvoice.errors import PredefinedVoiceIntegrityError
+
+    source = tmp_path / "download.safetensors"
+    source.write_bytes(b"fake safetensors payload")
+    cache_dir = tmp_path / "voice-cache"
+    online = _predefined_adapter(tmp_path, cache_dir=cache_dir)
+    with (
+        patch(
+            "onnxvoice.systems.pocket._download_predefined_voice_file",
+            return_value=source,
+        ),
+        patch(
+            "onnxvoice.systems.pocket._load_safetensors",
+            return_value={"embedding": np.ones((1, 6, 4), dtype=np.float32)},
+        ),
+    ):
+        online.prepare_predefined_voice("alba")
+    cached_state = next(cache_dir.rglob("alba.safetensors"))
+    cached_state.write_bytes(b"x" * cached_state.stat().st_size)
+
+    offline = _predefined_adapter(tmp_path, cache_dir=cache_dir, offline=True)
+    with (
+        patch("onnxvoice.systems.pocket._download_predefined_voice_file") as download,
+        pytest.raises(PredefinedVoiceIntegrityError, match="failed integrity validation"),
+    ):
+        offline.prepare_predefined_voice("alba")
+    download.assert_not_called()

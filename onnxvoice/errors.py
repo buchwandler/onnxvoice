@@ -34,6 +34,26 @@ class IntegrityError(OnnxVoiceError):
     """Downloaded or cached content failed integrity validation."""
 
 
+class AssetDownloadError(OnnxVoiceError):
+    """A remote asset could not be downloaded."""
+
+
+class PredefinedVoiceError(OnnxVoiceError):
+    """A predefined voice state could not be resolved or loaded."""
+
+
+class PredefinedVoiceAccessError(PredefinedVoiceError):
+    """A gated predefined voice asset requires authorization."""
+
+
+class PredefinedVoiceNotFoundError(PredefinedVoiceError):
+    """A pinned predefined voice asset does not exist."""
+
+
+class PredefinedVoiceIntegrityError(PredefinedVoiceError):
+    """A predefined voice asset is corrupt or incompatible with its bundle."""
+
+
 class ManifestError(OnnxVoiceError):
     """An installation manifest is malformed or unsupported."""
 

@@ -54,6 +54,7 @@ coreml = []  # Supplied by the supported macOS ONNX Runtime build.
 nnapi = []  # Supplied by a compatible mobile ONNX Runtime build.
 xnnpack = []  # Supplied by a compatible ONNX Runtime build.
 mobile = []  # Convenience marker for platform-managed mobile providers.
+pocket = ["huggingface_hub>=0.24,<2", "safetensors>=0.4,<1"]
 dev = [
   "pytest>=8",
   "pytest-cov>=5",

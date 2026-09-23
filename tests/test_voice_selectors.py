@@ -171,6 +171,18 @@ def test_packaged_german_selectors_remain_unchanged():
     ] == expected
 
 
+def test_newly_available_kokoro_voices_have_stable_selectors():
+    expected = (
+        ("ar-ko-1", "ar-nabra", "default"),
+        ("en-ko-1", "en-oddadmix-7m-distill", "af_msa"),
+        ("kk-ko-1", "kk-anuarsv", "km_m1"),
+        ("pt_pt-ko-1", "pt-eu-logus2k", "pt_eu"),
+    )
+    for selector, asset_id, voice_id in expected:
+        identity = resolve_voice_selector(selector)
+        assert identity.canonical_key == ("kokoro", asset_id, voice_id)
+
+
 def test_registry_rejects_duplicate_slots_identity_and_mismatch():
     with pytest.raises(VoiceSelectorRegistryError):
         _registry(
@@ -298,7 +310,8 @@ def test_catalog_drift_check_reports_missing_and_unassigned():
     issues = check_registry_and_catalog([_piper_voice("de_DE-eva_k-x_low")])
     assert any("missing from catalog" in issue for issue in issues)
     assert not any("unassigned catalog voice" in issue for issue in issues)
-    assert len(missing_registry_voices([_piper_voice("de_DE-eva_k-x_low")])) == 40
+    missing = missing_registry_voices([_piper_voice("de_DE-eva_k-x_low")])
+    assert len(missing) == len(iter_voice_identities()) - 1
 
 
 def test_cli_parser_and_json_projection():

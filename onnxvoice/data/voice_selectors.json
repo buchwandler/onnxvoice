@@ -373,6 +373,3264 @@
       "asset_id": "v1.1-zh",
       "voice_id": "af_sol",
       "state": "active"
+    },
+    {
+      "language": "ar",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "ar-nabra",
+      "voice_id": "default",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "en-oddadmix-7m-distill",
+      "voice_id": "af_msa",
+      "state": "active"
+    },
+    {
+      "language": "kk",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "kk-anuarsv",
+      "voice_id": "km_m1",
+      "state": "active"
+    },
+    {
+      "language": "pt_pt",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "pt-eu-logus2k",
+      "voice_id": "pt_eu",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bf_alice",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bf_emma",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bf_isabella",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bf_janegoodall",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 5,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bf_lily",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 6,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bm_daniel",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 7,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bm_davidattenborough",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 8,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bm_fable",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 9,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bm_george",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 10,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "bm_lewis",
+      "state": "active"
+    },
+    {
+      "language": "en_gb",
+      "engine_code": "ko",
+      "slot": 11,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "bf_vale",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "ef_dora",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "em_alex",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "em_santa",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "ff_siwis",
+      "state": "active"
+    },
+    {
+      "language": "hi",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "hf_alpha",
+      "state": "active"
+    },
+    {
+      "language": "hi",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "hf_beta",
+      "state": "active"
+    },
+    {
+      "language": "hi",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "hm_omega",
+      "state": "active"
+    },
+    {
+      "language": "hi",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "hm_psi",
+      "state": "active"
+    },
+    {
+      "language": "it",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "if_sara",
+      "state": "active"
+    },
+    {
+      "language": "it",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "im_nicola",
+      "state": "active"
+    },
+    {
+      "language": "ja",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "jf_alpha",
+      "state": "active"
+    },
+    {
+      "language": "ja",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "jf_gongitsune",
+      "state": "active"
+    },
+    {
+      "language": "ja",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "jf_nezumi",
+      "state": "active"
+    },
+    {
+      "language": "ja",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "jf_tebukuro",
+      "state": "active"
+    },
+    {
+      "language": "ja",
+      "engine_code": "ko",
+      "slot": 5,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "jm_kumo",
+      "state": "active"
+    },
+    {
+      "language": "pt_br",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "pf_dora",
+      "state": "active"
+    },
+    {
+      "language": "pt_br",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "pm_alex",
+      "state": "active"
+    },
+    {
+      "language": "pt_br",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "pm_santa",
+      "state": "active"
+    },
+    {
+      "language": "ru",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "ru-zaakirio-base",
+      "voice_id": "masha",
+      "state": "active"
+    },
+    {
+      "language": "ru",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "ru-zaakirio-base",
+      "voice_id": "sveta",
+      "state": "active"
+    },
+    {
+      "language": "ru",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "ru-zaakirio-dima",
+      "voice_id": "dima",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Alice",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Anton",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Björn",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Ebba",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 5,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Elsa",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 6,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Greta",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 7,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Lars",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 8,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Nils",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 9,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Oskar",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "ko",
+      "slot": 10,
+      "system": "kokoro",
+      "asset_id": "sv-joakim",
+      "voice_id": "Stina",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_elderly_low",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_elderly_soft",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_mid_clear",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_mid_warm",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 5,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_teen_bright",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 6,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_young_bright",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 7,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_young_clear",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 8,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "f_young_warm",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 9,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "m_elderly_deep",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 10,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "m_mid_warm",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 11,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "m_teen_bright",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "ko",
+      "slot": 12,
+      "system": "kokoro",
+      "asset_id": "th-wayu",
+      "voice_id": "m_young_clear",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "diem_trinh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "duc_an",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "duc_duy",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "hung_thinh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 5,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "mai_linh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 6,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "mai_loan",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 7,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "manh_dung",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 8,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "my_yen",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 9,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "ngoc_huyen",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 10,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "phat_tai",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 11,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "storyvert",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 12,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "thanh_dat",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 13,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "thuc_trinh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 14,
+      "system": "kokoro",
+      "asset_id": "vi-anphunl",
+      "voice_id": "tuan_ngoc",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 15,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "diem_trinh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 16,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "duc_an",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 17,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "duc_duy",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 18,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "hung_thinh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 19,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "mai_linh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 20,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "mai_loan",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 21,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "manh_dung",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 22,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "my_yen",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 23,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "ngoc_huyen",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 24,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "phat_tai",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 25,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "storyvert",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 26,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "thanh_dat",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 27,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "thuc_trinh",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 28,
+      "system": "kokoro",
+      "asset_id": "vi-contextbox",
+      "voice_id": "tuan_ngoc",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "ko",
+      "slot": 29,
+      "system": "kokoro",
+      "asset_id": "vi-ngoc-huyen",
+      "voice_id": "ngoc_huyen",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 1,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zf_xiaobei",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 2,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zf_xiaoni",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 3,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zf_xiaoxiao",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 4,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zf_xiaoyi",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 5,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zm_yunjian",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 6,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zm_yunxi",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 7,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zm_yunxia",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 8,
+      "system": "kokoro",
+      "asset_id": "v1.0",
+      "voice_id": "zm_yunyang",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 9,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_001",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 10,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_002",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 11,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_003",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 12,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_004",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 13,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_005",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 14,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_006",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 15,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_007",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 16,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_008",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 17,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_017",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 18,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_018",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 19,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_019",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 20,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_021",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 21,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_022",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 22,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_023",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 23,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_024",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 24,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_026",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 25,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_027",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 26,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_028",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 27,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_032",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 28,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_036",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 29,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_038",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 30,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_039",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 31,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_040",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 32,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_042",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 33,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_043",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 34,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_044",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 35,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_046",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 36,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_047",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 37,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_048",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 38,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_049",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 39,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_051",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 40,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_059",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 41,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_060",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 42,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_067",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 43,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_070",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 44,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_071",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 45,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_072",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 46,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_073",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 47,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_074",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 48,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_075",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 49,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_076",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 50,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_077",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 51,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_078",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 52,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_079",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 53,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_083",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 54,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_084",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 55,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_085",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 56,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_086",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 57,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_087",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 58,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_088",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 59,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_090",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 60,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_092",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 61,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_093",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 62,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_094",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 63,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zf_099",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 64,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_009",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 65,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_010",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 66,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_011",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 67,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_012",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 68,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_013",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 69,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_014",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 70,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_015",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 71,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_016",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 72,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_020",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 73,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_025",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 74,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_029",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 75,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_030",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 76,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_031",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 77,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_033",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 78,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_034",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 79,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_035",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 80,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_037",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 81,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_041",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 82,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_045",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 83,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_050",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 84,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_052",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 85,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_053",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 86,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_054",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 87,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_055",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 88,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_056",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 89,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_057",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 90,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_058",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 91,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_061",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 92,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_062",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 93,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_063",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 94,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_064",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 95,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_065",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 96,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_066",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 97,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_068",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 98,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_069",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 99,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_080",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 100,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_081",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 101,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_082",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 102,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_089",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 103,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_091",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 104,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_095",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 105,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_096",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 106,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_097",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 107,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_098",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "ko",
+      "slot": 108,
+      "system": "kokoro",
+      "asset_id": "v1.1-zh",
+      "voice_id": "zm_100",
+      "state": "active"
+    },
+    {
+      "language": "ar",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ar_JO-kareem-low",
+      "voice_id": "ar_JO-kareem-low",
+      "state": "active"
+    },
+    {
+      "language": "ar",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "ar_JO-kareem-medium",
+      "voice_id": "ar_JO-kareem-medium",
+      "state": "active"
+    },
+    {
+      "language": "bg",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "bg_BG-dimitar-medium",
+      "voice_id": "bg_BG-dimitar-medium",
+      "state": "active"
+    },
+    {
+      "language": "bn",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "bn_BD-google-medium",
+      "voice_id": "bn_BD-google-medium",
+      "state": "active"
+    },
+    {
+      "language": "ca",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ca_ES-upc_ona-medium",
+      "voice_id": "ca_ES-upc_ona-medium",
+      "state": "active"
+    },
+    {
+      "language": "ca",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "ca_ES-upc_ona-x_low",
+      "voice_id": "ca_ES-upc_ona-x_low",
+      "state": "active"
+    },
+    {
+      "language": "ca",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "ca_ES-upc_pau-x_low",
+      "voice_id": "ca_ES-upc_pau-x_low",
+      "state": "active"
+    },
+    {
+      "language": "cs",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "cs_CZ-jirka-low",
+      "voice_id": "cs_CZ-jirka-low",
+      "state": "active"
+    },
+    {
+      "language": "cs",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "cs_CZ-jirka-medium",
+      "voice_id": "cs_CZ-jirka-medium",
+      "state": "active"
+    },
+    {
+      "language": "cs",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "cs_CZ-kasandra-medium",
+      "voice_id": "cs_CZ-kasandra-medium",
+      "state": "active"
+    },
+    {
+      "language": "cy",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "cy_GB-bu_tts-medium",
+      "voice_id": "cy_GB-bu_tts-medium",
+      "state": "active"
+    },
+    {
+      "language": "cy",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "cy_GB-gwryw_gogleddol-medium",
+      "voice_id": "cy_GB-gwryw_gogleddol-medium",
+      "state": "active"
+    },
+    {
+      "language": "da",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "da_DK-talesyntese-medium",
+      "voice_id": "da_DK-talesyntese-medium",
+      "state": "active"
+    },
+    {
+      "language": "el",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "el_GR-joy-medium",
+      "voice_id": "el_GR-joy-medium",
+      "state": "active"
+    },
+    {
+      "language": "el",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "el_GR-rapunzelina-low",
+      "voice_id": "el_GR-rapunzelina-low",
+      "state": "active"
+    },
+    {
+      "language": "el",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "el_GR-rapunzelina-medium",
+      "voice_id": "el_GR-rapunzelina-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "en_GB-alan-low",
+      "voice_id": "en_GB-alan-low",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "en_GB-alan-medium",
+      "voice_id": "en_GB-alan-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "en_GB-alba-medium",
+      "voice_id": "en_GB-alba-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "en_GB-aru-medium",
+      "voice_id": "en_GB-aru-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "en_GB-cori-high",
+      "voice_id": "en_GB-cori-high",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 6,
+      "system": "piper",
+      "asset_id": "en_GB-cori-medium",
+      "voice_id": "en_GB-cori-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 7,
+      "system": "piper",
+      "asset_id": "en_GB-jenny_dioco-medium",
+      "voice_id": "en_GB-jenny_dioco-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 8,
+      "system": "piper",
+      "asset_id": "en_GB-northern_english_male-medium",
+      "voice_id": "en_GB-northern_english_male-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 9,
+      "system": "piper",
+      "asset_id": "en_GB-semaine-medium",
+      "voice_id": "en_GB-semaine-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 10,
+      "system": "piper",
+      "asset_id": "en_GB-southern_english_female-low",
+      "voice_id": "en_GB-southern_english_female-low",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 11,
+      "system": "piper",
+      "asset_id": "en_GB-vctk-medium",
+      "voice_id": "en_GB-vctk-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 12,
+      "system": "piper",
+      "asset_id": "en_US-amy-low",
+      "voice_id": "en_US-amy-low",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 13,
+      "system": "piper",
+      "asset_id": "en_US-amy-medium",
+      "voice_id": "en_US-amy-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 14,
+      "system": "piper",
+      "asset_id": "en_US-arctic-medium",
+      "voice_id": "en_US-arctic-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 15,
+      "system": "piper",
+      "asset_id": "en_US-bryce-medium",
+      "voice_id": "en_US-bryce-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 16,
+      "system": "piper",
+      "asset_id": "en_US-danny-low",
+      "voice_id": "en_US-danny-low",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 17,
+      "system": "piper",
+      "asset_id": "en_US-hfc_female-medium",
+      "voice_id": "en_US-hfc_female-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 18,
+      "system": "piper",
+      "asset_id": "en_US-hfc_male-medium",
+      "voice_id": "en_US-hfc_male-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 19,
+      "system": "piper",
+      "asset_id": "en_US-joe-medium",
+      "voice_id": "en_US-joe-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 20,
+      "system": "piper",
+      "asset_id": "en_US-john-medium",
+      "voice_id": "en_US-john-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 21,
+      "system": "piper",
+      "asset_id": "en_US-kathleen-low",
+      "voice_id": "en_US-kathleen-low",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 22,
+      "system": "piper",
+      "asset_id": "en_US-kristin-medium",
+      "voice_id": "en_US-kristin-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 23,
+      "system": "piper",
+      "asset_id": "en_US-kusal-medium",
+      "voice_id": "en_US-kusal-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 24,
+      "system": "piper",
+      "asset_id": "en_US-l2arctic-medium",
+      "voice_id": "en_US-l2arctic-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 25,
+      "system": "piper",
+      "asset_id": "en_US-lessac-high",
+      "voice_id": "en_US-lessac-high",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 26,
+      "system": "piper",
+      "asset_id": "en_US-lessac-low",
+      "voice_id": "en_US-lessac-low",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 27,
+      "system": "piper",
+      "asset_id": "en_US-lessac-medium",
+      "voice_id": "en_US-lessac-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 28,
+      "system": "piper",
+      "asset_id": "en_US-libritts-high",
+      "voice_id": "en_US-libritts-high",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 29,
+      "system": "piper",
+      "asset_id": "en_US-libritts_r-medium",
+      "voice_id": "en_US-libritts_r-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 30,
+      "system": "piper",
+      "asset_id": "en_US-ljspeech-high",
+      "voice_id": "en_US-ljspeech-high",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 31,
+      "system": "piper",
+      "asset_id": "en_US-ljspeech-medium",
+      "voice_id": "en_US-ljspeech-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 32,
+      "system": "piper",
+      "asset_id": "en_US-mike-medium",
+      "voice_id": "en_US-mike-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 33,
+      "system": "piper",
+      "asset_id": "en_US-norman-medium",
+      "voice_id": "en_US-norman-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 34,
+      "system": "piper",
+      "asset_id": "en_US-reza_ibrahim-medium",
+      "voice_id": "en_US-reza_ibrahim-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 35,
+      "system": "piper",
+      "asset_id": "en_US-ryan-high",
+      "voice_id": "en_US-ryan-high",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 36,
+      "system": "piper",
+      "asset_id": "en_US-ryan-low",
+      "voice_id": "en_US-ryan-low",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 37,
+      "system": "piper",
+      "asset_id": "en_US-ryan-medium",
+      "voice_id": "en_US-ryan-medium",
+      "state": "active"
+    },
+    {
+      "language": "en",
+      "engine_code": "pi",
+      "slot": 38,
+      "system": "piper",
+      "asset_id": "en_US-sam-medium",
+      "voice_id": "en_US-sam-medium",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "es_AR-daniela-high",
+      "voice_id": "es_AR-daniela-high",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "es_ES-carlfm-x_low",
+      "voice_id": "es_ES-carlfm-x_low",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "es_ES-davefx-medium",
+      "voice_id": "es_ES-davefx-medium",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "es_ES-mls_10246-low",
+      "voice_id": "es_ES-mls_10246-low",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "es_ES-mls_9972-low",
+      "voice_id": "es_ES-mls_9972-low",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 6,
+      "system": "piper",
+      "asset_id": "es_ES-sharvard-medium",
+      "voice_id": "es_ES-sharvard-medium",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 7,
+      "system": "piper",
+      "asset_id": "es_MX-ald-medium",
+      "voice_id": "es_MX-ald-medium",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 8,
+      "system": "piper",
+      "asset_id": "es_MX-ald-x_low",
+      "voice_id": "es_MX-ald-x_low",
+      "state": "active"
+    },
+    {
+      "language": "es",
+      "engine_code": "pi",
+      "slot": 9,
+      "system": "piper",
+      "asset_id": "es_MX-claude-high",
+      "voice_id": "es_MX-claude-high",
+      "state": "active"
+    },
+    {
+      "language": "et",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "et_EE-news-medium",
+      "voice_id": "et_EE-news-medium",
+      "state": "active"
+    },
+    {
+      "language": "eu",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "eu_ES-antton-medium",
+      "voice_id": "eu_ES-antton-medium",
+      "state": "active"
+    },
+    {
+      "language": "eu",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "eu_ES-maider-medium",
+      "voice_id": "eu_ES-maider-medium",
+      "state": "active"
+    },
+    {
+      "language": "fa",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "fa_IR-amir-medium",
+      "voice_id": "fa_IR-amir-medium",
+      "state": "active"
+    },
+    {
+      "language": "fa",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "fa_IR-ganji-medium",
+      "voice_id": "fa_IR-ganji-medium",
+      "state": "active"
+    },
+    {
+      "language": "fa",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "fa_IR-ganji_adabi-medium",
+      "voice_id": "fa_IR-ganji_adabi-medium",
+      "state": "active"
+    },
+    {
+      "language": "fa",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "fa_IR-gyro-medium",
+      "voice_id": "fa_IR-gyro-medium",
+      "state": "active"
+    },
+    {
+      "language": "fa",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "fa_IR-reza_ibrahim-medium",
+      "voice_id": "fa_IR-reza_ibrahim-medium",
+      "state": "active"
+    },
+    {
+      "language": "fi",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "fi_FI-harri-low",
+      "voice_id": "fi_FI-harri-low",
+      "state": "active"
+    },
+    {
+      "language": "fi",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "fi_FI-harri-medium",
+      "voice_id": "fi_FI-harri-medium",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "fr_FR-gilles-low",
+      "voice_id": "fr_FR-gilles-low",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "fr_FR-mls-medium",
+      "voice_id": "fr_FR-mls-medium",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "fr_FR-mls_1840-low",
+      "voice_id": "fr_FR-mls_1840-low",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "fr_FR-siwis-low",
+      "voice_id": "fr_FR-siwis-low",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "fr_FR-siwis-medium",
+      "voice_id": "fr_FR-siwis-medium",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "pi",
+      "slot": 6,
+      "system": "piper",
+      "asset_id": "fr_FR-tom-medium",
+      "voice_id": "fr_FR-tom-medium",
+      "state": "active"
+    },
+    {
+      "language": "fr",
+      "engine_code": "pi",
+      "slot": 7,
+      "system": "piper",
+      "asset_id": "fr_FR-upmc-medium",
+      "voice_id": "fr_FR-upmc-medium",
+      "state": "active"
+    },
+    {
+      "language": "he",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "he_IL-saspeech-medium",
+      "voice_id": "he_IL-saspeech-medium",
+      "state": "active"
+    },
+    {
+      "language": "hi",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "hi_IN-pratham-medium",
+      "voice_id": "hi_IN-pratham-medium",
+      "state": "active"
+    },
+    {
+      "language": "hi",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "hi_IN-priyamvada-medium",
+      "voice_id": "hi_IN-priyamvada-medium",
+      "state": "active"
+    },
+    {
+      "language": "hi",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "hi_IN-rohan-medium",
+      "voice_id": "hi_IN-rohan-medium",
+      "state": "active"
+    },
+    {
+      "language": "hu",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "hu_HU-anna-medium",
+      "voice_id": "hu_HU-anna-medium",
+      "state": "active"
+    },
+    {
+      "language": "hu",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "hu_HU-berta-medium",
+      "voice_id": "hu_HU-berta-medium",
+      "state": "active"
+    },
+    {
+      "language": "hu",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "hu_HU-imre-medium",
+      "voice_id": "hu_HU-imre-medium",
+      "state": "active"
+    },
+    {
+      "language": "hy",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "hy_AM-gor-medium",
+      "voice_id": "hy_AM-gor-medium",
+      "state": "active"
+    },
+    {
+      "language": "id",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "id_ID-news_tts-medium",
+      "voice_id": "id_ID-news_tts-medium",
+      "state": "active"
+    },
+    {
+      "language": "is",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "is_IS-bui-medium",
+      "voice_id": "is_IS-bui-medium",
+      "state": "active"
+    },
+    {
+      "language": "is",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "is_IS-salka-medium",
+      "voice_id": "is_IS-salka-medium",
+      "state": "active"
+    },
+    {
+      "language": "is",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "is_IS-steinn-medium",
+      "voice_id": "is_IS-steinn-medium",
+      "state": "active"
+    },
+    {
+      "language": "is",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "is_IS-ugla-medium",
+      "voice_id": "is_IS-ugla-medium",
+      "state": "active"
+    },
+    {
+      "language": "it",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "it_IT-paola-medium",
+      "voice_id": "it_IT-paola-medium",
+      "state": "active"
+    },
+    {
+      "language": "it",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "it_IT-riccardo-x_low",
+      "voice_id": "it_IT-riccardo-x_low",
+      "state": "active"
+    },
+    {
+      "language": "it",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "it_IT-serena-high",
+      "voice_id": "it_IT-serena-high",
+      "state": "active"
+    },
+    {
+      "language": "it",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "it_IT-serena-medium",
+      "voice_id": "it_IT-serena-medium",
+      "state": "active"
+    },
+    {
+      "language": "ja",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ja_JP-hi_fi_captain-medium",
+      "voice_id": "ja_JP-hi_fi_captain-medium",
+      "state": "active"
+    },
+    {
+      "language": "ka",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ka_GE-natia-medium",
+      "voice_id": "ka_GE-natia-medium",
+      "state": "active"
+    },
+    {
+      "language": "kk",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "kk_KZ-iseke-x_low",
+      "voice_id": "kk_KZ-iseke-x_low",
+      "state": "active"
+    },
+    {
+      "language": "kk",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "kk_KZ-issai-high",
+      "voice_id": "kk_KZ-issai-high",
+      "state": "active"
+    },
+    {
+      "language": "kk",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "kk_KZ-raya-x_low",
+      "voice_id": "kk_KZ-raya-x_low",
+      "state": "active"
+    },
+    {
+      "language": "ko",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ko_KR-kss-medium",
+      "voice_id": "ko_KR-kss-medium",
+      "state": "active"
+    },
+    {
+      "language": "ku",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ku_TR-berfin_renas-medium",
+      "voice_id": "ku_TR-berfin_renas-medium",
+      "state": "active"
+    },
+    {
+      "language": "lb",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "lb_LU-marylux-medium",
+      "voice_id": "lb_LU-marylux-medium",
+      "state": "active"
+    },
+    {
+      "language": "lt",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "lt_LT-reginute1-medium",
+      "voice_id": "lt_LT-reginute1-medium",
+      "state": "active"
+    },
+    {
+      "language": "lv",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "lv_LV-aivars-medium",
+      "voice_id": "lv_LV-aivars-medium",
+      "state": "active"
+    },
+    {
+      "language": "ml",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ml_IN-arjun-medium",
+      "voice_id": "ml_IN-arjun-medium",
+      "state": "active"
+    },
+    {
+      "language": "ml",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "ml_IN-meera-medium",
+      "voice_id": "ml_IN-meera-medium",
+      "state": "active"
+    },
+    {
+      "language": "mr",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "mr_IN-google-medium",
+      "voice_id": "mr_IN-google-medium",
+      "state": "active"
+    },
+    {
+      "language": "ne",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ne_NP-chitwan-medium",
+      "voice_id": "ne_NP-chitwan-medium",
+      "state": "active"
+    },
+    {
+      "language": "ne",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "ne_NP-google-medium",
+      "voice_id": "ne_NP-google-medium",
+      "state": "active"
+    },
+    {
+      "language": "ne",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "ne_NP-google-x_low",
+      "voice_id": "ne_NP-google-x_low",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "nl_BE-nathalie-medium",
+      "voice_id": "nl_BE-nathalie-medium",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "nl_BE-nathalie-x_low",
+      "voice_id": "nl_BE-nathalie-x_low",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "nl_BE-rdh-medium",
+      "voice_id": "nl_BE-rdh-medium",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "nl_BE-rdh-x_low",
+      "voice_id": "nl_BE-rdh-x_low",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "nl_NL-alex-medium",
+      "voice_id": "nl_NL-alex-medium",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 6,
+      "system": "piper",
+      "asset_id": "nl_NL-mls-medium",
+      "voice_id": "nl_NL-mls-medium",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 7,
+      "system": "piper",
+      "asset_id": "nl_NL-mls_5809-low",
+      "voice_id": "nl_NL-mls_5809-low",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 8,
+      "system": "piper",
+      "asset_id": "nl_NL-mls_7432-low",
+      "voice_id": "nl_NL-mls_7432-low",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 9,
+      "system": "piper",
+      "asset_id": "nl_NL-pim-medium",
+      "voice_id": "nl_NL-pim-medium",
+      "state": "active"
+    },
+    {
+      "language": "nl",
+      "engine_code": "pi",
+      "slot": 10,
+      "system": "piper",
+      "asset_id": "nl_NL-ronnie-medium",
+      "voice_id": "nl_NL-ronnie-medium",
+      "state": "active"
+    },
+    {
+      "language": "no",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "no_NO-nvcc-medium",
+      "voice_id": "no_NO-nvcc-medium",
+      "state": "active"
+    },
+    {
+      "language": "no",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "no_NO-talesyntese-medium",
+      "voice_id": "no_NO-talesyntese-medium",
+      "state": "active"
+    },
+    {
+      "language": "pl",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "pl_PL-bass-high",
+      "voice_id": "pl_PL-bass-high",
+      "state": "active"
+    },
+    {
+      "language": "pl",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "pl_PL-darkman-medium",
+      "voice_id": "pl_PL-darkman-medium",
+      "state": "active"
+    },
+    {
+      "language": "pl",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "pl_PL-gosia-medium",
+      "voice_id": "pl_PL-gosia-medium",
+      "state": "active"
+    },
+    {
+      "language": "pl",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "pl_PL-mc_speech-medium",
+      "voice_id": "pl_PL-mc_speech-medium",
+      "state": "active"
+    },
+    {
+      "language": "pl",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "pl_PL-mls_6892-low",
+      "voice_id": "pl_PL-mls_6892-low",
+      "state": "active"
+    },
+    {
+      "language": "pt",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "pt_BR-cadu-medium",
+      "voice_id": "pt_BR-cadu-medium",
+      "state": "active"
+    },
+    {
+      "language": "pt",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "pt_BR-edresson-low",
+      "voice_id": "pt_BR-edresson-low",
+      "state": "active"
+    },
+    {
+      "language": "pt",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "pt_BR-faber-medium",
+      "voice_id": "pt_BR-faber-medium",
+      "state": "active"
+    },
+    {
+      "language": "pt",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "pt_BR-jeff-medium",
+      "voice_id": "pt_BR-jeff-medium",
+      "state": "active"
+    },
+    {
+      "language": "pt",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "pt_PT-tugão-medium",
+      "voice_id": "pt_PT-tugão-medium",
+      "state": "active"
+    },
+    {
+      "language": "ro",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ro_RO-mihai-medium",
+      "voice_id": "ro_RO-mihai-medium",
+      "state": "active"
+    },
+    {
+      "language": "ru",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ru_RU-denis-medium",
+      "voice_id": "ru_RU-denis-medium",
+      "state": "active"
+    },
+    {
+      "language": "ru",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "ru_RU-dmitri-medium",
+      "voice_id": "ru_RU-dmitri-medium",
+      "state": "active"
+    },
+    {
+      "language": "ru",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "ru_RU-irina-medium",
+      "voice_id": "ru_RU-irina-medium",
+      "state": "active"
+    },
+    {
+      "language": "ru",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "ru_RU-ruslan-medium",
+      "voice_id": "ru_RU-ruslan-medium",
+      "state": "active"
+    },
+    {
+      "language": "sk",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "sk_SK-lili-medium",
+      "voice_id": "sk_SK-lili-medium",
+      "state": "active"
+    },
+    {
+      "language": "sl",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "sl_SI-artur-medium",
+      "voice_id": "sl_SI-artur-medium",
+      "state": "active"
+    },
+    {
+      "language": "sq",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "sq_AL-edon-medium",
+      "voice_id": "sq_AL-edon-medium",
+      "state": "active"
+    },
+    {
+      "language": "sr",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "sr_RS-serbski_institut-medium",
+      "voice_id": "sr_RS-serbski_institut-medium",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "sv_SE-alma-medium",
+      "voice_id": "sv_SE-alma-medium",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "sv_SE-lisa-medium",
+      "voice_id": "sv_SE-lisa-medium",
+      "state": "active"
+    },
+    {
+      "language": "sv",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "sv_SE-nst-medium",
+      "voice_id": "sv_SE-nst-medium",
+      "state": "active"
+    },
+    {
+      "language": "sw",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "sw_CD-lanfrica-medium",
+      "voice_id": "sw_CD-lanfrica-medium",
+      "state": "active"
+    },
+    {
+      "language": "te",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "te_IN-maya-medium",
+      "voice_id": "te_IN-maya-medium",
+      "state": "active"
+    },
+    {
+      "language": "te",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "te_IN-padmavathi-medium",
+      "voice_id": "te_IN-padmavathi-medium",
+      "state": "active"
+    },
+    {
+      "language": "te",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "te_IN-venkatesh-medium",
+      "voice_id": "te_IN-venkatesh-medium",
+      "state": "active"
+    },
+    {
+      "language": "th",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "th_TH-tsync2-medium",
+      "voice_id": "th_TH-tsync2-medium",
+      "state": "active"
+    },
+    {
+      "language": "tr",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "tr_TR-dfki-medium",
+      "voice_id": "tr_TR-dfki-medium",
+      "state": "active"
+    },
+    {
+      "language": "uk",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "uk_UA-lada-x_low",
+      "voice_id": "uk_UA-lada-x_low",
+      "state": "active"
+    },
+    {
+      "language": "uk",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "uk_UA-mykyta-high",
+      "voice_id": "uk_UA-mykyta-high",
+      "state": "active"
+    },
+    {
+      "language": "uk",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "uk_UA-oleksa-high",
+      "voice_id": "uk_UA-oleksa-high",
+      "state": "active"
+    },
+    {
+      "language": "uk",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "uk_UA-tetiana-high",
+      "voice_id": "uk_UA-tetiana-high",
+      "state": "active"
+    },
+    {
+      "language": "uk",
+      "engine_code": "pi",
+      "slot": 5,
+      "system": "piper",
+      "asset_id": "uk_UA-ukrainian_tts-medium",
+      "voice_id": "uk_UA-ukrainian_tts-medium",
+      "state": "active"
+    },
+    {
+      "language": "ur",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "ur_PK-aegis_female-medium",
+      "voice_id": "ur_PK-aegis_female-medium",
+      "state": "active"
+    },
+    {
+      "language": "ur",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "ur_PK-fasih-medium",
+      "voice_id": "ur_PK-fasih-medium",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "vi_VN-25hours_single-low",
+      "voice_id": "vi_VN-25hours_single-low",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "vi_VN-vais1000-medium",
+      "voice_id": "vi_VN-vais1000-medium",
+      "state": "active"
+    },
+    {
+      "language": "vi",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "vi_VN-vivos-x_low",
+      "voice_id": "vi_VN-vivos-x_low",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "pi",
+      "slot": 1,
+      "system": "piper",
+      "asset_id": "zh_CN-chaowen-medium",
+      "voice_id": "zh_CN-chaowen-medium",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "pi",
+      "slot": 2,
+      "system": "piper",
+      "asset_id": "zh_CN-huayan-medium",
+      "voice_id": "zh_CN-huayan-medium",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "pi",
+      "slot": 3,
+      "system": "piper",
+      "asset_id": "zh_CN-huayan-x_low",
+      "voice_id": "zh_CN-huayan-x_low",
+      "state": "active"
+    },
+    {
+      "language": "zh",
+      "engine_code": "pi",
+      "slot": 4,
+      "system": "piper",
+      "asset_id": "zh_CN-xiao_ya-medium",
+      "voice_id": "zh_CN-xiao_ya-medium",
+      "state": "active"
     }
   ]
 }

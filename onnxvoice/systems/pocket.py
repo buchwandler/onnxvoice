@@ -2,16 +2,33 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, NoReturn
 
 import numpy as np
+from platformdirs import user_cache_path
 
-from ..errors import RuntimeContractError
+from ..checksums import digest_file, verify_file
+from ..errors import (
+    AssetDownloadError,
+    IntegrityError,
+    OfflineError,
+    OptionalDependencyError,
+    PredefinedVoiceAccessError,
+    PredefinedVoiceIntegrityError,
+    PredefinedVoiceNotFoundError,
+    RuntimeContractError,
+)
 from ..runtime import OnnxSession
-from ..types import InferenceResult, Installation
+from ..store import FileLock
+from ..types import InferenceResult, Installation, validate_safe_component
 from .base import SystemAdapter
 
 POCKET_REQUIRED_METADATA_FIELDS = frozenset(
@@ -40,6 +57,46 @@ _SUPPORTED_DTYPES = {
     "int64",
     "uint8",
 }
+
+PREDEFINED_VOICE_REPOSITORY = "kyutai/pocket-tts"
+PREDEFINED_VOICE_REVISION = "d18466fc6d3ad070afee1bde2f0db8992007c48f"
+
+
+def _download_predefined_voice_file(
+    repo_id: str,
+    filename: str,
+    revision: str,
+    *,
+    cache_dir: Path,
+    local_files_only: bool,
+) -> Path:
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise OptionalDependencyError(
+            "Predefined Pocket voices require huggingface_hub and safetensors. "
+            "Install onnxvoice[pocket]."
+        ) from exc
+    return Path(
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision,
+            cache_dir=str(cache_dir),
+            local_files_only=local_files_only,
+        )
+    )
+
+
+def _load_safetensors(path: Path) -> Mapping[str, np.ndarray]:
+    try:
+        from safetensors.numpy import load_file
+    except ImportError as exc:
+        raise OptionalDependencyError(
+            "Predefined Pocket voices require huggingface_hub and safetensors. "
+            "Install onnxvoice[pocket]."
+        ) from exc
+    return load_file(str(path))
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +234,14 @@ class PocketAdapter(SystemAdapter):
     system = "pocket"
     DEFAULT_MAX_FRAMES = 200
 
-    def __init__(self, installation: Installation, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        installation: Installation,
+        *,
+        voice_cache_dir: str | Path | None = None,
+        offline: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(installation, **kwargs)
         self._sessions: dict[str, OnnxSession] = {}
         self._bundle_metadata: dict[str, Any] | None = None
@@ -186,6 +250,15 @@ class PocketAdapter(SystemAdapter):
         self._mimi_specs: tuple[StateSpec, ...] = ()
         self._validated_contracts: set[str] = set()
         self._validated = False
+        self._predefined_voice_states: dict[
+            tuple[str, str, str, str, str, str], PocketVoiceState
+        ] = {}
+        self._voice_cache_dir = Path(
+            voice_cache_dir
+            if voice_cache_dir is not None
+            else Path(user_cache_path("onnxvoice")) / "pocket-voice-states"
+        )
+        self._offline = offline
 
     def _validate_bundle_metadata(self) -> dict[str, Any]:
         if self._bundle_metadata is not None:
@@ -242,6 +315,42 @@ class PocketAdapter(SystemAdapter):
             raise
         self._validated = True
         return metadata
+
+    @staticmethod
+    def _predefined_voice_names(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+        def parse(raw: Any, field_name: str) -> tuple[str, ...] | None:
+            if raw is None:
+                return None
+            if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, Mapping)):
+                raise RuntimeContractError(f"Pocket {field_name} must be a sequence")
+            names: list[str] = []
+            for name in raw:
+                if not isinstance(name, str):
+                    raise RuntimeContractError(f"Pocket {field_name} must contain strings")
+                try:
+                    validate_safe_component(name, field_name="predefined voice name")
+                except ValueError as exc:
+                    raise RuntimeContractError(str(exc)) from exc
+                if name in names:
+                    raise RuntimeContractError(f"Pocket {field_name} contains duplicate {name!r}")
+                names.append(name)
+            return tuple(names)
+
+        bundle_names = parse(metadata.get("predefined_voices"), "predefined_voices")
+        catalog_names = parse(metadata.get("predefined_voice_names"), "predefined_voice_names")
+        if (
+            bundle_names is not None
+            and catalog_names is not None
+            and set(bundle_names) != set(catalog_names)
+        ):
+            raise RuntimeContractError(
+                "Pocket bundle metadata and catalog disagree about predefined voice names"
+            )
+        return bundle_names if bundle_names is not None else catalog_names or ()
+
+    @property
+    def predefined_voices(self) -> tuple[str, ...]:
+        return self._predefined_voice_names(self._ensure_validated())
 
     @staticmethod
     def _names(session: Any, attribute: str) -> tuple[str, ...]:
@@ -403,6 +512,211 @@ class PocketAdapter(SystemAdapter):
                 f"{label} must have shape [1, sequence, dimension], got {embeddings.shape}"
             )
         return embeddings
+
+    def _cached_predefined_voice_asset(
+        self,
+        name: str,
+        bundle_id: str,
+        asset_path: str,
+    ) -> tuple[Path, str]:
+        cache_key = {
+            "system": "pocket",
+            "asset_kind": "predefined_voice_state",
+            "model_repo": PREDEFINED_VOICE_REPOSITORY,
+            "model_revision": PREDEFINED_VOICE_REVISION,
+            "bundle_id": bundle_id,
+            "voice_name": name,
+        }
+        cache_digest = hashlib.sha256(
+            json.dumps(cache_key, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        cache_dir = self._voice_cache_dir / cache_digest[:2] / cache_digest
+        state_path = cache_dir / f"{name}.safetensors"
+        metadata_path = cache_dir / f"{name}.json"
+        lock_path = self._voice_cache_dir / "locks" / f"{cache_digest}.lock"
+        with FileLock(lock_path):
+            if state_path.exists() or metadata_path.exists():
+                if not state_path.is_file() or not metadata_path.is_file():
+                    raise PredefinedVoiceIntegrityError(
+                        f"Incomplete cached state for predefined Pocket voice {name!r}"
+                    )
+                try:
+                    cache_record = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    if not isinstance(cache_record, dict):
+                        raise ValueError("invalid cached metadata")
+                    if cache_record.get("key") != cache_key:
+                        raise ValueError("cache key mismatch")
+                    size = cache_record["size"]
+                    sha256 = cache_record["sha256"]
+                    if type(size) is not int or size <= 0 or not isinstance(sha256, str):
+                        raise ValueError("invalid cached integrity metadata")
+                    verify_file(state_path, expected_size=size, sha256=sha256)
+                except (OSError, KeyError, TypeError, ValueError, IntegrityError) as exc:
+                    raise PredefinedVoiceIntegrityError(
+                        f"Cached predefined Pocket voice {name!r} failed integrity validation"
+                    ) from exc
+                return state_path, sha256
+
+            try:
+                downloaded = _download_predefined_voice_file(
+                    PREDEFINED_VOICE_REPOSITORY,
+                    asset_path,
+                    PREDEFINED_VOICE_REVISION,
+                    cache_dir=self._voice_cache_dir / "huggingface",
+                    local_files_only=self._offline,
+                )
+            except OptionalDependencyError:
+                raise
+            except Exception as exc:
+                self._raise_predefined_voice_download_error(exc, name=name, bundle_id=bundle_id)
+            if not downloaded.is_file():
+                raise PredefinedVoiceIntegrityError(
+                    f"Downloaded state for predefined Pocket voice {name!r} is missing"
+                )
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
+            os.close(fd)
+            temporary_state = Path(temporary_name)
+            try:
+                shutil.copyfile(downloaded, temporary_state)
+                size = temporary_state.stat().st_size
+                if size <= 0:
+                    raise PredefinedVoiceIntegrityError(
+                        f"Downloaded state for predefined Pocket voice {name!r} is empty"
+                    )
+                sha256 = digest_file(temporary_state)
+                os.replace(temporary_state, state_path)
+                record = {"key": cache_key, "size": size, "sha256": sha256}
+                fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=cache_dir)
+                os.close(fd)
+                temporary_metadata = Path(temporary_name)
+                try:
+                    temporary_metadata.write_text(
+                        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
+                    )
+                    os.replace(temporary_metadata, metadata_path)
+                finally:
+                    temporary_metadata.unlink(missing_ok=True)
+            finally:
+                temporary_state.unlink(missing_ok=True)
+            return state_path, sha256
+
+    @staticmethod
+    def _raise_predefined_voice_download_error(
+        exc: Exception, *, name: str, bundle_id: str
+    ) -> NoReturn:
+        error_name = type(exc).__name__
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if error_name in {"LocalEntryNotFoundError", "OfflineModeIsEnabled"}:
+            raise OfflineError(
+                f"Predefined Pocket voice {name!r} is not available in the local cache "
+                "and offline mode is enabled."
+            ) from exc
+        if error_name == "GatedRepoError" or status in {401, 403}:
+            raise PredefinedVoiceAccessError(
+                f"Predefined Pocket voice {name!r} requires access to "
+                f"{PREDEFINED_VOICE_REPOSITORY}. Accept the model terms and authenticate "
+                "with Hugging Face, then retry."
+            ) from exc
+        if (
+            error_name in {"EntryNotFoundError", "RevisionNotFoundError", "RepositoryNotFoundError"}
+            or status == 404
+        ):
+            raise PredefinedVoiceNotFoundError(
+                f"Predefined Pocket voice {name!r} is not present for bundle "
+                f"{bundle_id!r} at the pinned upstream revision."
+            ) from exc
+        raise AssetDownloadError(
+            f"Could not download predefined Pocket voice {name!r} for bundle {bundle_id!r}."
+        ) from exc
+
+    @staticmethod
+    def _predefined_voice_embeddings(
+        state_path: Path, *, expected_dimension: int, name: str
+    ) -> np.ndarray:
+        try:
+            tensors = _load_safetensors(state_path)
+        except OptionalDependencyError:
+            raise
+        except Exception as exc:
+            raise PredefinedVoiceIntegrityError(
+                f"Could not load predefined Pocket voice state {name!r}"
+            ) from exc
+        if not isinstance(tensors, Mapping) or len(tensors) != 1:
+            raise PredefinedVoiceIntegrityError(
+                f"Predefined Pocket voice state {name!r} must contain exactly one embedding tensor"
+            )
+        embeddings = np.asarray(next(iter(tensors.values())))
+        if not np.issubdtype(embeddings.dtype, np.floating):
+            raise PredefinedVoiceIntegrityError(
+                f"Predefined Pocket voice state {name!r} must use a floating-point dtype"
+            )
+        if embeddings.ndim == 2:
+            embeddings = embeddings[None, ...]
+        if (
+            embeddings.ndim != 3
+            or embeddings.shape[0] != 1
+            or embeddings.shape[1] == 0
+            or embeddings.shape[2] != expected_dimension
+        ):
+            raise PredefinedVoiceIntegrityError(
+                f"Predefined Pocket voice state {name!r} has shape {embeddings.shape}; "
+                f"expected [1, sequence, {expected_dimension}]"
+            )
+        if not np.isfinite(embeddings).all():
+            raise PredefinedVoiceIntegrityError(
+                f"Predefined Pocket voice state {name!r} contains non-finite values"
+            )
+        return np.array(embeddings, dtype=np.float32, copy=True)
+
+    def prepare_predefined_voice(self, name: str) -> PocketVoiceState:
+        metadata = self._ensure_validated()
+        available = self._predefined_voice_names(metadata)
+        if not isinstance(name, str) or name not in available:
+            names = ", ".join(available) or "none"
+            bundle_name = metadata.get("bundle_name") or self.installation.id
+            raise RuntimeContractError(
+                f"Unknown predefined Pocket voice {name!r} for bundle {bundle_name!r}. "
+                f"Available voices: {names}."
+            )
+        bundle_name = str(metadata.get("bundle_name") or self.installation.id)
+        try:
+            validate_safe_component(bundle_name, field_name="bundle id")
+        except ValueError as exc:
+            raise RuntimeContractError(str(exc)) from exc
+        cache_key = (
+            "pocket",
+            "predefined_voice_state",
+            PREDEFINED_VOICE_REPOSITORY,
+            PREDEFINED_VOICE_REVISION,
+            bundle_name,
+            name,
+        )
+        cached = self._predefined_voice_states.get(cache_key)
+        if cached is not None:
+            return cached
+        asset_path = f"languages/{bundle_name}/embeddings/{name}.safetensors"
+        state_path, sha256 = self._cached_predefined_voice_asset(name, bundle_name, asset_path)
+        expected_dimension = int(metadata["conditioning_dim"])
+        embeddings = self._predefined_voice_embeddings(
+            state_path, expected_dimension=expected_dimension, name=name
+        )
+        sample_rate = int(metadata["sample_rate"])
+        voice_state = PocketVoiceState(
+            embeddings=embeddings,
+            sample_rate=sample_rate,
+            metadata={
+                "sample_rate": sample_rate,
+                "bundle_id": bundle_name,
+                "voice_name": name,
+                "model_repo": PREDEFINED_VOICE_REPOSITORY,
+                "model_revision": PREDEFINED_VOICE_REVISION,
+                "asset_path": asset_path,
+                "sha256": sha256,
+            },
+        )
+        self._predefined_voice_states[cache_key] = voice_state
+        return voice_state
 
     def prepare_voice(self, audio: np.ndarray, *, sample_rate: int) -> PocketVoiceState:
         metadata = self._ensure_validated()
@@ -723,3 +1037,4 @@ class PocketAdapter(SystemAdapter):
         self._mimi_specs = ()
         self._validated_contracts.clear()
         self._validated = False
+        self._predefined_voice_states.clear()

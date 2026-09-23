@@ -381,6 +381,9 @@ def _parse_kokoro(data: dict[str, Any]) -> list[CatalogItem]:
         raise CatalogError("Kokoro catalog is missing the 'models' mapping")
     result: list[CatalogItem] = []
     for model_id, entry in models.items():
+        distributions = entry.get("distributions", ())
+        if not any(distribution.get("runtime_ready", True) for distribution in distributions):
+            continue
         result.append(_parse_kokoro_entry(model_id, entry))
     return result
 
@@ -545,6 +548,19 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             )
         voice_names, voice_states = _parse_pocket_voice_states(entry, bundle_id)
 
+        raw_predefined_names = entry.get("predefined_voice_names") or []
+        if not isinstance(raw_predefined_names, Sequence) or isinstance(
+            raw_predefined_names, (str, bytes)
+        ):
+            raise CatalogError(f"{bundle_id}: predefined_voice_names must be a sequence")
+        predefined_voice_names: list[str] = []
+        for name in raw_predefined_names:
+            if not isinstance(name, str):
+                raise CatalogError(f"{bundle_id}: predefined voice names must be strings")
+            _require_pocket_safe_id(name, f"{bundle_id} predefined voice name")
+            if name in predefined_voice_names:
+                raise CatalogError(f"{bundle_id}: duplicate predefined voice {name!r}")
+            predefined_voice_names.append(name)
         metadata = {
             **(entry.get("metadata") or {}),
             "language": entry.get("language"),
@@ -559,6 +575,7 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             "remove_semicolons": entry.get("remove_semicolons"),
             "pad_with_spaces_for_short_inputs": entry.get("pad_with_spaces_for_short_inputs"),
             "voice_states": voice_states,
+            "predefined_voice_names": predefined_voice_names,
             "canonical_catalog": canonical,
         }
         result.append(

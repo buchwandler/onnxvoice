@@ -428,6 +428,7 @@ def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
     }
     item = _parse_pocket(catalog)[0]
     assert item.voices == ()
+    assert item.metadata["predefined_voice_names"] == ["alba"]
     entry["voice_states"] = [
         {
             "name": "alba",

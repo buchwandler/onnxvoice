@@ -228,12 +228,15 @@ class OnnxVoice:
                 raise ValueError("Use provider or providers, not both")
             providers = provider
         adapter = get_adapter(installation.system)
-        return adapter(
-            installation,
-            providers=providers,
-            provider_options=provider_options,
-            session_options=session_options,
-        )
+        adapter_kwargs: dict[str, Any] = {
+            "providers": providers,
+            "provider_options": provider_options,
+            "session_options": session_options,
+        }
+        if installation.system == "pocket":
+            adapter_kwargs["voice_cache_dir"] = self.store.root / "pocket-voice-states"
+            adapter_kwargs["offline"] = self.store.offline
+        return adapter(installation, **adapter_kwargs)
 
     @staticmethod
     def open_local(
@@ -252,6 +255,8 @@ class OnnxVoice:
         provider: str | None = None,
         provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
         session_options: Any | None = None,
+        voice_cache_dir: str | Path | None = None,
+        offline: bool = False,
     ):
         """Open explicit local files without registering or copying them."""
         if provider is not None:
@@ -323,12 +328,15 @@ class OnnxVoice:
             metadata=merged_metadata,
         )
         adapter = get_adapter(system)
-        return adapter(
-            installation,
-            providers=providers,
-            provider_options=provider_options,
-            session_options=session_options,
-        )
+        adapter_kwargs: dict[str, Any] = {
+            "providers": providers,
+            "provider_options": provider_options,
+            "session_options": session_options,
+        }
+        if system == "pocket":
+            adapter_kwargs["voice_cache_dir"] = voice_cache_dir
+            adapter_kwargs["offline"] = offline
+        return adapter(installation, **adapter_kwargs)
 
     def resolve(
         self,

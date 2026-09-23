@@ -226,6 +226,29 @@ def test_kokoro_list_uses_each_models_own_default_distribution(tmp_path):
     assert by_id["v1.1-zh"].metadata["distribution_id"] == "dist-zh"
 
 
+def test_kokoro_list_skips_models_without_runtime_ready_distribution(tmp_path):
+    raw = {
+        "models": {
+            "kokoro-en-us": {
+                "language_codes": ["en-US"],
+                "runtime": {"voices": ["af_heart"]},
+                "distributions": [{"id": "cpu", "artifacts": [{"role": "model", "id": "en.onnx"}]}],
+            },
+            "he-hebrew-nc": {
+                "language_codes": ["he"],
+                "distributions": [{"id": "unsupported", "runtime_ready": False, "artifacts": []}],
+            },
+        }
+    }
+    source = tmp_path / "kokoro.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    assert [item.id for item in client.list("kokoro")] == ["kokoro-en-us"]
+    with pytest.raises(CatalogError, match="no runtime-ready distributions"):
+        client.resolve("kokoro:he-hebrew-nc")
+
+
 def test_kokoro_timing_contract_is_normalized(tmp_path):
     raw = {
         "models": {

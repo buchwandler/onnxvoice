@@ -375,3 +375,38 @@ class TestNoNetworkAccessForLocalOpening:
 
         assert runtime is not None
         runtime.close()
+
+
+def test_manager_passes_voice_cache_and_offline_settings_to_pocket(tmp_path: Path) -> None:
+    runtime = OnnxVoice(cache_dir=tmp_path / "managed-cache", offline=True)
+    installation = _make_installation()
+    with (
+        patch("onnxvoice.manager.get_adapter", return_value=MagicMock()) as get_adapter,
+        patch.object(runtime.store, "verify"),
+    ):
+        runtime.open(installation)
+
+    managed_adapter = get_adapter.return_value
+    managed_adapter.assert_called_once_with(
+        installation,
+        providers=None,
+        provider_options=None,
+        session_options=None,
+        voice_cache_dir=runtime.store.root / "pocket-voice-states",
+        offline=True,
+    )
+
+    model = tmp_path / "local.onnx"
+    model.write_bytes(b"local")
+    voice_cache = tmp_path / "local-voice-cache"
+    with patch("onnxvoice.manager.get_adapter", return_value=MagicMock()) as get_adapter:
+        OnnxVoice.open_local(
+            system="pocket",
+            model=model,
+            voice_cache_dir=voice_cache,
+            offline=True,
+        )
+
+    local_adapter = get_adapter.return_value
+    assert local_adapter.call_args.kwargs["voice_cache_dir"] == voice_cache
+    assert local_adapter.call_args.kwargs["offline"] is True
