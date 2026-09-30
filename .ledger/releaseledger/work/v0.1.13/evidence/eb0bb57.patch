@@ -1,0 +1,1420 @@
+ README.md                                  |   6 +
+ docs/architecture.md                       |   9 ++
+ onnxvoice/__init__.py                      |  12 ++
+ onnxvoice/catalog.py                       |  73 +++++++++++++
+ onnxvoice/catalog_tools/piper.py           |  37 +++++--
+ onnxvoice/catalog_tools/pocket.py          | 124 ++++++++++++++++++++-
+ onnxvoice/catalog_tools/voice_selectors.py |  20 +++-
+ onnxvoice/inventory.py                     | 170 +++++++++++++++++++++++------
+ onnxvoice/manager.py                       |  12 +-
+ onnxvoice/types.py                         |   9 ++
+ onnxvoice/voice_selectors.py               |   5 +-
+ tests/test_catalog_tools.py                |  64 +++++++++++
+ tests/test_inventory.py                    | 146 ++++++++++++++++++++++++-
+ tests/test_pocket_catalog.py               |  55 ++++++++++
+ tests/test_pocket_catalog_tools.py         |  85 +++++++++++++++
+ tests/test_voice_selectors.py              | 127 +++++++++++++++++++++
+ 16 files changed, 896 insertions(+), 58 deletions(-)
+
+diff --git a/README.md b/README.md
+index 8cc73e9..afc88f5 100644
+--- a/README.md
++++ b/README.md
+@@ -74,6 +74,12 @@ language filter/input locale: en-us or en-US
+ canonical selector language key: en_us
+ ```
+
++Descriptive metadata is separate from selector identity. Catalog `locale` is the most specific authoritative language tag, such as `en-US`; `language` is its lowercase base language, such as `en`. The selector language is a permanent registry namespace and may differ: Piper English uses `en` for both `en-US` and `en-GB`, while Kokoro uses `en_us` and `en_gb`. Selector strings and slots are never rewritten to match descriptive locale tags.
++
++Language filtering follows compatibility rather than exact string equality. `--lang en` matches `en`, `en-US`, and `en-GB`. `--lang en-US` matches `en-US` and a generic `en` catalog capability, but not the conflicting specific locale `en-GB`.
++
++Voice records expose normalized `metadata.language`, `metadata.locale`, `metadata.language_label`, and `metadata.gender` alongside the existing `languages` and `gender` fields. Optional Pocket `voice_details` provides authoritative per-voice descriptions and remains separate from `voice_states`; descriptive details alone cannot assign a stable selector. Gender is never inferred, so `unknown` is expected when the catalog has no authoritative value.
++Language labels prefer an authoritative human-readable source label, then the locale or base language; a bare region code such as `US` is not used as a label.
+ `ko` is the permanent Kokoro code, `pi` is the permanent Piper code, and `po` is the permanent Pocket code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Pocket identities are bundle-scoped `(pocket, bundle_id, voice_id)` records and require explicit catalog `voice_states`. The current canonical Pocket catalog exposes predefined names without those records, so they remain unassigned and receive no Pocket selector. Use the selector API to resolve the complete identity of assigned selectors:
+
+ ```python
+diff --git a/docs/architecture.md b/docs/architecture.md
+index beab0cc..748e8a2 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -10,6 +10,15 @@ This identity alias is distinct from producer semantic voice aliases and style p
+
+ Pocket selector identity is bundle-scoped as `(pocket, bundle_id, voice_id)` and is allocated only when canonical catalog metadata includes an explicit matching `voice_states` record. `predefined_voice_names` alone is not sufficient to construct a stable identity. The current canonical Pocket catalog has no explicit `voice_states`, so its predefined voices remain unassigned. Selector capability is independent of runtime adapter registration.
+
++## Descriptive language and voice metadata
++
++Descriptive metadata does not define selector identity. `locale` records the most specific source-backed language tag, while `language` is its lowercase base language. Selector namespaces remain permanent: English Piper locales use `en`, while Kokoro `en-US` and `en-GB` use `en_us` and `en_gb`. Existing selector mappings are not rewritten when descriptive tags are normalized.
++
++Language compatibility is deliberately symmetric for generic capabilities: a generic `en` capability satisfies an `en-US` request, and a generic `en` request matches specific English locales. Conflicting specific locales such as `en-US` and `en-GB` do not match.
++
++Language labels prefer authoritative human-readable source names, then locale/base tags, and never use a bare region code such as `US`.
++`VoiceRecord.metadata` is the normalized projection for language, locale, language label, and gender; the existing `languages` and `gender` fields remain available. Gender is taken only from explicit authoritative metadata, with `unknown` as the fallback. Pocket `voice_details` describes declared voices independently of asset identity. Only explicit `voice_states` can qualify a Pocket voice for permanent selector assignment.
++
+ ## Runtime boundary
+
+ ```text
+diff --git a/onnxvoice/__init__.py b/onnxvoice/__init__.py
+index 037575b..d91ca42 100644
+--- a/onnxvoice/__init__.py
++++ b/onnxvoice/__init__.py
+@@ -21,6 +21,12 @@ from .errors import (
+     VoiceSelectorRegistryError,
+     VoiceSelectorRetiredError,
+ )
++from .inventory import (
++    language_base,
++    language_tags_match,
++    normalize_language_code,
++    normalize_language_tag,
++)
+ from .manager import OnnxVoice
+ from .runtime import OnnxSession, available_providers
+ from .store import AssetStore
+@@ -36,6 +42,7 @@ from .types import (
+     SessionDiagnostic,
+     TensorSpec,
+     VoiceIdentity,
++    VoiceMetadata,
+     VoiceRecord,
+ )
+ from .voice_selectors import (
+@@ -100,6 +107,10 @@ __all__ = [
+     "__version__",
+     "OnnxVoice",
+     "CatalogClient",
++    "language_base",
++    "language_tags_match",
++    "normalize_language_code",
++    "normalize_language_tag",
+     "AssetStore",
+     "OnnxSession",
+     "Artifact",
+@@ -119,6 +130,7 @@ __all__ = [
+     "available_providers",
+     "VoiceIdentity",
+     "VoiceRecord",
++    "VoiceMetadata",
+     "format_voice_selector",
+     "parse_voice_selector",
+     "is_voice_selector",
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index a9d266f..2d221f4 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -14,6 +14,7 @@ from typing import Any
+ from platformdirs import user_cache_path
+
+ from .errors import AssetNotFoundError, CatalogError, OfflineError
++from .inventory import VALID_GENDERS, language_base, normalize_language_tag
+ from .store import FileLock, ProgressCallback
+ from .types import Artifact, AssetProgress, CatalogItem, validate_relative_path
+
+@@ -504,6 +505,72 @@ def _parse_pocket_voice_states(
+     return tuple(names), records
+
+
++def _normalize_pocket_voice_tag(value: Any, field: str, bundle_id: str) -> str:
++    if value is None or value == "":
++        return ""
++    if not isinstance(value, str):
++        raise CatalogError(f"{bundle_id}: voice detail {field} must be a string")
++    normalized = normalize_language_tag(value)
++    if not normalized or any(
++        not part or any(char.isspace() for char in part) for part in normalized.split("-")
++    ):
++        raise CatalogError(f"{bundle_id}: invalid voice detail {field}")
++    if not normalized.split("-", 1)[0].isalpha():
++        raise CatalogError(f"{bundle_id}: invalid voice detail {field}")
++    return normalized
++
++
++def _parse_pocket_voice_details(
++    raw: Any, bundle_id: str, declared_names: set[str]
++) -> list[dict[str, str]]:
++    if raw is None:
++        return []
++    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
++        raise CatalogError(f"{bundle_id}: voice_details must be a sequence")
++    result: list[dict[str, str]] = []
++    seen: set[str] = set()
++    allowed = {"id", "language", "locale", "language_label", "gender"}
++    for index, value in enumerate(raw):
++        if not isinstance(value, Mapping):
++            raise CatalogError(f"{bundle_id}: voice detail {index} must be an object")
++        if set(value) - allowed:
++            raise CatalogError(f"{bundle_id}: voice detail {index} has unexpected fields")
++        voice_id = value.get("id")
++        if not isinstance(voice_id, str):
++            raise CatalogError(f"{bundle_id}: voice detail {index} has no id")
++        _require_pocket_safe_id(voice_id, f"{bundle_id} voice detail id")
++        if voice_id not in declared_names:
++            raise CatalogError(f"{bundle_id}: voice detail references unknown voice {voice_id!r}")
++        if voice_id in seen:
++            raise CatalogError(f"{bundle_id}: duplicate voice detail {voice_id!r}")
++        seen.add(voice_id)
++
++        language_tag = _normalize_pocket_voice_tag(value.get("language"), "language", bundle_id)
++        locale = _normalize_pocket_voice_tag(value.get("locale"), "locale", bundle_id)
++        if language_tag and locale and language_base(language_tag) != language_base(locale):
++            raise CatalogError(f"{bundle_id}/{voice_id}: language and locale do not agree")
++        locale = locale or language_tag
++        language = language_base(locale) if locale else ""
++
++        label = value.get("language_label")
++        label = "" if not isinstance(label, str) else label.strip()
++        if not label or (len(label) == 2 and label.isalpha() and label.isupper()):
++            label = locale or language or "unknown"
++        gender = value.get("gender", "unknown")
++        if not isinstance(gender, str) or gender not in VALID_GENDERS:
++            raise CatalogError(f"{bundle_id}/{voice_id}: invalid gender")
++        result.append(
++            {
++                "id": voice_id,
++                "language": language,
++                "locale": locale,
++                "language_label": label,
++                "gender": gender,
++            }
++        )
++    return result
++
++
+ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+     if "schema" in data and data["schema"] != 1:
+         raise CatalogError("Pocket catalog schema must be 1")
+@@ -606,6 +673,10 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+             if name in predefined_voice_names:
+                 raise CatalogError(f"{bundle_id}: duplicate predefined voice {name!r}")
+             predefined_voice_names.append(name)
++        declared_voice_names = set(voice_names) | set(predefined_voice_names)
++        voice_details = _parse_pocket_voice_details(
++            entry.get("voice_details"), bundle_id, declared_voice_names
++        )
+         metadata = {
+             **(entry.get("metadata") or {}),
+             "language": entry.get("language"),
+@@ -623,6 +694,8 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+             "predefined_voice_names": predefined_voice_names,
+             "canonical_catalog": canonical,
+         }
++        if "voice_details" in entry:
++            metadata["voice_details"] = voice_details
+         result.append(
+             CatalogItem(
+                 system="pocket",
+diff --git a/onnxvoice/catalog_tools/piper.py b/onnxvoice/catalog_tools/piper.py
+index 7101bdd..f422aad 100644
+--- a/onnxvoice/catalog_tools/piper.py
++++ b/onnxvoice/catalog_tools/piper.py
+@@ -18,6 +18,7 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+ _DIGEST_RE = re.compile(r"^[0-9a-f]{32}$")
+ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ _SAFE_NAME_RE = re.compile(r"^[^\W_][\w.-]*$", re.UNICODE)
++_VALID_GENDERS = frozenset({"male", "female", "neutral", "unknown"})
+
+
+ class CatalogError(ValueError):
+@@ -171,6 +172,12 @@ def build_catalog(
+         num_speakers = item.get("num_speakers")
+         _require(isinstance(name, str) and bool(name), f"{voice_id}: invalid name")
+         _require(isinstance(quality, str) and bool(quality), f"{voice_id}: invalid quality")
++        if "gender" in item:
++            gender = item["gender"]
++            _require(
++                isinstance(gender, str) and gender in _VALID_GENDERS,
++                f"{voice_id}: invalid gender",
++            )
+         _require(
+             isinstance(num_speakers, int)
+             and not isinstance(num_speakers, bool)
+@@ -191,6 +198,7 @@ def build_catalog(
+             "id": voice_id,
+             "name": name,
+             "language": language,
++            **({"gender": item["gender"]} if "gender" in item else {}),
+             "quality": quality,
+             "num_speakers": num_speakers,
+             "speaker_id_map": speaker_id_map,
+@@ -392,20 +400,27 @@ def verify_catalog(catalog: dict[str, Any]) -> None:
+         _safe_name(voice_id, "voice id")
+         _require(isinstance(voice, dict), f"{voice_id}: voice must be an object")
+         voice = cast(dict[str, Any], voice)
++        required_fields = {
++            "id",
++            "name",
++            "language",
++            "quality",
++            "num_speakers",
++            "speaker_id_map",
++            "aliases",
++            "artifacts",
++        }
++        fields = set(voice)
+         _require(
+-            set(voice)
+-            == {
+-                "id",
+-                "name",
+-                "language",
+-                "quality",
+-                "num_speakers",
+-                "speaker_id_map",
+-                "aliases",
+-                "artifacts",
+-            },
++            fields == required_fields or fields == required_fields | {"gender"},
+             f"{voice_id}: invalid voice fields",
+         )
++        if "gender" in voice:
++            gender = voice["gender"]
++            _require(
++                isinstance(gender, str) and gender in _VALID_GENDERS,
++                f"{voice_id}: invalid gender",
++            )
+         _require(voice.get("id") == voice_id, f"{voice_id}: mismatched id")
+         _require(
+             isinstance(voice.get("name"), str) and bool(voice["name"]),
+diff --git a/onnxvoice/catalog_tools/pocket.py b/onnxvoice/catalog_tools/pocket.py
+index a833201..6c63bc0 100644
+--- a/onnxvoice/catalog_tools/pocket.py
++++ b/onnxvoice/catalog_tools/pocket.py
+@@ -11,6 +11,8 @@ import urllib.request
+ from pathlib import Path
+ from typing import Any, cast
+
++from ..inventory import VALID_GENDERS, language_base, normalize_language_tag
++
+ DEFAULT_REPOSITORY = "KevinAHM/pocket-tts-onnx"
+ DEFAULT_REVISION = "main"
+ USER_AGENT = "onnxvoice/0.1.0"
+@@ -484,6 +486,79 @@ def _normalize_voice_states(bundle_id: str, raw: Any) -> list[dict[str, Any]]:
+     return normalized
+
+
++def _normalize_voice_detail_tag(value: Any, field: str, bundle_id: str) -> str:
++    if value is None or value == "":
++        return ""
++    _require(isinstance(value, str), f"{bundle_id}: voice detail {field} must be a string")
++    normalized = normalize_language_tag(value)
++    parts = normalized.split("-")
++    _require(
++        bool(normalized)
++        and parts[0].isalpha()
++        and all(part and not any(char.isspace() for char in part) for part in parts),
++        f"{bundle_id}: invalid voice detail {field}",
++    )
++    return normalized
++
++
++def _normalize_voice_details(
++    bundle_id: str, raw: Any, declared_names: set[str]
++) -> list[dict[str, str]]:
++    if raw is None:
++        return []
++    _require(isinstance(raw, list), f"{bundle_id}: voice_details must be a list")
++    normalized: list[dict[str, str]] = []
++    seen: set[str] = set()
++    allowed = {"id", "language", "locale", "language_label", "gender"}
++    for index, value in enumerate(raw):
++        _require(
++            isinstance(value, dict),
++            f"{bundle_id}: voice detail {index} must be an object",
++        )
++        _require(
++            not (set(value) - allowed),
++            f"{bundle_id}: voice detail {index} has unexpected fields",
++        )
++        voice_id = value.get("id")
++        _safe_name(voice_id, f"{bundle_id} voice detail id")
++        assert isinstance(voice_id, str)
++        _require(
++            voice_id in declared_names,
++            f"{bundle_id}: voice detail references unknown voice {voice_id!r}",
++        )
++        _require(voice_id not in seen, f"{bundle_id}: duplicate voice detail {voice_id!r}")
++        seen.add(voice_id)
++
++        language_tag = _normalize_voice_detail_tag(value.get("language"), "language", bundle_id)
++        locale = _normalize_voice_detail_tag(value.get("locale"), "locale", bundle_id)
++        _require(
++            not language_tag or not locale or language_base(language_tag) == language_base(locale),
++            f"{bundle_id}/{voice_id}: language and locale do not agree",
++        )
++        locale = locale or language_tag
++        language = language_base(locale) if locale else ""
++
++        label = value.get("language_label")
++        label = "" if not isinstance(label, str) else label.strip()
++        if not label or (len(label) == 2 and label.isalpha() and label.isupper()):
++            label = locale or language or "unknown"
++        gender = value.get("gender", "unknown")
++        _require(
++            isinstance(gender, str) and gender in VALID_GENDERS,
++            f"{bundle_id}/{voice_id}: invalid gender",
++        )
++        normalized.append(
++            {
++                "id": voice_id,
++                "language": language,
++                "locale": locale,
++                "language_label": label,
++                "gender": gender,
++            }
++        )
++    return normalized
++
++
+ def _artifact_entries(raw: Any) -> list[tuple[str, Any]]:
+     if isinstance(raw, dict):
+         return list(raw.items())
+@@ -631,6 +706,24 @@ def _parse_bundle_entry(
+             )
+
+     voice_states = _normalize_voice_states(bundle_id, bundle_data.get("voice_states"))
++    raw_predefined_names = bundle_data.get("predefined_voice_names") or []
++    _require(
++        isinstance(raw_predefined_names, list),
++        f"{bundle_id}: predefined_voice_names must be a list",
++    )
++    predefined_voice_names: list[str] = []
++    for name in raw_predefined_names:
++        _safe_name(name, f"{bundle_id} predefined voice name")
++        assert isinstance(name, str)
++        _require(
++            name not in predefined_voice_names,
++            f"{bundle_id}: duplicate predefined voice {name!r}",
++        )
++        predefined_voice_names.append(name)
++    declared_voice_names = {state["name"] for state in voice_states} | set(predefined_voice_names)
++    voice_details = _normalize_voice_details(
++        bundle_id, bundle_data.get("voice_details"), declared_voice_names
++    )
+     entry: dict[str, Any] = {
+         "id": bundle_id,
+         "aliases": aliases,
+@@ -646,11 +739,13 @@ def _parse_bundle_entry(
+                 artifact["quality"] or "",
+             ),
+         ),
+-        "predefined_voice_names": bundle_data.get("predefined_voice_names") or [],
++        "predefined_voice_names": predefined_voice_names,
+         "metadata": bundle_data.get("metadata") or {},
+     }
+     if voice_states:
+         entry["voice_states"] = voice_states
++    if "voice_details" in bundle_data:
++        entry["voice_details"] = voice_details
+     for key in (
+         "max_token_per_chunk",
+         "model_recommended_frames_after_eos",
+@@ -728,6 +823,32 @@ def _verify_voice_states(bundle: dict[str, Any], bundle_id: str) -> None:
+     )
+
+
++def _verify_voice_details(bundle: dict[str, Any], bundle_id: str) -> None:
++    if "voice_details" not in bundle:
++        return
++    raw_states = bundle.get("voice_states", [])
++    raw_predefined = bundle.get("predefined_voice_names", [])
++    _require(isinstance(raw_states, list), f"{bundle_id}: voice_states must be a list")
++    _require(
++        isinstance(raw_predefined, list),
++        f"{bundle_id}: predefined_voice_names must be a list",
++    )
++    state_names = {state["name"] for state in raw_states}
++    predefined_names: set[str] = set()
++    for name in raw_predefined:
++        _safe_name(name, f"{bundle_id} predefined voice name")
++        assert isinstance(name, str)
++        _require(name not in predefined_names, f"{bundle_id}: duplicate predefined voice {name!r}")
++        predefined_names.add(name)
++    normalized = _normalize_voice_details(
++        bundle_id, bundle.get("voice_details"), state_names | predefined_names
++    )
++    _require(
++        bundle["voice_details"] == normalized,
++        f"{bundle_id}: voice_details must use the normalized record shape",
++    )
++
++
+ def _verify_artifact(
+     artifact: dict[str, Any], bundle_id: str, repository: str, revision: str
+ ) -> tuple[str, str | None]:
+@@ -843,6 +964,7 @@ def verify_catalog(catalog: Any) -> None:
+         _require(isinstance(raw_bundle, dict), f"{map_id}: bundle must be an object")
+         bundle = cast(dict[str, Any], raw_bundle)
+         _verify_voice_states(bundle, map_id)
++        _verify_voice_details(bundle, map_id)
+         for field in ("language", "layers", "bundle_schema", "profiles", "artifacts"):
+             _require(field in bundle, f"{map_id}: missing required field {field!r}")
+         _require(
+diff --git a/onnxvoice/catalog_tools/voice_selectors.py b/onnxvoice/catalog_tools/voice_selectors.py
+index a6d1970..83c7827 100644
+--- a/onnxvoice/catalog_tools/voice_selectors.py
++++ b/onnxvoice/catalog_tools/voice_selectors.py
+@@ -12,7 +12,7 @@ from pathlib import Path
+ from typing import Any
+
+ from ..catalog import CatalogClient
+-from ..inventory import language_codes_from_metadata
++from ..inventory import language_base, language_codes_from_metadata, normalize_language_tag
+ from ..types import CatalogItem
+ from ..voice_selectors import (
+     VoiceSelectorRegistry,
+@@ -20,12 +20,24 @@ from ..voice_selectors import (
+     format_voice_selector,
+     get_voice_selector_registry,
+     load_voice_selector_registry,
+-    parse_voice_selector,
+     selector_for_voice,
+     voice_selector_systems,
+ )
+
+
++def selector_language_for(system: str, locale: str) -> str:
++    """Return the permanent selector namespace for a descriptive locale."""
++    tag = normalize_language_tag(locale)
++    if not tag:
++        raise ValueError(f"invalid selector locale: {locale!r}")
++    system = system.casefold()
++    if system == "piper":
++        return language_base(tag)
++    if system in {"kokoro", "pocket"}:
++        return tag.casefold().replace("-", "_")
++    raise ValueError(f"unsupported selector system: {system!r}")
++
++
+ def unassigned_catalog_voices(
+     items: Iterable[CatalogItem],
+     *,
+@@ -88,9 +100,7 @@ def append_unassigned_registry_entries(
+             engine_code = registry.engine_codes[item.system]
+         except KeyError as exc:
+             raise ValueError(f"selector registry has no engine code for {item.system!r}") from exc
+-        language = parse_voice_selector(
+-            format_voice_selector(languages[0], engine_code, 1)
+-        ).language
++        language = selector_language_for(item.system, languages[0])
+         key = (item.system, asset_id, voice_id)
+         candidate = (language, engine_code, item)
+         previous = pending.get(key)
+diff --git a/onnxvoice/inventory.py b/onnxvoice/inventory.py
+index a0b843c..27ac3dc 100644
+--- a/onnxvoice/inventory.py
++++ b/onnxvoice/inventory.py
+@@ -12,29 +12,47 @@ from collections.abc import Iterable, Mapping
+ from dataclasses import dataclass
+ from typing import Any, Literal
+
+-from .types import Artifact, CatalogItem, Installation, InstalledArtifact
++from .types import Artifact, CatalogItem, Installation, InstalledArtifact, VoiceMetadata
+
+ # ---------------------------------------------------------------------------
+ # Language normalization
+ # ---------------------------------------------------------------------------
+
+
+-def normalize_language_code(raw: Any) -> str:
+-    """Normalize a raw language value to canonical display form (e.g. 'en-US').
++def normalize_language_tag(value: Any) -> str:
++    """Normalize a language tag to canonical display casing.
+
+-    Handles:
+-    - Piper: dict like {"code": "en_US", ...}
+-    - Pocket: string like "en"
+-    - Kokoro: list like ["en-us", "en-gb"]
+-    - Already-normalized strings
++    Accepts strings and legacy language mappings such as ``{"code": "en_US"}``.
++    This is display normalization, not complete BCP-47 validation.
+     """
+-    if isinstance(raw, dict):
+-        code = raw.get("code", "")
+-        if isinstance(code, str) and code:
+-            return _display_code(code)
+-    if isinstance(raw, str) and raw:
+-        return _display_code(raw)
+-    return ""
++    if isinstance(value, Mapping):
++        value = value.get("code", "")
++    if not isinstance(value, str) or not value:
++        return ""
++
++    subtags = value.strip().replace("_", "-").split("-")
++    if not subtags[0]:
++        return ""
++    normalized = [subtags[0].lower()]
++    for subtag in subtags[1:]:
++        if len(subtag) == 2 and subtag.isalpha():
++            normalized.append(subtag.upper())
++        elif len(subtag) == 4 and subtag.isalpha():
++            normalized.append(subtag.title())
++        else:
++            normalized.append(subtag.lower())
++    return "-".join(normalized)
++
++
++def normalize_language_code(raw: Any) -> str:
++    """Compatibility alias for :func:`normalize_language_tag`."""
++    return normalize_language_tag(raw)
++
++
++def language_base(value: Any) -> str:
++    """Return the lowercase primary language subtag, or an empty string."""
++    normalized = normalize_language_tag(value)
++    return normalized.split("-", 1)[0] if normalized else ""
+
+
+ def language_codes_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+@@ -72,25 +90,26 @@ def primary_language_from_metadata(metadata: Mapping[str, Any]) -> str | None:
+     return codes[0] if codes else None
+
+
+-def _display_code(code: str) -> str:
+-    """Convert internal code like 'en_US' to display form 'en-US'."""
+-    return code.replace("_", "-")
++def language_tags_match(requested: str, available: str) -> bool:
++    """Return whether an available language capability satisfies a request.
++
++    A generic tag matches any specific tag with the same base language. Two
++    different specific tags do not match.
++    """
++    requested_tag = normalize_language_tag(requested)
++    available_tag = normalize_language_tag(available)
++    if not requested_tag or not available_tag:
++        return False
++    requested_base = language_base(requested_tag)
++    available_base = language_base(available_tag)
++    return requested_base == available_base and (
++        requested_tag in (available_tag, requested_base) or available_tag == available_base
++    )
+
+
+ def _match_code(pattern: str, code: str) -> bool:
+-    """Subtag-aware language matching.
+-
+-    --lang en    matches en, en-US, en-GB
+-    --lang en-US matches en-US only
+-    --lang de    matches de-DE, de-AT
+-    """
+-    pattern = pattern.replace("_", "-").casefold()
+-    code = code.replace("_", "-").casefold()
+-    if pattern == code:
+-        return True
+-    # Pattern "en" matches "en-US", "en-GB", etc.
+-    # But pattern "en-US" should NOT match "en-GB"
+-    return "-" not in pattern and code.startswith(pattern + "-")
++    """Compatibility wrapper for :func:`language_tags_match`."""
++    return language_tags_match(pattern, code)
+
+
+ def matches_language(metadata: Mapping[str, Any], language_filter: str) -> bool:
+@@ -123,6 +142,95 @@ def gender_from_metadata(metadata: Mapping[str, Any]) -> str:
+     return normalize_gender(metadata.get("gender"))
+
+
++def _language_tags_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
++    tags: list[str] = []
++    locale = normalize_language_tag(metadata.get("locale"))
++    if locale:
++        tags.append(locale)
++
++    language = metadata.get("language")
++    language_tag = normalize_language_tag(language)
++    if language_tag:
++        tags.append(language_tag)
++
++    language_codes = metadata.get("language_codes")
++    if isinstance(language_codes, (list, tuple)):
++        tags.extend(
++            tag for tag in (normalize_language_tag(value) for value in language_codes) if tag
++        )
++    return tuple(dict.fromkeys(tags))
++
++
++def _normalize_language_label(value: Any) -> str | None:
++    if not isinstance(value, str):
++        return None
++    label = value.strip()
++    if not label or (len(label) == 2 and label.isalpha() and label.isupper()):
++        return None
++    return label
++
++
++def _language_label_from_metadata(metadata: Mapping[str, Any]) -> str | None:
++    for key in ("language_label", "language_name"):
++        label = _normalize_language_label(metadata.get(key))
++        if label:
++            return label
++
++    language = metadata.get("language")
++    if isinstance(language, Mapping):
++        return _normalize_language_label(language.get("name"))
++    return None
++
++
++def _voice_details_for(metadata: Mapping[str, Any], voice_id: str) -> Mapping[str, Any] | None:
++    details = metadata.get("voice_details")
++    if isinstance(details, Mapping):
++        value = details.get(voice_id)
++        return value if isinstance(value, Mapping) else None
++    if isinstance(details, (list, tuple)):
++        for value in details:
++            if isinstance(value, Mapping) and value.get("id") == voice_id:
++                return value
++    return None
++
++
++def voice_metadata_from_catalog(item: CatalogItem, voice_id: str) -> VoiceMetadata:
++    """Extract normalized descriptive metadata without inferring demographics."""
++    metadata = item.metadata
++    details = _voice_details_for(metadata, voice_id)
++    detail_tags = _language_tags_from_metadata(details) if details is not None else ()
++    item_tags = _language_tags_from_metadata(metadata)
++    if detail_tags:
++        locale = detail_tags[0]
++    else:
++        locale = next((tag for tag in item_tags if "-" in tag), "")
++        if not locale and item_tags:
++            locale = item_tags[0]
++
++    detail_label = _language_label_from_metadata(details) if details is not None else None
++    language_label = (
++        detail_label
++        or _language_label_from_metadata(metadata)
++        or locale
++        or language_base(locale)
++        or "unknown"
++    )
++
++    if details is not None and details.get("gender") is not None:
++        gender = normalize_gender(details.get("gender"))
++    elif (item.kind == "voice" or len(item.voices) == 1) and metadata.get("gender") is not None:
++        gender = normalize_gender(metadata.get("gender"))
++    else:
++        gender = "unknown"
++
++    return VoiceMetadata(
++        language=language_base(locale),
++        locale=locale,
++        language_label=language_label,
++        gender=gender,
++    )
++
++
+ # ---------------------------------------------------------------------------
+ # Effective quality / distribution
+ # ---------------------------------------------------------------------------
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 59b737b..79881e3 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -102,7 +102,11 @@ class OnnxVoice:
+         progress: ProgressCallback | None = None,
+     ) -> builtins.list[VoiceRecord]:
+         """List flattened catalog voices joined to stable selector identities."""
+-        from .inventory import language_codes_from_metadata, matches_language
++        from .inventory import (
++            language_codes_from_metadata,
++            matches_language,
++            voice_metadata_from_catalog,
++        )
+         from .voice_selectors import get_voice_selector_registry
+
+         supported_systems = voice_selector_systems()
+@@ -139,16 +143,16 @@ class OnnxVoice:
+             metadata = item.metadata
+             if language is not None and not matches_language(metadata, language):
+                 continue
++            details = voice_metadata_from_catalog(item, voice_id)
+             records.append(
+                 make_voice_record(
+                     identity,
+                     available=True,
+                     catalog_item=item,
+                     languages=language_codes_from_metadata(metadata),
+-                    gender=str(metadata.get("gender") or "unknown")
+-                    if item.system == "piper"
+-                    else "unknown",
++                    gender=details.gender,
+                     voice_id=voice_id,
++                    metadata=details,
+                 )
+             )
+
+diff --git a/onnxvoice/types.py b/onnxvoice/types.py
+index d2fe8f0..a6736e4 100644
+--- a/onnxvoice/types.py
++++ b/onnxvoice/types.py
+@@ -173,6 +173,14 @@ class CatalogItem:
+         return candidates[0]
+
+
++@dataclass(frozen=True, slots=True)
++class VoiceMetadata:
++    language: str
++    locale: str
++    language_label: str
++    gender: str = "unknown"
++
++
+ @dataclass(frozen=True, slots=True)
+ class VoiceRecord:
+     """A catalog voice joined to its optional stable selector identity."""
+@@ -183,6 +191,7 @@ class VoiceRecord:
+     languages: tuple[str, ...] = ()
+     gender: str = "unknown"
+     catalog_voice_id: str | None = None
++    metadata: VoiceMetadata | None = None
+
+     @property
+     def selector(self) -> str | None:
+diff --git a/onnxvoice/voice_selectors.py b/onnxvoice/voice_selectors.py
+index fd31ee1..c6395ca 100644
+--- a/onnxvoice/voice_selectors.py
++++ b/onnxvoice/voice_selectors.py
+@@ -21,7 +21,7 @@ from .errors import (
+     VoiceSelectorRegistryError,
+     VoiceSelectorRetiredError,
+ )
+-from .types import CatalogItem, VoiceIdentity, VoiceRecord
++from .types import CatalogItem, VoiceIdentity, VoiceMetadata, VoiceRecord
+
+ VOICE_ENGINE_CODES: dict[str, str] = {
+     "kokoro": "ko",
+@@ -385,9 +385,10 @@ def make_voice_record(
+     languages: tuple[str, ...] = (),
+     gender: str = "unknown",
+     voice_id: str | None = None,
++    metadata: VoiceMetadata | None = None,
+ ) -> VoiceRecord:
+     """Small constructor used by manager and maintenance integrations."""
+-    return VoiceRecord(identity, available, catalog_item, languages, gender, voice_id)
++    return VoiceRecord(identity, available, catalog_item, languages, gender, voice_id, metadata)
+
+
+ __all__ = [
+diff --git a/tests/test_catalog_tools.py b/tests/test_catalog_tools.py
+index cb54f61..5090e14 100644
+--- a/tests/test_catalog_tools.py
++++ b/tests/test_catalog_tools.py
+@@ -7,7 +7,9 @@ import json
+ import pytest
+
+ import onnxvoice.catalog_tools.piper as piper
++from onnxvoice.catalog import CatalogClient
+ from onnxvoice.catalog_tools.piper import CatalogError, build_catalog, verify_catalog
++from onnxvoice.manager import OnnxVoice
+
+
+ def _artifact(path: str, payload: bytes) -> dict[str, object]:
+@@ -51,6 +53,68 @@ def test_build_catalog_pins_revision_and_is_deterministic():
+     )
+
+
++def test_explicit_gender_round_trips_through_runtime_and_list_voices(tmp_path):
++    voice_id = "en_US-test-medium"
++    upstream = _upstream()
++    upstream[voice_id]["gender"] = "female"
++    catalog = build_catalog(upstream, resolved_revision="a" * 40)
++
++    assert catalog["voices"][voice_id]["gender"] == "female"
++    catalog_path = tmp_path / "piper.json"
++    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
++
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"piper": str(catalog_path)})
++    item = client.resolve(f"piper:{voice_id}")
++    assert item.metadata["gender"] == "female"
++
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "manager-cache",
++        catalog_sources={"piper": str(catalog_path)},
++        offline=True,
++    )
++    record = next(
++        record
++        for record in manager.list_voices(system="piper")
++        if record.available and record.voice_id == voice_id
++    )
++    assert record.gender == "female"
++    assert record.metadata.gender == "female"
++
++
++def test_missing_gender_stays_unknown_through_catalog_and_runtime(tmp_path):
++    voice_id = "en_US-test-medium"
++    catalog = build_catalog(_upstream(), resolved_revision="b" * 40)
++    assert "gender" not in catalog["voices"][voice_id]
++
++    catalog_path = tmp_path / "piper.json"
++    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "cache",
++        catalog_sources={"piper": str(catalog_path)},
++        offline=True,
++    )
++    record = next(
++        record
++        for record in manager.list_voices(system="piper")
++        if record.available and record.voice_id == voice_id
++    )
++    assert record.gender == "unknown"
++    assert record.metadata.gender == "unknown"
++
++
++def test_invalid_upstream_and_normalized_gender_are_rejected():
++    voice_id = "en_US-test-medium"
++    upstream = _upstream()
++    upstream[voice_id]["gender"] = "Female"
++    with pytest.raises(CatalogError, match="invalid gender"):
++        build_catalog(upstream, resolved_revision="c" * 40)
++
++    normalized = build_catalog(_upstream(), resolved_revision="d" * 40)
++    normalized["voices"][voice_id]["gender"] = "Female"
++    with pytest.raises(CatalogError, match="invalid gender"):
++        verify_catalog(normalized)
++
++
+ def test_verify_rejects_unsafe_paths_aliases_and_duplicate_speaker_ids():
+     catalog = build_catalog(_upstream(), resolved_revision="a" * 40)
+
+diff --git a/tests/test_inventory.py b/tests/test_inventory.py
+index 9c2895d..903994e 100644
+--- a/tests/test_inventory.py
++++ b/tests/test_inventory.py
+@@ -16,16 +16,20 @@ from onnxvoice.inventory import (
+     gender_from_metadata,
+     inventory_record_from_catalog,
+     inventory_record_from_installation,
++    language_base,
+     language_codes_from_metadata,
++    language_tags_match,
+     logical_size_bytes,
+     matches_filter,
+     matches_language,
+     merge_inventory,
+     normalize_gender,
+     normalize_language_code,
++    normalize_language_tag,
+     primary_language_from_metadata,
+     query_inventory,
+     version_label,
++    voice_metadata_from_catalog,
+ )
+ from onnxvoice.types import Artifact, CatalogItem, Installation, InstalledArtifact
+
+@@ -53,13 +57,13 @@ class TestLanguageNormalization:
+         """Kokoro stores language_codes as a list."""
+         metadata = {"language_codes": ["en-us", "en-gb"]}
+         codes = language_codes_from_metadata(metadata)
+-        assert codes == ("en-us", "en-gb")
++        assert codes == ("en-US", "en-GB")
+
+     def test_kokoro_takes_priority_over_language_field(self):
+         """When language_codes is present, it's used even if language also exists."""
+         metadata = {"language": "de", "language_codes": ["en-us"]}
+         codes = language_codes_from_metadata(metadata)
+-        assert codes == ("en-us",)
++        assert codes == ("en-US",)
+
+     def test_normalize_language_code_dict(self):
+         assert normalize_language_code({"code": "en_US"}) == "en-US"
+@@ -68,6 +72,31 @@ class TestLanguageNormalization:
+         assert normalize_language_code("en") == "en"
+         assert normalize_language_code("en_US") == "en-US"
+
++    def test_normalize_language_tag_canonical_casing(self):
++        assert normalize_language_tag("en_US") == "en-US"
++        assert normalize_language_tag("en-us") == "en-US"
++        assert normalize_language_tag("EN_us") == "en-US"
++        assert normalize_language_tag("pt_BR") == "pt-BR"
++        assert normalize_language_tag("zh_cn") == "zh-CN"
++        assert normalize_language_tag("en") == "en"
++
++    def test_language_base(self):
++        assert language_base("en") == "en"
++        assert language_base("en-US") == "en"
++        assert language_base("en-GB") == "en"
++        assert language_base("de-DE") == "de"
++        assert language_base("pt-BR") == "pt"
++
++    def test_language_tags_match_generic_and_specific_tags(self):
++        assert language_tags_match("en", "en")
++        assert language_tags_match("en", "en-US")
++        assert language_tags_match("en", "en-GB")
++        assert language_tags_match("en-US", "en")
++        assert language_tags_match("en-US", "en-US")
++        assert not language_tags_match("en-US", "en-GB")
++        assert language_tags_match("en_US", "en")
++        assert not language_tags_match("en_US", "en_GB")
++
+     def test_normalize_language_code_empty(self):
+         assert normalize_language_code(None) == ""
+         assert normalize_language_code({}) == ""
+@@ -75,7 +104,7 @@ class TestLanguageNormalization:
+
+     def test_primary_language_from_metadata(self):
+         meta = {"language_codes": ["en-us", "en-gb"]}
+-        assert primary_language_from_metadata(meta) == "en-us"
++        assert primary_language_from_metadata(meta) == "en-US"
+
+     def test_primary_language_returns_none_when_empty(self):
+         assert primary_language_from_metadata({}) is None
+@@ -106,7 +135,7 @@ class TestLanguageNormalization:
+     def test_matches_language_pocket(self):
+         meta = {"language": "en"}
+         assert matches_language(meta, "en") is True
+-        assert matches_language(meta, "en-US") is False
++        assert matches_language(meta, "en-US") is True
+
+     def test_matches_language_kokoro(self):
+         meta = {"language_codes": ["en-us", "en-gb"]}
+@@ -171,6 +200,110 @@ class TestGenderNormalization:
+         assert gender_from_metadata(meta) == "unknown"
+
+
++class TestVoiceMetadataExtraction:
++    def test_per_voice_details_take_precedence(self):
++        item = CatalogItem(
++            system="pocket",
++            id="bundle",
++            kind="bundle",
++            artifacts=(),
++            voices=("alba", "other"),
++            metadata={
++                "language": {"code": "en_US", "name": "English (US)"},
++                "gender": "male",
++                "voice_details": [
++                    {
++                        "id": "alba",
++                        "language": "pt",
++                        "locale": "pt_br",
++                        "language_label": "Brazilian Portuguese",
++                        "gender": "female",
++                    }
++                ],
++            },
++        )
++
++        details = voice_metadata_from_catalog(item, "alba")
++
++        assert details.language == "pt"
++        assert details.locale == "pt-BR"
++        assert details.language_label == "Brazilian Portuguese"
++        assert details.gender == "female"
++
++    def test_item_level_exact_metadata_and_multi_voice_gender(self):
++        item = CatalogItem(
++            system="kokoro",
++            id="model",
++            kind="model",
++            artifacts=(),
++            voices=("voice-a", "voice-b"),
++            metadata={
++                "language": {"code": "en_US", "name": "English (US)"},
++                "language_codes": ["en-GB"],
++                "gender": "female",
++            },
++        )
++
++        details = voice_metadata_from_catalog(item, "voice-a")
++
++        assert details.language == "en"
++        assert details.locale == "en-US"
++        assert details.language_label == "English (US)"
++        assert details.gender == "unknown"
++
++    def test_bare_region_is_not_used_as_language_label(self):
++        item = CatalogItem(
++            system="piper",
++            id="voice",
++            kind="voice",
++            artifacts=(),
++            metadata={
++                "language": {"code": "en_US", "name": "US"},
++                "language_label": "US",
++            },
++        )
++
++        details = voice_metadata_from_catalog(item, "voice")
++
++        assert details.locale == "en-US"
++        assert details.language_label == "en-US"
++
++    def test_generic_single_voice_metadata_and_unknown_fallback(self):
++        item = CatalogItem(
++            system="pocket",
++            id="bundle",
++            kind="bundle",
++            artifacts=(),
++            voices=("alba",),
++            metadata={"language": "en", "gender": "female"},
++        )
++        details = voice_metadata_from_catalog(item, "alba")
++        assert (details.language, details.locale, details.language_label) == ("en", "en", "en")
++        assert details.gender == "female"
++
++        unknown = voice_metadata_from_catalog(
++            CatalogItem(system="test", id="item", kind="item", artifacts=()), "item"
++        )
++        assert (unknown.language, unknown.locale, unknown.language_label) == ("", "", "unknown")
++        assert unknown.gender == "unknown"
++
++    def test_missing_pocket_voice_details_keeps_gender_unknown(self):
++        item = CatalogItem(
++            system="pocket",
++            id="bundle",
++            kind="bundle",
++            artifacts=(),
++            voices=("alba",),
++            metadata={"language": "en"},
++        )
++
++        details = voice_metadata_from_catalog(item, "alba")
++
++        assert details.language == "en"
++        assert details.locale == "en"
++        assert details.gender == "unknown"
++
++
+ # ---------------------------------------------------------------------------
+ # Effective quality / distribution tests
+ # ---------------------------------------------------------------------------
+@@ -329,6 +462,11 @@ class TestInventoryFilter:
+         rec = _make_record(language_codes=("en-US",))
+         assert matches_filter(rec, spec) is True
+
++    def test_specific_language_filter_matches_generic_catalog_language(self):
++        spec = InventoryFilter(languages=("en-US",))
++        rec = _make_record(language_codes=("en",))
++        assert matches_filter(rec, spec) is True
++
+     def test_filter_by_language_subtag(self):
+         spec = InventoryFilter(languages=("en",))
+         rec = _make_record(language_codes=("en-US",))
+diff --git a/tests/test_pocket_catalog.py b/tests/test_pocket_catalog.py
+index 2e61a55..0998aea 100644
+--- a/tests/test_pocket_catalog.py
++++ b/tests/test_pocket_catalog.py
+@@ -457,6 +457,61 @@ def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
+     assert item.metadata["voice_states"][0]["source"]["path"] == state_path
+
+
++def _parse_catalog_with_voice_details(details):
++    catalog = copy.deepcopy(SAMPLE_CATALOG)
++    entry = catalog["bundles"][0]
++    entry["predefined_voice_names"] = ["alba"]
++    entry["voice_details"] = details
++    return _parse_pocket(catalog)
++
++
++def test_voice_details_parse_without_creating_voice_state_or_selector_candidate():
++    details = [
++        {
++            "id": "alba",
++            "language": "en",
++            "locale": "en_US",
++            "language_label": "English",
++            "gender": "female",
++        }
++    ]
++    item = _parse_catalog_with_voice_details(details)[0]
++
++    assert item.metadata["voice_details"] == [
++        {
++            "id": "alba",
++            "language": "en",
++            "locale": "en-US",
++            "language_label": "English",
++            "gender": "female",
++        }
++    ]
++    assert item.voices == ()
++
++
++def test_voice_details_do_not_use_bare_region_as_language_label():
++    item = _parse_catalog_with_voice_details(
++        [{"id": "alba", "language": "en", "locale": "en-US", "language_label": "US"}]
++    )[0]
++
++    assert item.metadata["voice_details"][0]["language_label"] == "en-US"
++
++
++@pytest.mark.parametrize(
++    ("details", "message"),
++    [
++        ([{"id": "unknown", "language": "en"}], "references unknown voice"),
++        ([{"id": "alba"}, {"id": "alba"}], "duplicate voice detail"),
++        ([{"id": "alba", "gender": "other"}], "invalid gender"),
++        ([{"id": "alba", "language": "fr", "locale": "en-US"}], "do not agree"),
++        ([{"id": "alba", "locale": 42}], "must be a string"),
++    ],
++)
++def test_voice_details_reject_invalid_entries(details, message):
++    with pytest.raises(CatalogError, match=message):
++        _parse_catalog_with_voice_details(details)
++
++
+ def test_canonical_object_map_rejects_key_id_mismatch() -> None:
+     entry = {**SAMPLE_CATALOG["bundles"][0], "id": "other"}
+     with pytest.raises(CatalogError, match="does not match"):
+diff --git a/tests/test_pocket_catalog_tools.py b/tests/test_pocket_catalog_tools.py
+index d32f0ec..7f858d2 100644
+--- a/tests/test_pocket_catalog_tools.py
++++ b/tests/test_pocket_catalog_tools.py
+@@ -121,6 +121,25 @@ def _upstream_bundle() -> dict[str, Any]:
+     }
+
+
++def _build_catalog_from_upstream(upstream: dict[str, Any]) -> dict[str, Any]:
++    tree = [
++        {"path": artifact["path"], "size": artifact["size"], "lfs": {"oid": artifact["sha256"]}}
++        for artifact in _artifacts()
++    ]
++    with (
++        patch(
++            "onnxvoice.catalog_tools.pocket._list_bundle_paths",
++            return_value=[f"{BASE}/bundle.json"],
++        ),
++        patch(
++            "onnxvoice.catalog_tools.pocket._fetch_bundle_json",
++            return_value=(upstream, "b" * 64),
++        ),
++        patch("onnxvoice.catalog_tools.pocket._repository_tree", return_value=tree),
++    ):
++        return build_catalog(resolved_revision=REVISION)
++
++
+ class TestConstants:
+     def test_roles(self) -> None:
+         assert VALID_ROLES == REQUIRED_ONNX_ROLES | STATIC_ROLES
+@@ -254,6 +273,72 @@ def test_build_catalog_from_explicit_fixture_is_deterministic() -> None:
+     verify_catalog(result1)
+
+
++def test_build_catalog_normalizes_voice_details():
++    upstream = _upstream_bundle()
++    upstream["predefined_voices"] = ["alba"]
++    upstream["voice_details"] = [
++        {
++            "id": "alba",
++            "language": "en",
++            "locale": "en_US",
++            "language_label": "English",
++            "gender": "female",
++        }
++    ]
++
++    catalog = _build_catalog_from_upstream(upstream)
++
++    assert catalog["bundles"]["english_2026-04"]["voice_details"] == [
++        {
++            "id": "alba",
++            "language": "en",
++            "locale": "en-US",
++            "language_label": "English",
++            "gender": "female",
++        }
++    ]
++
++
++@pytest.mark.parametrize(
++    ("details", "message"),
++    [
++        ([{"id": "unknown", "language": "en"}], "references unknown voice"),
++        ([{"id": "alba"}, {"id": "alba"}], "duplicate voice detail"),
++        ([{"id": "alba", "gender": "other"}], "invalid gender"),
++        ([{"id": "alba", "language": "fr", "locale": "en-US"}], "do not agree"),
++        ([{"id": "alba", "locale": "en__US"}], "invalid voice detail locale"),
++    ],
++)
++def test_build_catalog_rejects_invalid_voice_details(details, message):
++    upstream = _upstream_bundle()
++    upstream["predefined_voices"] = ["alba"]
++    upstream["voice_details"] = details
++
++    with pytest.raises(CatalogError, match=message):
++        _build_catalog_from_upstream(upstream)
++
++
++def test_verify_catalog_requires_normalized_voice_details():
++    catalog = _catalog()
++    entry = catalog["bundles"]["english_2026-04"]
++    entry["predefined_voice_names"] = ["alba"]
++    entry["voice_details"] = [
++        {
++            "id": "alba",
++            "language": "en",
++            "locale": "en-US",
++            "language_label": "English",
++            "gender": "female",
++        }
++    ]
++    verify_catalog(catalog)
++
++    invalid = copy.deepcopy(catalog)
++    invalid["bundles"]["english_2026-04"]["voice_details"][0]["gender"] = "other"
++    with pytest.raises(CatalogError, match="invalid gender"):
++        verify_catalog(invalid)
++
++
+ def test_build_catalog_discovers_upstream_files_and_metadata() -> None:
+     upstream = _upstream_bundle()
+     upstream.pop("artifacts")
+diff --git a/tests/test_voice_selectors.py b/tests/test_voice_selectors.py
+index 93ac0ca..384402c 100644
+--- a/tests/test_voice_selectors.py
++++ b/tests/test_voice_selectors.py
+@@ -13,6 +13,7 @@ from onnxvoice.catalog_tools.voice_selectors import (
+     append_unassigned_registry_entries,
+     check_registry_and_catalog,
+     missing_registry_voices,
++    selector_language_for,
+     unassigned_catalog_voices,
+ )
+ from onnxvoice.catalog_tools.voice_selectors import build_parser as build_selector_tool_parser
+@@ -185,6 +186,42 @@ def test_engine_codes_and_packaged_baseline():
+     assert {identity.engine_code for identity in iter_voice_identities()} == {"ko", "pi"}
+     assert VOICE_ENGINE_CODES == {"kokoro": "ko", "piper": "pi", "pocket": "po"}
+     assert load_voice_selector_registry().identities == iter_voice_identities()
++    assert resolve_voice_selector("en-pi-13").canonical_key == (
++        "piper",
++        "en_US-amy-medium",
++        "en_US-amy-medium",
++    )
++
++
++def test_selector_language_policy_keeps_identity_separate_from_locale():
++    assert selector_language_for("kokoro", "en-US") == "en_us"
++    assert selector_language_for("kokoro", "en-GB") == "en_gb"
++    assert selector_language_for("piper", "en-US") == "en"
++    assert selector_language_for("piper", "en-GB") == "en"
++    assert selector_language_for("piper", "de-DE") == "de"
++
++
++def test_future_piper_english_entries_share_existing_namespace():
++    existing = _entry("en", "pi", 13, "piper", "existing", "existing")
++    registry_data = {
++        "schema": 1,
++        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
++        "entries": [existing],
++    }
++    items = [
++        _piper_voice("en_US-new-medium", "en_US"),
++        _piper_voice("en_GB-new-medium", "en_GB"),
++    ]
++
++    updated, additions = append_unassigned_registry_entries(items, registry_data)
++
++    assert updated["entries"][0] == existing
++    assert [entry["language"] for entry in additions] == ["en", "en"]
++    assert [entry["slot"] for entry in additions] == [14, 15]
++    assert [
++        format_voice_selector(entry["language"], entry["engine_code"], entry["slot"])
++        for entry in additions
++    ] == ["en-pi-14", "en-pi-15"]
+
+
+ def test_packaged_german_selectors_remain_unchanged():
+@@ -315,6 +352,62 @@ def test_catalog_projection_reports_assigned_and_unassigned_voices():
+     assert unassigned_record.state == "unassigned"
+
+
++def test_list_voices_specific_language_includes_generic_but_excludes_conflicts():
++    items = [
++        _piper_voice("generic", "en"),
++        _piper_voice("us", "en_US"),
++        _piper_voice("gb", "en_GB"),
++    ]
++    manager = object.__new__(OnnxVoice)
++    manager.catalog = type("Catalog", (), {"list": lambda self, system, **_: items})()
++
++    records = manager.list_voices(system="piper", language="en-US")
++
++    assert {record.voice_id for record in records if record.available} == {"generic", "us"}
++
++
++def test_list_voices_projects_normalized_metadata_without_system_gender_branch():
++    piper = CatalogItem(
++        system="piper",
++        id="explicit-gender",
++        kind="voice",
++        artifacts=(),
++        metadata={
++            "language": {"code": "en_US", "name": "English (US)"},
++            "gender": "female",
++        },
++    )
++    pocket = CatalogItem(
++        system="pocket",
++        id="bundle",
++        kind="bundle",
++        artifacts=(),
++        voices=("alba",),
++        metadata={
++            "language": "en",
++            "voice_details": [
++                {"id": "alba", "locale": "en", "language_label": "English", "gender": "female"}
++            ],
++        },
++    )
++    items = [piper, pocket]
++    manager = object.__new__(OnnxVoice)
++    manager.catalog = type("Catalog", (), {"list": lambda self, system, **_: items})()
++
++    records = {record.voice_id: record for record in manager.list_voices() if record.available}
++
++    piper_record = records["explicit-gender"]
++    pocket_record = records["alba"]
++    assert piper_record.languages == ("en-US",)
++    assert piper_record.gender == piper_record.metadata.gender == "female"
++    assert piper_record.metadata.language == "en"
++    assert piper_record.metadata.locale == "en-US"
++    assert piper_record.metadata.language_label == "English (US)"
++    assert pocket_record.languages == ("en",)
++    assert pocket_record.gender == pocket_record.metadata.gender == "female"
++    assert pocket_record.metadata.locale == "en"
++
++
+ def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
+     pocket = CatalogItem(
+         system="pocket",
+@@ -326,6 +419,40 @@ def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
+     assert catalog_voice_keys([pocket]) == ((pocket, "english_2026-04", "alba"),)
+
+
++def test_voice_details_without_voice_state_do_not_assign_a_selector():
++    pocket = CatalogItem(
++        system="pocket",
++        id="bundle",
++        kind="bundle",
++        artifacts=(),
++        voices=(),
++        metadata={
++            "language": "en",
++            "predefined_voice_names": ["alba"],
++            "voice_details": [
++                {
++                    "id": "alba",
++                    "language": "en",
++                    "locale": "en",
++                    "language_label": "English",
++                    "gender": "female",
++                }
++            ],
++        },
++    )
++    registry_data = {
++        "schema": 1,
++        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
++        "entries": [],
++    }
++
++    updated, additions = append_unassigned_registry_entries([pocket], registry_data)
++
++    assert catalog_voice_keys([pocket]) == ()
++    assert additions == ()
++    assert updated["entries"] == []
++
++
+ def test_pocket_selector_identity_uses_permanent_engine_code_and_bundle():
+     registry = _registry(_entry("en_us", "po", 1, "pocket", "bundle-a", "alba"))
+     selector = format_voice_selector("en-US", "po", 1)

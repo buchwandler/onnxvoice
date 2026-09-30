@@ -712,6 +712,7 @@ def _parse_supertonic(data: dict[str, Any]) -> list[CatalogItem]:
                     raise CatalogError(f"{bundle_id}: duplicate {role!r} artifact")
                 seen_roles.add(role)
             if role == "voice_style":
+                assert component is not None
                 if component in style_components:
                     raise CatalogError(
                         f"{bundle_id}: duplicate voice style component {component!r}"

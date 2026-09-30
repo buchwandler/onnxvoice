@@ -1,0 +1,1421 @@
+ docs/Makefile                       |  32 +++
+ docs/conf.py                        | 101 ++++++++++
+ docs/make.bat                       | 113 +++++++++++
+ docs/make.py                        |  89 ++++++++
+ docs/requirements.txt               |   5 +
+ onnxvoice/manager.py                |  44 ++--
+ onnxvoice/systems/__init__.py       |   3 +
+ onnxvoice/systems/supertonic.py     | 341 +++++++++++++++++++++++++++++++
+ pyproject.toml                      |   4 +
+ tests/test_supertonic_adapter.py    | 391 ++++++++++++++++++++++++++++++++++++
+ tests/test_supertonic_local_open.py |  83 ++++++++
+ tests/test_supertonic_parity.py     |  99 +++++++++
+ 12 files changed, 1290 insertions(+), 15 deletions(-)
+
+diff --git a/docs/Makefile b/docs/Makefile
+new file mode 100644
+index 0000000..3ff8019
+--- /dev/null
++++ b/docs/Makefile
+@@ -0,0 +1,32 @@
++# Makefile for Sphinx documentation
++
++# You can set these variables from the command line
++SPHINXOPTS    ?=
++SPHINXBUILD   ?= sphinx-build
++SOURCEDIR     = .
++BUILDDIR      = _build
++
++# Put it first so that "make" without argument is like "make help".
++help:
++	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
++
++.PHONY: help Makefile clean html livehtml
++
++# Clean build directory
++clean:
++	rm -rf $(BUILDDIR)/*
++
++# Build HTML documentation
++html:
++	@$(SPHINXBUILD) -M html "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
++	@echo
++	@echo "Build finished. The HTML pages are in $(BUILDDIR)/html."
++
++# Live reload server (requires sphinx-autobuild)
++livehtml:
++	sphinx-autobuild "$(SOURCEDIR)" "$(BUILDDIR)/html" $(SPHINXOPTS) $(O)
++
++# Catch-all target: route all unknown targets to Sphinx using the new
++# "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
++%: Makefile
++	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
+diff --git a/docs/conf.py b/docs/conf.py
+new file mode 100644
+index 0000000..9ee1fa1
+--- /dev/null
++++ b/docs/conf.py
+@@ -0,0 +1,101 @@
++# -- Path setup --------------------------------------------------------------
++
++# If extensions (or modules to document with autodoc) are in another directory,
++# add these directories to sys.path here. If the directory is relative to the
++# documentation root, use os.path.abspath to make it absolute, like shown here.
++#
++import os
++import sys
++
++sys.path.insert(0, os.path.abspath(".."))
++sys.path.insert(0, os.path.abspath("../onnxvoice"))
++# -- Project information -----------------------------------------------------
++# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
++
++project = "onnxvoice"
++copyright = "2026, Holger Nahrstaedt"
++author = "Holger Nahrstaedt"
++
++# -- General configuration ---------------------------------------------------
++
++# Add any Sphinx extension module names here, as strings. They can be
++# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
++# ones.
++extensions = [
++    "sphinx.ext.autodoc",
++    "sphinx.ext.doctest",
++    "sphinx.ext.intersphinx",
++    "sphinx.ext.napoleon",
++    "sphinx.ext.viewcode",
++    "myst_parser",
++]
++
++# All authored Sphinx pages are MyST Markdown.
++source_suffix = {
++    ".md": "markdown",
++}
++
++# Required for readable Markdown-native admonitions.
++myst_enable_extensions = ["colon_fence"]
++
++# Current documentation contains headings through H4.
++myst_heading_anchors = 4
++
++# Napoleon settings for NumPy-style docstrings
++napoleon_google_docstring = False
++napoleon_numpy_docstring = True
++napoleon_include_init_with_doc = True
++napoleon_include_private_with_doc = False
++napoleon_include_special_with_doc = True
++napoleon_use_admonition_for_examples = False
++napoleon_use_admonition_for_notes = False
++napoleon_use_admonition_for_references = False
++napoleon_use_ivar = False
++napoleon_use_param = True
++napoleon_use_rtype = True
++napoleon_preprocess_types = False
++napoleon_type_aliases = None
++napoleon_attr_annotations = True
++
++# Autodoc settings
++autodoc_default_options = {
++    "members": True,
++    "undoc-members": True,
++    "show-inheritance": True,
++    "member-order": "bysource",
++}
++
++# Add any paths that contain templates here, relative to this directory.
++templates_path = ["_templates"]
++
++# List of patterns, relative to source directory, that match files and
++# directories to ignore when looking for source files.
++# This pattern also affects html_static_path and html_extra_path.
++exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "README.md"]
++
++
++# -- Options for HTML output -------------------------------------------------
++
++# The theme to use for HTML and HTML Help pages.  See the documentation for
++# a list of builtin themes.
++#
++# html_theme = 'furo'
++
++html_theme = "sphinx_rtd_theme"
++
++html_theme_options = {
++    "navigation_depth": 4,
++    "titles_only": False,
++}
++
++# Add any paths that contain custom static files (such as style sheets) here,
++# relative to this directory. They are copied after the builtin static files,
++# so a file named "default.css" will overwrite the builtin "default.css".
++# html_static_path = ['_static']
++
++# Set up intersphinx maps
++intersphinx_mapping = {
++    "python": ("https://docs.python.org/3", None),
++    "numpy": ("https://numpy.org/doc/stable", None),
++    "PIL": ("https://pillow.readthedocs.io/en/stable", None),
++}
+diff --git a/docs/make.bat b/docs/make.bat
+new file mode 100644
+index 0000000..d6a9242
+--- /dev/null
++++ b/docs/make.bat
+@@ -0,0 +1,113 @@
++@ECHO OFF
++
++REM Command file for Sphinx documentation
++
++set SPHINXBUILD=sphinx-build
++set BUILDDIR=build
++set ALLSPHINXOPTS=-d %BUILDDIR%/doctrees %SPHINXOPTS% .
++if NOT "%PAPER%" == "" (
++	set ALLSPHINXOPTS=-D latex_paper_size=%PAPER% %ALLSPHINXOPTS%
++)
++
++if "%1" == "" goto help
++
++if "%1" == "help" (
++	:help
++	echo.Please use `make ^<target^>` where ^<target^> is one of
++	echo.  html      to make standalone HTML files
++	echo.  dirhtml   to make HTML files named index.html in directories
++	echo.  pickle    to make pickle files
++	echo.  json      to make JSON files
++	echo.  htmlhelp  to make HTML files and a HTML help project
++	echo.  qthelp    to make HTML files and a qthelp project
++	echo.  latex     to make LaTeX files, you can set PAPER=a4 or PAPER=letter
++	echo.  changes   to make an overview over all changed/added/deprecated items
++	echo.  linkcheck to check all external links for integrity
++	echo.  doctest   to run all doctests embedded in the documentation if enabled
++	goto end
++)
++
++if "%1" == "clean" (
++	for /d %%i in (%BUILDDIR%\*) do rmdir /q /s %%i
++	del /q /s %BUILDDIR%\*
++	goto end
++)
++
++if "%1" == "html" (
++	%SPHINXBUILD% -b html %ALLSPHINXOPTS% %BUILDDIR%/html
++	echo.
++	echo.Build finished. The HTML pages are in %BUILDDIR%/html.
++	goto end
++)
++
++if "%1" == "dirhtml" (
++	%SPHINXBUILD% -b dirhtml %ALLSPHINXOPTS% %BUILDDIR%/dirhtml
++	echo.
++	echo.Build finished. The HTML pages are in %BUILDDIR%/dirhtml.
++	goto end
++)
++
++if "%1" == "pickle" (
++	%SPHINXBUILD% -b pickle %ALLSPHINXOPTS% %BUILDDIR%/pickle
++	echo.
++	echo.Build finished; now you can process the pickle files.
++	goto end
++)
++
++if "%1" == "json" (
++	%SPHINXBUILD% -b json %ALLSPHINXOPTS% %BUILDDIR%/json
++	echo.
++	echo.Build finished; now you can process the JSON files.
++	goto end
++)
++
++if "%1" == "htmlhelp" (
++	%SPHINXBUILD% -b htmlhelp %ALLSPHINXOPTS% %BUILDDIR%/htmlhelp
++	echo.
++	echo.Build finished; now you can run HTML Help Workshop with the ^
++.hhp project file in %BUILDDIR%/htmlhelp.
++	goto end
++)
++
++if "%1" == "qthelp" (
++	%SPHINXBUILD% -b qthelp %ALLSPHINXOPTS% %BUILDDIR%/qthelp
++	echo.
++	echo.Build finished; now you can run "qcollectiongenerator" with the ^
++.qhcp project file in %BUILDDIR%/qthelp, like this:
++	echo.^> qcollectiongenerator %BUILDDIR%\qthelp\PyWavelets.qhcp
++	echo.To view the help file:
++	echo.^> assistant -collectionFile %BUILDDIR%\qthelp\PyWavelets.ghc
++	goto end
++)
++
++if "%1" == "latex" (
++	%SPHINXBUILD% -b latex %ALLSPHINXOPTS% %BUILDDIR%/latex
++	echo.
++	echo.Build finished; the LaTeX files are in %BUILDDIR%/latex.
++	goto end
++)
++
++if "%1" == "changes" (
++	%SPHINXBUILD% -b changes %ALLSPHINXOPTS% %BUILDDIR%/changes
++	echo.
++	echo.The overview file is in %BUILDDIR%/changes.
++	goto end
++)
++
++if "%1" == "linkcheck" (
++	%SPHINXBUILD% -b linkcheck %ALLSPHINXOPTS% %BUILDDIR%/linkcheck
++	echo.
++	echo.Link check complete; look for any errors in the above output ^
++or in %BUILDDIR%/linkcheck/output.txt.
++	goto end
++)
++
++if "%1" == "doctest" (
++	%SPHINXBUILD% -b doctest %ALLSPHINXOPTS% %BUILDDIR%/doctest
++	echo.
++	echo.Testing of doctests in the sources finished, look at the ^
++results in %BUILDDIR%/doctest/output.txt.
++	goto end
++)
++
++:end
+diff --git a/docs/make.py b/docs/make.py
+new file mode 100755
+index 0000000..d49ba14
+--- /dev/null
++++ b/docs/make.py
+@@ -0,0 +1,89 @@
++#!/usr/bin/env python
++"""
++Script to build documentation for onnxvoice.
++
++This script builds the Sphinx documentation for the onnxvoice package.
++It can be run using:
++    python docs/make.py [option]
++
++Options:
++    clean   - clean the build directory
++    html    - build HTML documentation
++    dirhtml - build HTML documentation with directory structure
++    all     - build all documentation formats
++    help    - show help message
++"""
++
++import os
++import shutil
++import subprocess
++import sys
++
++
++def main():
++    """Run the script."""
++    sphinx_build = "sphinx-build"
++
++    # Determine if we're being run from docs/ or from project root
++    script_dir = os.path.dirname(os.path.abspath(__file__))
++    if os.path.basename(script_dir) == "docs":
++        # Running from docs directory
++        build_dir = "_build"
++        source_dir = "."
++    else:
++        # Running from project root
++        build_dir = os.path.join("docs", "_build")
++        source_dir = "docs"
++
++    target = "html" if len(sys.argv) < 2 else sys.argv[1]
++
++    if target == "clean":
++        if os.path.exists(build_dir):
++            print(f"Cleaning {build_dir}...")
++            shutil.rmtree(build_dir)
++        return 0
++
++    if target == "help":
++        print(__doc__)
++        return 0
++
++    if not os.path.exists(build_dir):
++        os.makedirs(build_dir)
++
++    # Set of valid targets
++    valid_targets = {
++        "html",
++        "dirhtml",
++        "latex",
++        "latexpdf",
++        "text",
++        "man",
++        "changes",
++        "linkcheck",
++        "doctest",
++        "all",
++    }
++
++    if target not in valid_targets:
++        print(f"Unknown target: {target}")
++        print("Use 'help' target for help")
++        return 1
++
++    if target == "all":
++        # Build all formats
++        for fmt in ["html", "dirhtml", "latex"]:
++            cmd = [sphinx_build, "-b", fmt, source_dir, os.path.join(build_dir, fmt)]
++            print(f"Building {fmt} documentation...")
++            subprocess.run(cmd, check=True)
++    else:
++        # Build specific format
++        cmd = [sphinx_build, "-b", target, source_dir, os.path.join(build_dir, target)]
++        print(f"Building {target} documentation...")
++        subprocess.run(cmd, check=True)
++
++    print(f"Build finished. Documentation is in {os.path.join(build_dir, target)}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/docs/requirements.txt b/docs/requirements.txt
+new file mode 100644
+index 0000000..ecff980
+--- /dev/null
++++ b/docs/requirements.txt
+@@ -0,0 +1,5 @@
++sphinx>=7.0.0
++sphinx-rtd-theme>=2.0.0
++sphinx-autobuild>=2024.0.0
++myst-parser>=2.0.0
++pillow
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 79881e3..d697283 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -295,24 +295,38 @@ class OnnxVoice:
+                 merged_files["voices"] = voices
+
+         local_artifacts: list[InstalledArtifact] = []
++        model_components = {
++            "duration_predictor",
++            "text_encoder",
++            "vector_estimator",
++            "vocoder",
++        }
+         for key, raw_path in merged_files.items():
+-            if key in {"prosody", "curves", "decoder"}:
+-                local_artifacts.append(
+-                    OnnxVoice._local_artifact(
+-                        "model",
+-                        raw_path,
+-                        component=key,
+-                        extra_metadata=(artifact_metadata or {}).get(key),
+-                    )
+-                )
++            component = None
++            if system == "supertonic":
++                if key in model_components:
++                    role = "model"
++                    component = key
++                elif key.startswith("voice_style:"):
++                    component = key.partition(":")[2]
++                    if not component:
++                        raise ValueError("voice_style keys must include a component name")
++                    role = "voice_style"
++                else:
++                    role = key
++            elif key in {"prosody", "curves", "decoder"}:
++                role = "model"
++                component = key
+             else:
+-                local_artifacts.append(
+-                    OnnxVoice._local_artifact(
+-                        key,
+-                        raw_path,
+-                        extra_metadata=(artifact_metadata or {}).get(key),
+-                    )
++                role = key
++            local_artifacts.append(
++                OnnxVoice._local_artifact(
++                    role,
++                    raw_path,
++                    component=component,
++                    extra_metadata=(artifact_metadata or {}).get(key),
+                 )
++            )
+         model_artifact = next(
+             (artifact for artifact in local_artifacts if artifact.role == "model"), None
+         )
+diff --git a/onnxvoice/systems/__init__.py b/onnxvoice/systems/__init__.py
+index 79c3cbf..8a90772 100644
+--- a/onnxvoice/systems/__init__.py
++++ b/onnxvoice/systems/__init__.py
+@@ -6,11 +6,13 @@ from .kokoro import KokoroAdapter
+ from .kokoro_split import SplitKokoroRuntime
+ from .piper import PiperAdapter
+ from .pocket import PocketAdapter
++from .supertonic import SupertonicAdapter
+
+ _ADAPTERS: dict[str, type[SystemAdapter]] = {
+     PiperAdapter.system: PiperAdapter,
+     KokoroAdapter.system: KokoroAdapter,
+     PocketAdapter.system: PocketAdapter,
++    SupertonicAdapter.system: SupertonicAdapter,
+ }
+
+
+@@ -34,6 +36,7 @@ __all__ = [
+     "PiperAdapter",
+     "KokoroAdapter",
+     "PocketAdapter",
++    "SupertonicAdapter",
+     "SplitKokoroRuntime",
+     "register_adapter",
+     "get_adapter",
+diff --git a/onnxvoice/systems/supertonic.py b/onnxvoice/systems/supertonic.py
+new file mode 100644
+index 0000000..75adf1f
+--- /dev/null
++++ b/onnxvoice/systems/supertonic.py
+@@ -0,0 +1,341 @@
++from __future__ import annotations
++
++import json
++import math
++from collections.abc import Mapping, Sequence
++from numbers import Integral, Real
++from typing import Any
++
++import numpy as np
++
++from ..errors import CapabilityError, RuntimeContractError
++from ..runtime import OnnxSession
++from ..types import InferenceResult
++from .base import SystemAdapter
++
++
++class SupertonicAdapter(SystemAdapter):
++    system = "supertonic"
++    COMPONENTS = (
++        "duration_predictor",
++        "text_encoder",
++        "vector_estimator",
++        "vocoder",
++    )
++    _MODEL_INPUTS = {
++        "duration_predictor": {"text_ids", "style_dp", "text_mask"},
++        "text_encoder": {"text_ids", "style_ttl", "text_mask"},
++        "vector_estimator": {
++            "noisy_latent",
++            "text_emb",
++            "style_ttl",
++            "text_mask",
++            "latent_mask",
++            "current_step",
++            "total_step",
++        },
++        "vocoder": {"latent"},
++    }
++
++    def __init__(self, *args: Any, **kwargs: Any) -> None:
++        super().__init__(*args, **kwargs)
++        self._sessions: dict[str, OnnxSession] = {}
++        self._config_cache: dict[str, Any] | None = None
++        self._settings_cache: tuple[int, int, int, int] | None = None
++
++    def _get_session(self, component: str) -> OnnxSession:
++        if component not in self.COMPONENTS:
++            raise CapabilityError(f"Unknown Supertonic model component {component!r}")
++        if component not in self._sessions:
++            try:
++                path = self.installation.artifact("model", component=component).path
++            except KeyError as exc:
++                raise CapabilityError(
++                    f"Supertonic installation is missing model component {component!r}"
++                ) from exc
++            self._sessions[component] = OnnxSession(
++                path,
++                component=component,
++                providers=self.providers,
++                provider_options=self.provider_options,
++                session_options=self.session_options,
++            )
++        return self._sessions[component]
++
++    def _config(self) -> dict[str, Any]:
++        if self._config_cache is None:
++            try:
++                path = self.installation.artifact("config").path
++            except KeyError as exc:
++                raise CapabilityError("Supertonic installation is missing config artifact") from exc
++            try:
++                config = json.loads(path.read_text(encoding="utf-8"))
++            except (OSError, json.JSONDecodeError) as exc:
++                raise RuntimeContractError(
++                    f"Could not read Supertonic config {path}: {exc}"
++                ) from exc
++            if not isinstance(config, dict):
++                raise RuntimeContractError("Supertonic config must contain an object")
++            self._config_cache = config
++        return self._config_cache
++
++    @staticmethod
++    def _required_positive_int(config: Mapping[str, Any], section: str, key: str) -> int:
++        value = config.get(section)
++        path = f"{section}.{key}"
++        if not isinstance(value, Mapping) or key not in value:
++            raise RuntimeContractError(f"Supertonic config is missing required key {path}")
++        number = value[key]
++        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
++            raise RuntimeContractError(f"Supertonic config value {path} must be a positive integer")
++        return number
++
++    def _settings(self) -> tuple[int, int, int, int]:
++        if self._settings_cache is None:
++            config = self._config()
++            sample_rate = self._required_positive_int(config, "ae", "sample_rate")
++            base_chunk_size = self._required_positive_int(config, "ae", "base_chunk_size")
++            chunk_compress_factor = self._required_positive_int(
++                config, "ttl", "chunk_compress_factor"
++            )
++            latent_dim = self._required_positive_int(config, "ttl", "latent_dim")
++            installed_rate = self.installation.sample_rate
++            if installed_rate is not None and installed_rate != sample_rate:
++                raise RuntimeContractError(
++                    f"Installation sample rate {installed_rate} disagrees with Supertonic config "
++                    f"sample rate {sample_rate}"
++                )
++            self._settings_cache = (
++                sample_rate,
++                base_chunk_size,
++                chunk_compress_factor,
++                latent_dim,
++            )
++        return self._settings_cache
++
++    @staticmethod
++    def _validate_arguments(steps: Any, speed: Any, seed: Any) -> tuple[int, float, int | None]:
++        if isinstance(steps, bool) or not isinstance(steps, Integral):
++            raise RuntimeContractError("steps must be an integer from 1 through 100")
++        steps_value = int(steps)
++        if not 1 <= steps_value <= 100:
++            raise RuntimeContractError("steps must be an integer from 1 through 100")
++        if isinstance(speed, bool) or not isinstance(speed, Real):
++            raise RuntimeContractError("speed must be a finite number from 0.7 through 2.0")
++        speed_value = float(speed)
++        if not math.isfinite(speed_value) or not 0.7 <= speed_value <= 2.0:
++            raise RuntimeContractError("speed must be a finite number from 0.7 through 2.0")
++        seed_value = None
++        if seed is not None:
++            if isinstance(seed, bool) or not isinstance(seed, Integral):
++                raise RuntimeContractError("seed must be an integer or None")
++            seed_value = int(seed)
++            if not 0 <= seed_value <= 0xFFFFFFFF:
++                raise RuntimeContractError("seed must be between 0 and 4294967295")
++        return steps_value, speed_value, seed_value
++
++    @staticmethod
++    def _tokens(token_ids: Sequence[int]) -> np.ndarray:
++        if isinstance(token_ids, (str, bytes)):
++            raise RuntimeContractError("token_ids must be one non-empty integer sequence")
++        try:
++            values = np.asarray(list(token_ids))
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError("token_ids must be one non-empty integer sequence") from exc
++        if values.ndim != 1 or values.size == 0 or not np.issubdtype(values.dtype, np.integer):
++            raise RuntimeContractError("token_ids must be one non-empty integer sequence")
++        return values.astype(np.int64, copy=False)[None, :]
++
++    @staticmethod
++    def _input_array(
++        value: Any,
++        *,
++        name: str,
++        dtype: np.dtype[Any],
++        shape: tuple[int, ...] | None = None,
++        batch: bool = False,
++    ) -> np.ndarray:
++        try:
++            array = np.asarray(value, dtype=dtype)
++        except (TypeError, ValueError, OverflowError) as exc:
++            raise RuntimeContractError(f"{name} must be a valid {dtype.name} array") from exc
++        if shape is not None and array.shape != shape:
++            raise RuntimeContractError(f"{name} must have shape {shape}, got {array.shape}")
++        if batch and (array.ndim < 2 or array.shape[0] != 1):
++            raise RuntimeContractError(f"{name} must have a batch dimension of 1")
++        if not np.all(np.isfinite(array)):
++            raise RuntimeContractError(f"{name} must contain only finite values")
++        return array
++
++    @staticmethod
++    def _session_input_names(session: Any) -> set[str] | None:
++        names = getattr(session, "input_names", None)
++        if names is not None:
++            return set(names)
++        get_inputs = getattr(session, "get_inputs", None)
++        if get_inputs is not None:
++            return {str(value.name) for value in get_inputs()}
++        return None
++
++    @classmethod
++    def _validate_session_inputs(cls, session: Any, component: str) -> None:
++        names = cls._session_input_names(session)
++        if names is None:
++            return
++        expected = cls._MODEL_INPUTS[component]
++        if names != expected:
++            missing = sorted(expected - names)
++            unexpected = sorted(names - expected)
++            details = []
++            if missing:
++                details.append(f"missing: {', '.join(missing)}")
++            if unexpected:
++                details.append(f"unexpected: {', '.join(unexpected)}")
++            raise RuntimeContractError(
++                f"Supertonic {component} input contract mismatch ({'; '.join(details)})"
++            )
++
++    @staticmethod
++    def _run(session: Any, inputs: dict[str, np.ndarray]) -> list[Any]:
++        try:
++            return list(session.run(inputs))
++        except TypeError:
++            return list(session.run(None, inputs))
++
++    @staticmethod
++    def _first_output(session: Any, inputs: dict[str, np.ndarray], component: str) -> np.ndarray:
++        SupertonicAdapter._validate_session_inputs(session, component)
++        outputs = SupertonicAdapter._run(session, inputs)
++        if not outputs:
++            raise RuntimeContractError(f"Supertonic {component} returned no outputs")
++        value = np.asarray(outputs[0])
++        if not np.all(np.isfinite(value)):
++            raise RuntimeContractError(f"Supertonic {component} returned non-finite output")
++        return value
++
++    @staticmethod
++    def _latent_mask(wav_lengths: np.ndarray, chunk_size: int) -> np.ndarray:
++        latent_lengths = (wav_lengths + chunk_size - 1) // chunk_size
++        max_length = int(latent_lengths.max())
++        indices = np.arange(max_length)
++        mask = (indices < latent_lengths[:, None]).astype(np.float32)
++        return mask.reshape(-1, 1, max_length)
++
++    @staticmethod
++    def _canonical_audio(value: np.ndarray) -> np.ndarray:
++        audio = np.asarray(value, dtype=np.float32).squeeze()
++        if audio.ndim == 0 and audio.size == 1:
++            audio = audio.reshape(1)
++        if audio.ndim != 1 or audio.size == 0:
++            raise RuntimeContractError("Supertonic vocoder audio must be a non-empty vector")
++        if not np.all(np.isfinite(audio)):
++            raise RuntimeContractError("Supertonic vocoder returned non-finite audio")
++        return audio
++
++    def infer(
++        self,
++        token_ids: Sequence[int],
++        *,
++        text_mask: Any = None,
++        style_ttl: Any = None,
++        style_dp: Any = None,
++        steps: int = 5,
++        speed: float = 1.05,
++        seed: int | None = None,
++        **kwargs: Any,
++    ) -> InferenceResult:
++        if kwargs:
++            raise RuntimeContractError(
++                "Unsupported Supertonic inference arguments: " + ", ".join(sorted(kwargs))
++            )
++        if text_mask is None or style_ttl is None or style_dp is None:
++            raise RuntimeContractError("text_mask, style_ttl, and style_dp are required")
++        steps, speed, seed = self._validate_arguments(steps, speed, seed)
++        text_ids = self._tokens(token_ids)
++        text_mask_value = self._input_array(
++            text_mask,
++            name="text_mask",
++            dtype=np.dtype(np.float32),
++            shape=(1, 1, text_ids.shape[1]),
++        )
++        ttl_style = self._input_array(
++            style_ttl, name="style_ttl", dtype=np.dtype(np.float32), batch=True
++        )
++        dp_style = self._input_array(
++            style_dp, name="style_dp", dtype=np.dtype(np.float32), batch=True
++        )
++        sample_rate, base_chunk_size, chunk_compress_factor, latent_dim = self._settings()
++
++        duration = self._first_output(
++            self._get_session("duration_predictor"),
++            {"text_ids": text_ids, "style_dp": dp_style, "text_mask": text_mask_value},
++            "duration_predictor",
++        ).astype(np.float32, copy=False)
++        if duration.size != 1 or np.any(duration <= 0):
++            raise RuntimeContractError("Supertonic duration must contain one positive value")
++        duration = duration / np.float32(speed)
++        if not np.all(np.isfinite(duration)) or np.any(duration <= 0):
++            raise RuntimeContractError("Supertonic duration must contain one finite positive value")
++
++        text_emb = self._first_output(
++            self._get_session("text_encoder"),
++            {"text_ids": text_ids, "style_ttl": ttl_style, "text_mask": text_mask_value},
++            "text_encoder",
++        )
++        chunk_size = base_chunk_size * chunk_compress_factor
++        wav_lengths = (duration * sample_rate).astype(np.int64).reshape(-1)
++        latent_length = math.ceil(float(duration.max()) * sample_rate / chunk_size)
++        latent_width = latent_dim * chunk_compress_factor
++        rng = np.random.RandomState(seed)
++        noisy_latent = rng.randn(1, latent_width, latent_length).astype(np.float32)
++        latent_mask = self._latent_mask(wav_lengths, chunk_size)
++        try:
++            noisy_latent = noisy_latent * latent_mask
++        except ValueError as exc:
++            raise RuntimeContractError(
++                "Supertonic duration produced an incompatible latent mask shape"
++            ) from exc
++
++        for step in range(steps):
++            current_step = np.asarray([step], dtype=np.float32)
++            total_step = np.asarray([steps], dtype=np.float32)
++            latent = self._first_output(
++                self._get_session("vector_estimator"),
++                {
++                    "noisy_latent": noisy_latent,
++                    "text_emb": text_emb,
++                    "style_ttl": ttl_style,
++                    "text_mask": text_mask_value,
++                    "latent_mask": latent_mask,
++                    "current_step": current_step,
++                    "total_step": total_step,
++                },
++                "vector_estimator",
++            )
++            if latent.shape != noisy_latent.shape:
++                raise RuntimeContractError(
++                    "Supertonic vector_estimator output shape does not match noisy_latent"
++                )
++            noisy_latent = latent
++
++        audio = self._canonical_audio(
++            self._first_output(self._get_session("vocoder"), {"latent": noisy_latent}, "vocoder")
++        )
++        return InferenceResult(
++            audio=audio,
++            sample_rate=sample_rate,
++            timings=duration,
++            outputs={"duration": duration},
++            metadata={
++                "system": "supertonic",
++                "layout": "supertonic-3-v1",
++                "steps": steps,
++                "speed": speed,
++                "seed": seed,
++            },
++        )
++
++    def diagnostics(self) -> Any:
++        for component in self.COMPONENTS:
++            self._get_session(component)
++        return super().diagnostics()
+diff --git a/pyproject.toml b/pyproject.toml
+index 9695098..17478b6 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -71,6 +71,10 @@ fallback_version = "0.1.0"
+ [tool.pytest.ini_options]
+ testpaths = ["tests"]
+ addopts = "-q"
++markers = [
++  "integration: requires external model assets or runtime dependencies",
++  "resource_heavy: resource-intensive integration test",
++]
+
+ [tool.ruff]
+ exclude = ["01_todo.md", "plan.md"]
+diff --git a/tests/test_supertonic_adapter.py b/tests/test_supertonic_adapter.py
+new file mode 100644
+index 0000000..b29aceb
+--- /dev/null
++++ b/tests/test_supertonic_adapter.py
+@@ -0,0 +1,391 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any
++
++import numpy as np
++import pytest
++
++from onnxvoice.errors import CapabilityError, RuntimeContractError
++from onnxvoice.systems.supertonic import SupertonicAdapter
++from onnxvoice.types import Installation, InstalledArtifact
++
++COMPONENT_INPUTS = {
++    "duration_predictor": ("text_ids", "style_dp", "text_mask"),
++    "text_encoder": ("text_ids", "style_ttl", "text_mask"),
++    "vector_estimator": (
++        "noisy_latent",
++        "text_emb",
++        "style_ttl",
++        "text_mask",
++        "latent_mask",
++        "current_step",
++        "total_step",
++    ),
++    "vocoder": ("latent",),
++}
++
++
++def _installation(
++    root: Path,
++    *,
++    duration: float = 0.2,
++    sample_rate: int | None = 44100,
++    missing_config: bool = False,
++    missing_component: str | None = None,
++    config_override: dict[str, Any] | None = None,
++    raw_config: str | None = None,
++) -> Installation:
++    root.mkdir(parents=True, exist_ok=True)
++    config_path = root / "tts.json"
++    config_path.write_text(
++        raw_config
++        if raw_config is not None
++        else json.dumps(
++            config_override
++            or {
++                "ae": {"sample_rate": 44100, "base_chunk_size": 512},
++                "ttl": {"chunk_compress_factor": 6, "latent_dim": 24},
++            }
++        ),
++        encoding="utf-8",
++    )
++    artifacts = []
++    if not missing_config:
++        artifacts.append(InstalledArtifact("config", config_path.name, config_path, "config", 1))
++    components = ("duration_predictor", "text_encoder", "vector_estimator", "vocoder")
++    for component in components:
++        if component == missing_component:
++            continue
++        path = root / f"{component}.onnx"
++        path.write_bytes(b"model")
++        artifacts.append(
++            InstalledArtifact("model", path.name, path, component, 5, component=component)
++        )
++    return Installation(
++        system="supertonic",
++        id="test-supertonic",
++        kind="external",
++        path=root,
++        artifacts=tuple(artifacts),
++        sample_rate=sample_rate,
++        metadata={"runtime": {"layout": "supertonic-3-v1"}},
++    )
++
++
++class FakeSession:
++    def __init__(
++        self,
++        component: str,
++        *,
++        duration: float = 0.2,
++        input_names: tuple[str, ...] | None = None,
++        ort_style: bool = False,
++    ) -> None:
++        self.component = component
++        self.duration = duration
++        self.input_names = input_names if input_names is not None else COMPONENT_INPUTS[component]
++        self.calls: list[dict[str, np.ndarray]] = []
++        self.close_count = 0
++        self.ort_style = ort_style
++
++    def run(self, *args: Any) -> list[np.ndarray]:
++        if self.ort_style and len(args) == 1:
++            raise TypeError("run requires output_names and inputs")
++        if len(args) == 1:
++            inputs = args[0]
++        elif len(args) == 2 and args[0] is None:
++            inputs = args[1]
++        else:
++            raise AssertionError("unexpected ONNX run arguments")
++        saved = {name: np.array(value, copy=True) for name, value in inputs.items()}
++        self.calls.append(saved)
++        if self.component == "duration_predictor":
++            return [np.asarray([[self.duration]], dtype=np.float32)]
++        if self.component == "text_encoder":
++            return [np.ones((1, 4, 3), dtype=np.float32)]
++        if self.component == "vector_estimator":
++            return [inputs["noisy_latent"] + np.float32(0.125)]
++        return [inputs["latent"][:, 0, :]]
++
++    def diagnostics(self) -> SimpleNamespace:
++        return SimpleNamespace(component=self.component)
++
++    def close(self) -> None:
++        self.close_count += 1
++
++
++def _patch_sessions(
++    monkeypatch: pytest.MonkeyPatch,
++    *,
++    duration: float = 0.2,
++    input_names: dict[str, tuple[str, ...]] | None = None,
++    ort_style: bool = False,
++) -> tuple[dict[str, FakeSession], list[tuple[Path, dict[str, Any]]]]:
++    sessions = {
++        component: FakeSession(
++            component,
++            duration=duration,
++            input_names=(input_names or {}).get(component),
++            ort_style=ort_style,
++        )
++        for component in COMPONENT_INPUTS
++    }
++    constructions: list[tuple[Path, dict[str, Any]]] = []
++
++    def factory(path: Path, **kwargs: Any) -> FakeSession:
++        constructions.append((path, kwargs))
++        return sessions[kwargs["component"]]
++
++    monkeypatch.setattr("onnxvoice.systems.supertonic.OnnxSession", factory)
++    return sessions, constructions
++
++
++def _infer(adapter: SupertonicAdapter, **kwargs: Any):
++    arguments = {
++        "token_ids": [7, 11, 13],
++        "text_mask": np.ones((1, 1, 3), dtype=np.float32),
++        "style_ttl": np.ones((1, 4, 5), dtype=np.float64),
++        "style_dp": np.ones((1, 2, 3), dtype=np.float64),
++    }
++    arguments.update(kwargs)
++    return adapter.infer(**arguments)
++
++
++def test_sessions_are_lazy_and_receive_component_provider_configuration(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    sessions, constructions = _patch_sessions(monkeypatch)
++    options = [{"device_id": "3"}]
++    session_options = object()
++    adapter = SupertonicAdapter(
++        _installation(tmp_path),
++        providers=["CUDAExecutionProvider"],
++        provider_options=options,
++        session_options=session_options,
++    )
++
++    assert adapter._sessions == {}
++    assert constructions == []
++    session = adapter._get_session("duration_predictor")
++
++    assert session is sessions["duration_predictor"]
++    assert len(constructions) == 1
++    path, kwargs = constructions[0]
++    assert path == tmp_path / "duration_predictor.onnx"
++    assert kwargs == {
++        "component": "duration_predictor",
++        "providers": ["CUDAExecutionProvider"],
++        "provider_options": options,
++        "session_options": session_options,
++    }
++    assert adapter._sessions == {"duration_predictor": session}
++
++
++def test_diagnostics_materializes_all_four_named_sessions(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    sessions, constructions = _patch_sessions(monkeypatch)
++    adapter = SupertonicAdapter(_installation(tmp_path))
++
++    diagnostic = adapter.diagnostics()
++
++    assert len(constructions) == 4
++    assert tuple(session.component for session in diagnostic.sessions) == tuple(sessions)
++
++
++def test_infer_passes_archived_inputs_dtypes_and_steps(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    sessions, _ = _patch_sessions(monkeypatch)
++    adapter = SupertonicAdapter(_installation(tmp_path))
++
++    result = _infer(adapter, steps=3, speed=1.25, seed=7)
++
++    assert tuple(sessions["duration_predictor"].calls[0]) == (
++        "text_ids",
++        "style_dp",
++        "text_mask",
++    )
++    dp_inputs = sessions["duration_predictor"].calls[0]
++    assert dp_inputs["text_ids"].shape == (1, 3)
++    assert dp_inputs["text_ids"].dtype == np.int64
++    assert dp_inputs["style_dp"].dtype == np.float32
++    assert dp_inputs["text_mask"].dtype == np.float32
++    text_inputs = sessions["text_encoder"].calls[0]
++    assert set(text_inputs) == {"text_ids", "style_ttl", "text_mask"}
++    assert text_inputs["style_ttl"].dtype == np.float32
++
++    vector_calls = sessions["vector_estimator"].calls
++    expected_noise = np.random.RandomState(7).randn(1, 144, 3).astype(np.float32)
++    np.testing.assert_array_equal(vector_calls[0]["noisy_latent"], expected_noise)
++    assert len(vector_calls) == 3
++    assert [call["current_step"].tolist() for call in vector_calls] == [[0.0], [1.0], [2.0]]
++    assert all(call["current_step"].dtype == np.float32 for call in vector_calls)
++    assert all(call["total_step"].tolist() == [3.0] for call in vector_calls)
++    assert all(call["noisy_latent"].shape == (1, 144, 3) for call in vector_calls)
++    assert set(vector_calls[0]) == set(COMPONENT_INPUTS["vector_estimator"])
++    assert set(sessions["vocoder"].calls[0]) == {"latent"}
++
++    expected_duration = np.asarray([[0.2]], dtype=np.float32) / np.float32(1.25)
++    np.testing.assert_allclose(result.timings, expected_duration)
++    np.testing.assert_array_equal(result.outputs["duration"], result.timings)
++    assert result.audio.ndim == 1
++    assert result.audio.dtype == np.float32
++    assert result.sample_rate == 44100
++    assert result.metadata == {
++        "system": "supertonic",
++        "layout": "supertonic-3-v1",
++        "steps": 3,
++        "speed": 1.25,
++        "seed": 7,
++    }
++    assert set(result.outputs) == {"duration"}
++
++
++def test_seed_is_deterministic_and_does_not_mutate_global_numpy_rng(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    sessions, _ = _patch_sessions(monkeypatch)
++    adapter = SupertonicAdapter(_installation(tmp_path))
++    np.random.seed(12345)
++    before = np.random.get_state()
++
++    first = _infer(adapter, steps=2, seed=99)
++    after = np.random.get_state()
++    second = _infer(adapter, steps=2, seed=99)
++
++    assert before[0] == after[0]
++    np.testing.assert_array_equal(before[1], after[1])
++    assert before[2:] == after[2:]
++    np.testing.assert_array_equal(first.audio, second.audio)
++    np.testing.assert_array_equal(
++        sessions["vector_estimator"].calls[0]["noisy_latent"],
++        sessions["vector_estimator"].calls[2]["noisy_latent"],
++    )
++
++
++def test_run_supports_onnxruntime_run_signature(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    sessions, _ = _patch_sessions(monkeypatch, ort_style=True)
++    adapter = SupertonicAdapter(_installation(tmp_path))
++
++    _infer(adapter, steps=1, seed=1)
++
++    assert all(sessions[component].calls for component in COMPONENT_INPUTS)
++
++
++@pytest.mark.parametrize(
++    "kwargs",
++    [
++        {"steps": 0},
++        {"steps": 101},
++        {"steps": 1.5},
++        {"steps": True},
++        {"speed": 0.69},
++        {"speed": 2.01},
++        {"speed": np.nan},
++        {"seed": -1},
++        {"seed": 2**32},
++        {"unexpected": 1},
++    ],
++)
++def test_invalid_arguments_fail_before_session_creation(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, Any]
++) -> None:
++    _, constructions = _patch_sessions(monkeypatch)
++    adapter = SupertonicAdapter(_installation(tmp_path))
++
++    with pytest.raises(RuntimeContractError):
++        _infer(adapter, **kwargs)
++
++    assert constructions == []
++
++
++def test_missing_config_and_model_components_are_capability_errors(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    _patch_sessions(monkeypatch)
++    no_config = SupertonicAdapter(_installation(tmp_path / "without-config", missing_config=True))
++    with pytest.raises(CapabilityError, match="missing config artifact"):
++        _infer(no_config)
++
++    missing_model = SupertonicAdapter(
++        _installation(tmp_path / "without-model", missing_component="duration_predictor")
++    )
++    with pytest.raises(CapabilityError, match="duration_predictor"):
++        _infer(missing_model)
++
++
++def test_malformed_config_and_missing_config_key_are_contract_errors(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    _patch_sessions(monkeypatch)
++    malformed = SupertonicAdapter(_installation(tmp_path / "malformed", raw_config="{"))
++    with pytest.raises(RuntimeContractError, match="Could not read Supertonic config"):
++        _infer(malformed)
++
++    incomplete_config = {
++        "ae": {"sample_rate": 44100},
++        "ttl": {"chunk_compress_factor": 6, "latent_dim": 24},
++    }
++    incomplete = SupertonicAdapter(
++        _installation(tmp_path / "incomplete", config_override=incomplete_config)
++    )
++    with pytest.raises(RuntimeContractError, match="ae.base_chunk_size"):
++        _infer(incomplete)
++
++
++def test_installation_sample_rate_must_match_config(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    _patch_sessions(monkeypatch)
++    adapter = SupertonicAdapter(_installation(tmp_path, sample_rate=22050))
++
++    with pytest.raises(RuntimeContractError, match="disagrees with Supertonic config"):
++        _infer(adapter)
++
++
++def test_input_names_are_checked_before_running_session(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    sessions, _ = _patch_sessions(
++        monkeypatch, input_names={"duration_predictor": ("text_ids", "text_mask")}
++    )
++    adapter = SupertonicAdapter(_installation(tmp_path))
++
++    with pytest.raises(RuntimeContractError, match="duration_predictor input contract mismatch"):
++        _infer(adapter)
++
++    assert sessions["duration_predictor"].calls == []
++
++
++def test_close_is_idempotent_and_closes_every_created_session(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    sessions, _ = _patch_sessions(monkeypatch)
++    adapter = SupertonicAdapter(_installation(tmp_path))
++    adapter._get_session("duration_predictor")
++    adapter._get_session("text_encoder")
++
++    adapter.close()
++    adapter.close()
++
++    assert sessions["duration_predictor"].close_count == 1
++    assert sessions["text_encoder"].close_count == 1
++    assert all(sessions[name].close_count == 0 for name in ("vector_estimator", "vocoder"))
++    assert adapter._sessions == {}
++
++
++def test_missing_config_setting_reports_path(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    _patch_sessions(monkeypatch)
++    config = {"ae": {"sample_rate": 44100, "base_chunk_size": 512}, "ttl": {"latent_dim": 24}}
++    adapter = SupertonicAdapter(_installation(tmp_path, config_override=config))
++
++    with pytest.raises(RuntimeContractError, match="ttl.chunk_compress_factor"):
++        _infer(adapter)
+diff --git a/tests/test_supertonic_local_open.py b/tests/test_supertonic_local_open.py
+new file mode 100644
+index 0000000..e057e44
+--- /dev/null
++++ b/tests/test_supertonic_local_open.py
+@@ -0,0 +1,83 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from onnxvoice import OnnxVoice, registered_systems
++from onnxvoice.systems import SupertonicAdapter
++
++MODEL_COMPONENTS = (
++    "duration_predictor",
++    "text_encoder",
++    "vector_estimator",
++    "vocoder",
++)
++
++
++def _bundle_files(root: Path) -> dict[str, Path]:
++    files = {
++        "config": "onnx/tts.json",
++        "unicode_indexer": "onnx/unicode_indexer.json",
++        **{component: f"onnx/{component}.onnx" for component in MODEL_COMPONENTS},
++        **{
++            f"voice_style:{name}": f"voice_styles/{name}.json"
++            for name in ("F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5")
++        },
++    }
++    result = {}
++    for key, relative_path in files.items():
++        path = root / relative_path
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text("{}", encoding="utf-8")
++        result[key] = path
++    return result
++
++
++def test_supertonic_adapter_is_registered_and_exported() -> None:
++    assert "supertonic" in registered_systems()
++    assert SupertonicAdapter.system == "supertonic"
++
++
++def test_open_local_maps_supertonic_artifacts_without_catalog_or_store(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    def forbidden(*args: object, **kwargs: object) -> None:
++        pytest.fail("local Supertonic opening must not access the catalog or asset store")
++
++    monkeypatch.setattr("onnxvoice.manager.CatalogClient", forbidden)
++    monkeypatch.setattr("onnxvoice.manager.AssetStore", forbidden)
++    files = _bundle_files(tmp_path)
++
++    runtime = OnnxVoice.open_local(
++        system="supertonic",
++        files=files,
++        sample_rate=44100,
++        artifact_metadata={"duration_predictor": {"source": "local"}},
++    )
++    try:
++        installation = runtime.installation
++        assert installation.sample_rate == 44100
++        assert installation.artifact("config").path == files["config"].resolve()
++        assert installation.artifact("unicode_indexer").path == files["unicode_indexer"].resolve()
++        for component in MODEL_COMPONENTS:
++            artifact = installation.artifact("model", component=component)
++            assert artifact.path == files[component].resolve()
++        assert installation.artifact("model", component="duration_predictor").metadata == {
++            "source": "local"
++        }
++        for name in ("F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"):
++            assert (
++                installation.artifact("voice_style", component=name).path
++                == files[f"voice_style:{name}"].resolve()
++            )
++    finally:
++        runtime.close()
++
++
++def test_open_local_rejects_empty_supertonic_voice_style_component(tmp_path: Path) -> None:
++    style = tmp_path / "style.json"
++    style.write_text("{}", encoding="utf-8")
++
++    with pytest.raises(ValueError, match="voice_style keys must include a component name"):
++        OnnxVoice.open_local(system="supertonic", files={"voice_style:": style})
+diff --git a/tests/test_supertonic_parity.py b/tests/test_supertonic_parity.py
+new file mode 100644
+index 0000000..24941ee
+--- /dev/null
++++ b/tests/test_supertonic_parity.py
+@@ -0,0 +1,99 @@
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from onnxvoice import OnnxVoice
++
++PINNED_REVISION = "aafc6e32416a594460b32413efc49d7fe4ce6d46"
++WAVEFORM_RTOL = 1e-4
++WAVEFORM_ATOL = 1e-5
++MODEL_COMPONENTS = ("duration_predictor", "text_encoder", "vector_estimator", "vocoder")
++
++
++@pytest.mark.integration
++@pytest.mark.resource_heavy
++def test_supertonic3_matches_archived_supertonic_py() -> None:
++    """Compare the pinned bundle to archived supertonic-py on CPU.
++
++    Set ONNXVOICE_SUPERTONIC3_BUNDLE to a local copy of the model snapshot and
++    ONNXVOICE_SUPERTONIC3_REVISION to its revision. Waveforms are compared with
++    rtol=1e-4 and atol=1e-5 to allow minor CPU execution differences.
++    """
++    bundle_value = os.environ.get("ONNXVOICE_SUPERTONIC3_BUNDLE")
++    if not bundle_value:
++        pytest.skip("set ONNXVOICE_SUPERTONIC3_BUNDLE to run pinned model parity")
++    if os.environ.get("ONNXVOICE_SUPERTONIC3_REVISION") != PINNED_REVISION:
++        pytest.skip(f"parity requires model revision {PINNED_REVISION}")
++
++    root = Path(bundle_value)
++    model_paths = {name: root / "onnx" / f"{name}.onnx" for name in MODEL_COMPONENTS}
++    style_path = root / "voice_styles" / "M1.json"
++    config_path = root / "onnx" / "tts.json"
++    indexer_path = root / "onnx" / "unicode_indexer.json"
++    required = [*model_paths.values(), style_path, config_path, indexer_path]
++    missing = [str(path) for path in required if not path.is_file()]
++    if missing:
++        pytest.fail("pinned Supertonic-3 bundle is incomplete: " + ", ".join(missing))
++
++    ort = pytest.importorskip("onnxruntime")
++    upstream = pytest.importorskip("supertonic.core")
++    config = json.loads(config_path.read_text(encoding="utf-8"))
++    with style_path.open(encoding="utf-8") as stream:
++        style_data = json.load(stream)
++    style_ttl = np.asarray(style_data["style_ttl"]["data"], dtype=np.float32).reshape(
++        style_data["style_ttl"]["dims"]
++    )
++    style_dp = np.asarray(style_data["style_dp"]["data"], dtype=np.float32).reshape(
++        style_data["style_dp"]["dims"]
++    )
++    processor = upstream.UnicodeProcessor(str(indexer_path))
++    text = "Supertonic local runtime parity check."
++    token_ids, text_mask = processor([text], lang="en")
++    steps = 5
++    speed = 1.05
++    seed = 1234
++    style = upstream.Style(style_ttl, style_dp)
++    sessions = [
++        ort.InferenceSession(str(model_paths[component]), providers=["CPUExecutionProvider"])
++        for component in MODEL_COMPONENTS
++    ]
++    reference_runtime = upstream.Supertonic(config, processor, *sessions)
++
++    np.random.seed(seed)
++    reference_audio, reference_duration = reference_runtime(
++        [text], style, total_step=steps, speed=speed, lang="en"
++    )
++    runtime = OnnxVoice.open_local(
++        system="supertonic",
++        files={
++            "config": config_path,
++            "unicode_indexer": indexer_path,
++            **model_paths,
++            "voice_style:M1": style_path,
++        },
++        sample_rate=int(config["ae"]["sample_rate"]),
++        runtime={"layout": "supertonic-3-v1"},
++        providers="CPUExecutionProvider",
++    )
++    try:
++        result = runtime.infer(
++            token_ids[0].tolist(),
++            text_mask=text_mask,
++            style_ttl=style_ttl,
++            style_dp=style_dp,
++            steps=steps,
++            speed=speed,
++            seed=seed,
++        )
++        expected = np.asarray(reference_audio, dtype=np.float32).squeeze()
++        assert config["ae"]["sample_rate"] == 44100
++        assert result.sample_rate == 44100
++        np.testing.assert_allclose(result.timings, reference_duration, rtol=0, atol=1e-7)
++        np.testing.assert_allclose(result.audio, expected, rtol=WAVEFORM_RTOL, atol=WAVEFORM_ATOL)
++    finally:
++        runtime.close()

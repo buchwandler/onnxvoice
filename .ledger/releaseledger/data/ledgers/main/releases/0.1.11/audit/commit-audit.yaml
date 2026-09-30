@@ -1,0 +1,33 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 2
+release_version: 0.1.11
+git_base_ref: v0.1.10
+git_base_sha: b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891
+git_head_ref: v0.1.11
+git_head_sha: 13163fe28703407ae8fb961ea4c9bf23598a224a
+git_range: b2a3bd8486ced3e1aa45ea5a6e995714e7a5f891..13163fe28703407ae8fb961ea4c9bf23598a224a
+commit_count: 1
+rows:
+  - sha: 13163fe28703407ae8fb961ea4c9bf23598a224a
+    source_ref: git:13163fe28703407ae8fb961ea4c9bf23598a224a
+    short_sha: 13163fe
+    changed_paths:
+      - onnxvoice/catalog_tools/pocket.py
+    stats:
+      files_changed: 1
+      insertions: 1
+      deletions: 0
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog_tools/pocket.py
+    observed_behavior:
+      Added an explicit assertion to narrow tree metadata for static
+      type checking before integrity fields are read; runtime behavior is unchanged.
+    public_impact: internal
+    decision: internal
+    stale: false
+    evidence_subject: "chore: mypy"
+    notes: Static type-checking-only change with no user-visible behavior change.

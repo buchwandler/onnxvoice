@@ -1,0 +1,117 @@
+rows:
+  - sha: eb0bb57ec96ceeb98908faf6cc0ec54e58c5dbaa
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/architecture.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/piper.py
+      - onnxvoice/catalog_tools/pocket.py
+      - onnxvoice/catalog_tools/voice_selectors.py
+      - onnxvoice/inventory.py
+      - onnxvoice/manager.py
+      - onnxvoice/types.py
+      - onnxvoice/voice_selectors.py
+      - tests/test_catalog_tools.py
+      - tests/test_inventory.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_voice_selectors.py
+    observed_behavior: "Normalized catalog language tags and exposed per-voice locale, language label, and gender metadata. Generic language filters now match compatible specific locales without changing permanent selector namespaces."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed inventory, catalog, selector tooling, and focused language and voice-metadata tests."
+    stale: false
+  - sha: 54301b0d50639a64e705e53356f2ea7c0bb8a7a3
+    inspected: true
+    inspected_paths:
+      - docs/Makefile
+      - docs/conf.py
+      - docs/make.bat
+      - docs/make.py
+      - docs/requirements.txt
+      - onnxvoice/manager.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/supertonic.py
+      - pyproject.toml
+      - tests/test_supertonic_adapter.py
+      - tests/test_supertonic_local_open.py
+      - tests/test_supertonic_parity.py
+    observed_behavior: "Registered a Supertonic runtime adapter that executes duration prediction, text encoding, iterative vector estimation, and vocoding across four model components with validated inputs, speed, steps, and optional deterministic seed."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed adapter registration, local multi-component mapping, validation, fake-session tests, and optional parity coverage."
+    stale: false
+  - sha: 8b5b7eca5b8ad231b889b2721c9a4f5a0c63b09e
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/__init__.py
+      - onnxvoice/catalog_tools/supertonic.py
+      - onnxvoice/cli.py
+      - tests/test_cli_catalog_supertonic.py
+      - tests/test_supertonic_catalog.py
+      - tests/test_supertonic_catalog_tools.py
+    observed_behavior: "Added Supertonic bundle parsing and validation plus pinned catalog build and verification commands, checking component roles, revision-pinned URLs, integrity, and voice-style references."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed parser, builder, verifier, CLI routing, and catalog and installation tests."
+    stale: false
+  - sha: 12ff837777e416777a07e9d98e2ef0f9941a9f64
+    inspected: true
+    inspected_paths:
+      - .github/workflows/docs.yml
+      - .readthedocs.yaml
+      - README.md
+      - docs/api/catalog.md
+      - docs/api/errors.md
+      - docs/api/index.md
+      - docs/api/inventory.md
+      - docs/api/manager.md
+      - docs/api/runtime.md
+      - docs/api/store.md
+      - docs/api/types.md
+      - docs/api/validation.md
+      - docs/api/voice-selectors.md
+      - docs/architecture.md
+      - docs/cli.md
+      - docs/concepts.md
+      - docs/conf.py
+      - docs/getting-started.md
+      - docs/index.md
+      - docs/local-models.md
+      - docs/make.py
+      - docs/providers.md
+      - docs/python-api.md
+      - docs/storage.md
+      - docs/systems/index.md
+      - docs/systems/kokoro.md
+      - docs/systems/piper.md
+      - docs/systems/pocket.md
+      - docs/systems/supertonic.md
+      - docs/updates.md
+      - docs/voices.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/manager.py
+      - onnxvoice/runtime.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - onnxvoice/validation.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_docs_examples.py
+      - tests/test_public_api.py
+    observed_behavior: "Added task-oriented guides, CLI and Python references, system and API pages, and automated documentation builds."
+    public_impact: docs
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed Sphinx and Read the Docs configuration, user and API guides, and documentation coverage and example tests."
+    stale: false

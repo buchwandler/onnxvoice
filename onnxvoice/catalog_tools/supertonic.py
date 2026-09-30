@@ -268,7 +268,7 @@ def build_catalog(
         for path in tree_by_path
         if path.startswith("voice_styles/") and path.count("/") == 1 and path.endswith(".json")
     )
-    _require(styles, "No voice_styles/*.json assets found")
+    _require(bool(styles), "No voice_styles/*.json assets found")
     style_components = [_safe_name(Path(path).stem, "voice style component") for path in styles]
     _require(
         len(style_components) == len(set(style_components)), "Duplicate voice style components"

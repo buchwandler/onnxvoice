@@ -1,0 +1,136 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.1.13
+git_base_ref: a34f43dbca0655b5b0cb3fb4234d4f7f48bc87ab
+git_base_sha: a34f43dbca0655b5b0cb3fb4234d4f7f48bc87ab
+git_head_ref: 12ff837777e416777a07e9d98e2ef0f9941a9f64
+git_head_sha: 12ff837777e416777a07e9d98e2ef0f9941a9f64
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added per-voice language, locale, label, and gender metadata with generic-compatible locale filtering"
+    status: accepted
+    source_refs:
+      - git:eb0bb57ec96ceeb98908faf6cc0ec54e58c5dbaa
+    paths:
+      - README.md
+      - docs/architecture.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/piper.py
+      - onnxvoice/catalog_tools/pocket.py
+      - onnxvoice/catalog_tools/voice_selectors.py
+      - onnxvoice/inventory.py
+      - onnxvoice/manager.py
+      - onnxvoice/types.py
+      - onnxvoice/voice_selectors.py
+      - tests/test_catalog_tools.py
+      - tests/test_inventory.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_voice_selectors.py
+    sources:
+      - git:eb0bb57ec96ceeb98908faf6cc0ec54e58c5dbaa
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: "Added Supertonic multi-component ONNX inference with configurable steps, speed, and deterministic seeding"
+    status: accepted
+    source_refs:
+      - git:54301b0d50639a64e705e53356f2ea7c0bb8a7a3
+    paths:
+      - docs/Makefile
+      - docs/conf.py
+      - docs/make.bat
+      - docs/make.py
+      - docs/requirements.txt
+      - onnxvoice/manager.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/supertonic.py
+      - pyproject.toml
+      - tests/test_supertonic_adapter.py
+      - tests/test_supertonic_local_open.py
+      - tests/test_supertonic_parity.py
+    sources:
+      - git:54301b0d50639a64e705e53356f2ea7c0bb8a7a3
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: "Added pinned Supertonic bundle catalog generation, validation, verification, and CLI commands"
+    status: accepted
+    source_refs:
+      - git:8b5b7eca5b8ad231b889b2721c9a4f5a0c63b09e
+    paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/__init__.py
+      - onnxvoice/catalog_tools/supertonic.py
+      - onnxvoice/cli.py
+      - tests/test_cli_catalog_supertonic.py
+      - tests/test_supertonic_catalog.py
+      - tests/test_supertonic_catalog_tools.py
+    sources:
+      - git:8b5b7eca5b8ad231b889b2721c9a4f5a0c63b09e
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: docs
+    summary: "Documented CLI, Python, system, storage, provider, and API workflows with automated Sphinx builds"
+    status: accepted
+    source_refs:
+      - git:12ff837777e416777a07e9d98e2ef0f9941a9f64
+    paths:
+      - .github/workflows/docs.yml
+      - .readthedocs.yaml
+      - README.md
+      - docs/api/catalog.md
+      - docs/api/errors.md
+      - docs/api/index.md
+      - docs/api/inventory.md
+      - docs/api/manager.md
+      - docs/api/runtime.md
+      - docs/api/store.md
+      - docs/api/types.md
+      - docs/api/validation.md
+      - docs/api/voice-selectors.md
+      - docs/architecture.md
+      - docs/cli.md
+      - docs/concepts.md
+      - docs/conf.py
+      - docs/getting-started.md
+      - docs/index.md
+      - docs/local-models.md
+      - docs/make.py
+      - docs/providers.md
+      - docs/python-api.md
+      - docs/storage.md
+      - docs/systems/index.md
+      - docs/systems/kokoro.md
+      - docs/systems/piper.md
+      - docs/systems/pocket.md
+      - docs/systems/supertonic.md
+      - docs/updates.md
+      - docs/voices.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/manager.py
+      - onnxvoice/runtime.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - onnxvoice/validation.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_docs_examples.py
+      - tests/test_public_api.py
+    sources:
+      - git:12ff837777e416777a07e9d98e2ef0f9941a9f64
+      - git:54301b0d50639a64e705e53356f2ea7c0bb8a7a3
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
