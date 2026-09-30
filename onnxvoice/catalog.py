@@ -16,7 +16,13 @@ from platformdirs import user_cache_path
 from .errors import AssetNotFoundError, CatalogError, OfflineError
 from .inventory import VALID_GENDERS, language_base, normalize_language_tag
 from .store import FileLock, ProgressCallback
-from .types import Artifact, AssetProgress, CatalogItem, validate_relative_path
+from .types import (
+    Artifact,
+    AssetProgress,
+    CatalogItem,
+    validate_relative_path,
+    validate_safe_component,
+)
 
 POCKET_ARTIFACT_ROLES = frozenset(
     {
@@ -33,6 +39,14 @@ POCKET_ARTIFACT_ROLES = frozenset(
 _POCKET_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _POCKET_HF_REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
 _POCKET_HF_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+_ST_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_ST_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_ST_REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
+_ST_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+ST_MODEL_COMPONENTS = frozenset(
+    {"duration_predictor", "text_encoder", "vector_estimator", "vocoder"}
+)
+ST_ARTIFACT_ROLES = frozenset({"config", "unicode_indexer", "model", "voice_style"})
 
 POCKET_QUALIFIED_ROLES = frozenset(
     {
@@ -48,6 +62,7 @@ DEFAULT_SOURCES = {
     "piper": "https://raw.githubusercontent.com/buchwandler/piper-onnx-voices/main/catalog/voices.json",
     "kokoro": "https://raw.githubusercontent.com/buchwandler/kokoro-onnx-models/main/catalog/models.json",
     "pocket": "https://raw.githubusercontent.com/buchwandler/pocket-onnx-bundles/main/catalog/bundles.json",
+    "supertonic": "https://raw.githubusercontent.com/buchwandler/supertonic-onnx-bundles/main/catalog/bundles.json",
 }
 
 
@@ -137,6 +152,8 @@ class CatalogClient:
             return _parse_kokoro(raw)
         if system == "pocket":
             return _parse_pocket(raw)
+        if system == "supertonic":
+            return _parse_supertonic(raw)
         raise CatalogError(f"No parser for system {system!r}")
 
     def resolve(
@@ -174,6 +191,8 @@ class CatalogClient:
             if item is None:
                 raise AssetNotFoundError(f"Unknown catalog item: {ref}")
         assert item is not None
+        if item.system == "supertonic" and quality is not None:
+            raise AssetNotFoundError("Supertonic has no quality profiles")
         if item.system == "pocket":
             return _select_pocket_profile(item, quality)
         selected_quality = quality
@@ -571,7 +590,246 @@ def _parse_pocket_voice_details(
     return result
 
 
+def _require_supertonic_safe_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _ST_SAFE_ID_RE.fullmatch(value) is None:
+        raise CatalogError(f"{label} is unsafe: {value!r}")
+    return value
+
+
+def _supertonic_artifact_url(repository: str, revision: str, path: str) -> str:
+    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
+    encoded_path = urllib.parse.quote(path, safe="/")
+    return f"https://huggingface.co/{repo}/resolve/{revision}/{encoded_path}?download=true"
+
+
+def _parse_supertonic(data: dict[str, Any]) -> list[CatalogItem]:
+    if not isinstance(data, Mapping):
+        raise CatalogError("Supertonic catalog must be an object")
+    if set(data) != {"schema", "kind", "source", "bundles"}:
+        raise CatalogError("Supertonic catalog must contain exactly schema, kind, source, bundles")
+    if type(data.get("schema")) is not int or data.get("schema") != 1:
+        raise CatalogError("Supertonic catalog schema must be 1")
+    if data.get("kind") != "supertonic-onnx-bundle-catalog":
+        raise CatalogError(f"Unexpected Supertonic catalog kind: {data.get('kind')!r}")
+
+    source = data.get("source")
+    if not isinstance(source, Mapping):
+        raise CatalogError("Supertonic catalog source metadata must be an object")
+    if source.get("provider") != "huggingface":
+        raise CatalogError("Supertonic source provider must be huggingface")
+    repository = source.get("repository")
+    if not isinstance(repository, str) or _ST_REPOSITORY_RE.fullmatch(repository) is None:
+        raise CatalogError("Supertonic source repository must have owner/name form")
+    revision = source.get("revision")
+    if not isinstance(revision, str) or _ST_SHA_RE.fullmatch(revision) is None:
+        raise CatalogError("Supertonic source revision must be a lowercase 40-character SHA")
+    requested_revision = source.get("requested_revision")
+    if not isinstance(requested_revision, str) or not requested_revision.strip():
+        raise CatalogError("Supertonic source requested_revision is required")
+
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Mapping):
+        raise CatalogError("Supertonic catalog bundles must be a mapping")
+    bundle_ids = set(bundles)
+    if any(not isinstance(bundle_id, str) for bundle_id in bundle_ids):
+        raise CatalogError("Supertonic bundle IDs must be strings")
+    bundle_count = source.get("bundle_count")
+    if bundle_count is not None and (
+        isinstance(bundle_count, bool)
+        or not isinstance(bundle_count, int)
+        or bundle_count != len(bundles)
+    ):
+        raise CatalogError("Supertonic source bundle_count does not match bundles")
+
+    result: list[CatalogItem] = []
+    all_aliases: set[str] = set()
+    for bundle_id, raw_entry in bundles.items():
+        _require_supertonic_safe_id(bundle_id, "Supertonic bundle ID")
+        if not isinstance(raw_entry, Mapping):
+            raise CatalogError(f"{bundle_id}: bundle entry must be an object")
+        entry = raw_entry
+        if "id" in entry and entry["id"] != bundle_id:
+            raise CatalogError(f"Supertonic bundle map key {bundle_id!r} does not match id")
+
+        aliases = entry.get("aliases", [])
+        if not isinstance(aliases, Sequence) or isinstance(aliases, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: aliases must be a sequence")
+        parsed_aliases: list[str] = []
+        for alias in aliases:
+            _require_supertonic_safe_id(alias, f"{bundle_id} alias")
+            if alias == bundle_id or alias in bundle_ids or alias in all_aliases:
+                raise CatalogError(f"{bundle_id}: duplicate or conflicting alias {alias!r}")
+            all_aliases.add(alias)
+            parsed_aliases.append(alias)
+
+        raw_artifacts = entry.get("artifacts")
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: artifacts must be a sequence")
+        artifacts: list[Artifact] = []
+        seen_pairs: set[tuple[str, str | None]] = set()
+        seen_roles: set[str] = set()
+        style_components: set[str] = set()
+        for raw in raw_artifacts:
+            if not isinstance(raw, Mapping):
+                raise CatalogError(f"{bundle_id}: artifact must be an object")
+            role = raw.get("role")
+            if not isinstance(role, str) or role not in ST_ARTIFACT_ROLES:
+                raise CatalogError(f"{bundle_id}: unknown Supertonic artifact role {role!r}")
+            component = raw.get("component")
+            if role in {"model", "voice_style"}:
+                component = _require_supertonic_safe_id(component, f"{bundle_id}/{role} component")
+            elif component is not None:
+                raise CatalogError(f"{bundle_id}/{role}: component must be omitted")
+            if role == "model" and component not in ST_MODEL_COMPONENTS:
+                raise CatalogError(f"{bundle_id}: unknown model component {component!r}")
+            pair = (role, component)
+            if pair in seen_pairs:
+                raise CatalogError(f"{bundle_id}: duplicate (role, component) pair {pair!r}")
+            seen_pairs.add(pair)
+            if role in {"config", "unicode_indexer"}:
+                if role in seen_roles:
+                    raise CatalogError(f"{bundle_id}: duplicate {role!r} artifact")
+                seen_roles.add(role)
+            if role == "voice_style":
+                if component in style_components:
+                    raise CatalogError(
+                        f"{bundle_id}: duplicate voice style component {component!r}"
+                    )
+                style_components.add(component)
+
+            filename = raw.get("filename")
+            if not isinstance(filename, str):
+                raise CatalogError(f"{bundle_id}/{role}: invalid filename")
+            try:
+                validate_safe_component(filename, field_name="Supertonic artifact filename")
+            except ValueError as exc:
+                raise CatalogError(f"{bundle_id}/{role}: invalid filename") from exc
+            path = raw.get("path")
+            if not isinstance(path, str):
+                raise CatalogError(f"{bundle_id}/{role}: unsafe artifact path")
+            try:
+                validate_relative_path(path, field_name="Supertonic artifact path")
+            except ValueError as exc:
+                raise CatalogError(f"{bundle_id}/{role}: unsafe artifact path") from exc
+            url = raw.get("url")
+            expected_url = _supertonic_artifact_url(repository, revision, path)
+            if not isinstance(url, str) or url != expected_url:
+                raise CatalogError(f"{bundle_id}/{role}: artifact URL is not pinned to source")
+            size = raw.get("size")
+            if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+                raise CatalogError(f"{bundle_id}/{role}: artifact size must be a positive integer")
+            sha256 = raw.get("sha256")
+            if not isinstance(sha256, str) or _ST_SHA256_RE.fullmatch(sha256) is None:
+                raise CatalogError(f"{bundle_id}/{role}: artifact sha256 must be lowercase hex")
+            format_name = raw.get("format")
+            if not isinstance(format_name, str) or not format_name:
+                raise CatalogError(f"{bundle_id}/{role}: artifact format is required")
+            raw_metadata = raw.get("metadata", {})
+            if not isinstance(raw_metadata, Mapping):
+                raise CatalogError(f"{bundle_id}/{role}: artifact metadata must be an object")
+            artifacts.append(
+                Artifact(
+                    role=role,
+                    component=component,
+                    filename=filename,
+                    url=url,
+                    size=size,
+                    sha256=sha256,
+                    format=format_name,
+                    metadata={
+                        **raw_metadata,
+                        "path": path,
+                        "source": {
+                            "provider": "huggingface",
+                            "repository": repository,
+                            "revision": revision,
+                            "path": path,
+                            "gated": False,
+                        },
+                    },
+                )
+            )
+
+        for role in ("config", "unicode_indexer"):
+            if role not in seen_roles:
+                raise CatalogError(f"{bundle_id}: missing required {role!r} artifact")
+        for component_name in ST_MODEL_COMPONENTS:
+            if ("model", component_name) not in seen_pairs:
+                raise CatalogError(f"{bundle_id}: missing model component {component_name!r}")
+
+        languages = entry.get("languages")
+        if (
+            not isinstance(languages, Sequence)
+            or isinstance(languages, (str, bytes))
+            or not languages
+        ):
+            raise CatalogError(f"{bundle_id}: languages must be a non-empty sequence")
+        if any(not isinstance(language, str) or not language for language in languages):
+            raise CatalogError(f"{bundle_id}: languages must contain non-empty strings")
+        if len(set(languages)) != len(languages):
+            raise CatalogError(f"{bundle_id}: languages must be unique")
+        default_language = entry.get("default_language")
+        if default_language not in languages:
+            raise CatalogError(f"{bundle_id}: default_language must be included in languages")
+        sample_rate = entry.get("sample_rate")
+        if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate <= 0:
+            raise CatalogError(f"{bundle_id}: sample_rate must be a positive integer")
+        runtime = entry.get("runtime")
+        if not isinstance(runtime, Mapping):
+            raise CatalogError(f"{bundle_id}: runtime metadata must be an object")
+        if runtime.get("layout") != "supertonic-3-v1":
+            raise CatalogError(f"{bundle_id}: runtime layout must be 'supertonic-3-v1'")
+
+        voices = entry.get("voices")
+        if not isinstance(voices, Sequence) or isinstance(voices, (str, bytes)) or not voices:
+            raise CatalogError(f"{bundle_id}: voices must be a non-empty sequence")
+        voice_names: list[str] = []
+        for voice in voices:
+            if not isinstance(voice, Mapping):
+                raise CatalogError(f"{bundle_id}: voice entry must be an object")
+            name = _require_supertonic_safe_id(voice.get("name"), f"{bundle_id} voice name")
+            if name in voice_names:
+                raise CatalogError(f"{bundle_id}: duplicate voice {name!r}")
+            voice_names.append(name)
+            component = _require_supertonic_safe_id(
+                voice.get("artifact_component"), f"{bundle_id}/{name} voice style component"
+            )
+            if ("voice_style", component) not in seen_pairs:
+                raise CatalogError(
+                    f"{bundle_id}/{name}: voice references missing style artifact {component!r}"
+                )
+        default_voice = entry.get("default_voice")
+        if default_voice not in voice_names:
+            raise CatalogError(f"{bundle_id}: default_voice must name a declared voice")
+        metadata = entry.get("metadata", {})
+        if not isinstance(metadata, Mapping):
+            raise CatalogError(f"{bundle_id}: metadata must be an object")
+        result.append(
+            CatalogItem(
+                system="supertonic",
+                id=bundle_id,
+                kind="bundle",
+                artifacts=tuple(artifacts),
+                aliases=tuple(parsed_aliases),
+                sample_rate=sample_rate,
+                voices=tuple(voice_names),
+                default_voice=default_voice,
+                metadata={
+                    **metadata,
+                    "language_codes": tuple(languages),
+                    "runtime": dict(runtime),
+                    "voices": list(voices),
+                    "source_revision": revision,
+                    "source_repository": repository,
+                    "requested_revision": requested_revision,
+                },
+            )
+        )
+    return result
+
+
 def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+
     if "schema" in data and data["schema"] != 1:
         raise CatalogError("Pocket catalog schema must be 1")
     if "kind" in data and data["kind"] != "pocket-onnx-bundle-catalog":

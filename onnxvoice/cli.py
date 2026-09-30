@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .catalog_tools import pocket as pocket_catalog_tools
+from .catalog_tools import supertonic as supertonic_catalog_tools
 from .catalog_tools.piper import (
     DEFAULT_REPOSITORY,
     DEFAULT_REVISION,
@@ -238,6 +239,26 @@ def build_parser() -> argparse.ArgumentParser:
     pocket_verify_parser.add_argument("--catalog", type=Path, required=True)
     pocket_verify_parser.add_argument("--source", type=Path)
 
+    supertonic_parser = catalog_sub.add_parser("supertonic", help="Manage the Supertonic-3 catalog")
+    supertonic_sub = supertonic_parser.add_subparsers(dest="catalog_action", required=True)
+
+    supertonic_build_parser = supertonic_sub.add_parser(
+        "build", help="Build a pinned Supertonic-3 catalog"
+    )
+    supertonic_build_parser.add_argument("--output", type=Path, required=True)
+    supertonic_build_parser.add_argument("--source-output", type=Path)
+    supertonic_build_parser.add_argument(
+        "--repository", default=supertonic_catalog_tools.DEFAULT_REPOSITORY
+    )
+    supertonic_build_parser.add_argument(
+        "--revision", default=supertonic_catalog_tools.DEFAULT_REVISION
+    )
+
+    supertonic_verify_parser = supertonic_sub.add_parser(
+        "verify", help="Verify a Supertonic-3 catalog offline"
+    )
+    supertonic_verify_parser.add_argument("--catalog", type=Path, required=True)
+    supertonic_verify_parser.add_argument("--source", type=Path)
     return parser
 
 
@@ -915,6 +936,25 @@ def main(argv: list[str] | None = None) -> int:
                         if source != expected:
                             raise ValueError("Source metadata does not match catalog provenance")
                     print(f"Verified {len(catalog['bundles'])} Pocket bundles")
+                    return 0
+            elif args.catalog_system == "supertonic":
+                if args.catalog_action == "build":
+                    catalog = supertonic_catalog_tools.build_catalog(
+                        repository=args.repository,
+                        revision=args.revision,
+                    )
+                    supertonic_catalog_tools.verify_catalog(catalog)
+                    _write_json(args.output, catalog)
+                    if args.source_output is not None:
+                        _write_json(
+                            args.source_output,
+                            {"schema": 1, **catalog["source"]},
+                        )
+                    print(f"Wrote {len(catalog['bundles'])} bundles to {args.output}")
+                    return 0
+                if args.catalog_action == "verify":
+                    catalog = supertonic_catalog_tools.load_catalog(args.catalog, args.source)
+                    print(f"Verified {len(catalog['bundles'])} Supertonic bundles")
                     return 0
             else:
                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
