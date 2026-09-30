@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog import CatalogClient
-from ..inventory import language_codes_from_metadata
+from ..inventory import language_base, language_codes_from_metadata, normalize_language_tag
 from ..types import CatalogItem
 from ..voice_selectors import (
     VoiceSelectorRegistry,
@@ -20,10 +20,22 @@ from ..voice_selectors import (
     format_voice_selector,
     get_voice_selector_registry,
     load_voice_selector_registry,
-    parse_voice_selector,
     selector_for_voice,
     voice_selector_systems,
 )
+
+
+def selector_language_for(system: str, locale: str) -> str:
+    """Return the permanent selector namespace for a descriptive locale."""
+    tag = normalize_language_tag(locale)
+    if not tag:
+        raise ValueError(f"invalid selector locale: {locale!r}")
+    system = system.casefold()
+    if system == "piper":
+        return language_base(tag)
+    if system in {"kokoro", "pocket"}:
+        return tag.casefold().replace("-", "_")
+    raise ValueError(f"unsupported selector system: {system!r}")
 
 
 def unassigned_catalog_voices(
@@ -88,9 +100,7 @@ def append_unassigned_registry_entries(
             engine_code = registry.engine_codes[item.system]
         except KeyError as exc:
             raise ValueError(f"selector registry has no engine code for {item.system!r}") from exc
-        language = parse_voice_selector(
-            format_voice_selector(languages[0], engine_code, 1)
-        ).language
+        language = selector_language_for(item.system, languages[0])
         key = (item.system, asset_id, voice_id)
         candidate = (language, engine_code, item)
         previous = pending.get(key)

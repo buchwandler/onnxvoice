@@ -174,6 +174,14 @@ class CatalogItem:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceMetadata:
+    language: str
+    locale: str
+    language_label: str
+    gender: str = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
 class VoiceRecord:
     """A catalog voice joined to its optional stable selector identity."""
 
@@ -183,6 +191,7 @@ class VoiceRecord:
     languages: tuple[str, ...] = ()
     gender: str = "unknown"
     catalog_voice_id: str | None = None
+    metadata: VoiceMetadata | None = None
 
     @property
     def selector(self) -> str | None:

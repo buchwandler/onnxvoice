@@ -74,6 +74,12 @@ language filter/input locale: en-us or en-US
 canonical selector language key: en_us
 ```
 
+Descriptive metadata is separate from selector identity. Catalog `locale` is the most specific authoritative language tag, such as `en-US`; `language` is its lowercase base language, such as `en`. The selector language is a permanent registry namespace and may differ: Piper English uses `en` for both `en-US` and `en-GB`, while Kokoro uses `en_us` and `en_gb`. Selector strings and slots are never rewritten to match descriptive locale tags.
+
+Language filtering follows compatibility rather than exact string equality. `--lang en` matches `en`, `en-US`, and `en-GB`. `--lang en-US` matches `en-US` and a generic `en` catalog capability, but not the conflicting specific locale `en-GB`.
+
+Voice records expose normalized `metadata.language`, `metadata.locale`, `metadata.language_label`, and `metadata.gender` alongside the existing `languages` and `gender` fields. Optional Pocket `voice_details` provides authoritative per-voice descriptions and remains separate from `voice_states`; descriptive details alone cannot assign a stable selector. Gender is never inferred, so `unknown` is expected when the catalog has no authoritative value.
+Language labels prefer an authoritative human-readable source label, then the locale or base language; a bare region code such as `US` is not used as a label.
 `ko` is the permanent Kokoro code, `pi` is the permanent Piper code, and `po` is the permanent Pocket code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Pocket identities are bundle-scoped `(pocket, bundle_id, voice_id)` records and require explicit catalog `voice_states`. The current canonical Pocket catalog exposes predefined names without those records, so they remain unassigned and receive no Pocket selector. Use the selector API to resolve the complete identity of assigned selectors:
 
 ```python

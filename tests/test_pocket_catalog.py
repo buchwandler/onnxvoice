@@ -457,6 +457,61 @@ def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
     assert item.metadata["voice_states"][0]["source"]["path"] == state_path
 
 
+def _parse_catalog_with_voice_details(details):
+    catalog = copy.deepcopy(SAMPLE_CATALOG)
+    entry = catalog["bundles"][0]
+    entry["predefined_voice_names"] = ["alba"]
+    entry["voice_details"] = details
+    return _parse_pocket(catalog)
+
+
+def test_voice_details_parse_without_creating_voice_state_or_selector_candidate():
+    details = [
+        {
+            "id": "alba",
+            "language": "en",
+            "locale": "en_US",
+            "language_label": "English",
+            "gender": "female",
+        }
+    ]
+    item = _parse_catalog_with_voice_details(details)[0]
+
+    assert item.metadata["voice_details"] == [
+        {
+            "id": "alba",
+            "language": "en",
+            "locale": "en-US",
+            "language_label": "English",
+            "gender": "female",
+        }
+    ]
+    assert item.voices == ()
+
+
+def test_voice_details_do_not_use_bare_region_as_language_label():
+    item = _parse_catalog_with_voice_details(
+        [{"id": "alba", "language": "en", "locale": "en-US", "language_label": "US"}]
+    )[0]
+
+    assert item.metadata["voice_details"][0]["language_label"] == "en-US"
+
+
+@pytest.mark.parametrize(
+    ("details", "message"),
+    [
+        ([{"id": "unknown", "language": "en"}], "references unknown voice"),
+        ([{"id": "alba"}, {"id": "alba"}], "duplicate voice detail"),
+        ([{"id": "alba", "gender": "other"}], "invalid gender"),
+        ([{"id": "alba", "language": "fr", "locale": "en-US"}], "do not agree"),
+        ([{"id": "alba", "locale": 42}], "must be a string"),
+    ],
+)
+def test_voice_details_reject_invalid_entries(details, message):
+    with pytest.raises(CatalogError, match=message):
+        _parse_catalog_with_voice_details(details)
+
+
 def test_canonical_object_map_rejects_key_id_mismatch() -> None:
     entry = {**SAMPLE_CATALOG["bundles"][0], "id": "other"}
     with pytest.raises(CatalogError, match="does not match"):

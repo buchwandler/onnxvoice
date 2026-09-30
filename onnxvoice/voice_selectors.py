@@ -21,7 +21,7 @@ from .errors import (
     VoiceSelectorRegistryError,
     VoiceSelectorRetiredError,
 )
-from .types import CatalogItem, VoiceIdentity, VoiceRecord
+from .types import CatalogItem, VoiceIdentity, VoiceMetadata, VoiceRecord
 
 VOICE_ENGINE_CODES: dict[str, str] = {
     "kokoro": "ko",
@@ -385,9 +385,10 @@ def make_voice_record(
     languages: tuple[str, ...] = (),
     gender: str = "unknown",
     voice_id: str | None = None,
+    metadata: VoiceMetadata | None = None,
 ) -> VoiceRecord:
     """Small constructor used by manager and maintenance integrations."""
-    return VoiceRecord(identity, available, catalog_item, languages, gender, voice_id)
+    return VoiceRecord(identity, available, catalog_item, languages, gender, voice_id, metadata)
 
 
 __all__ = [

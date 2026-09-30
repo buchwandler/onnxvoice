@@ -18,6 +18,7 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME_RE = re.compile(r"^[^\W_][\w.-]*$", re.UNICODE)
+_VALID_GENDERS = frozenset({"male", "female", "neutral", "unknown"})
 
 
 class CatalogError(ValueError):
@@ -171,6 +172,12 @@ def build_catalog(
         num_speakers = item.get("num_speakers")
         _require(isinstance(name, str) and bool(name), f"{voice_id}: invalid name")
         _require(isinstance(quality, str) and bool(quality), f"{voice_id}: invalid quality")
+        if "gender" in item:
+            gender = item["gender"]
+            _require(
+                isinstance(gender, str) and gender in _VALID_GENDERS,
+                f"{voice_id}: invalid gender",
+            )
         _require(
             isinstance(num_speakers, int)
             and not isinstance(num_speakers, bool)
@@ -191,6 +198,7 @@ def build_catalog(
             "id": voice_id,
             "name": name,
             "language": language,
+            **({"gender": item["gender"]} if "gender" in item else {}),
             "quality": quality,
             "num_speakers": num_speakers,
             "speaker_id_map": speaker_id_map,
@@ -392,20 +400,27 @@ def verify_catalog(catalog: dict[str, Any]) -> None:
         _safe_name(voice_id, "voice id")
         _require(isinstance(voice, dict), f"{voice_id}: voice must be an object")
         voice = cast(dict[str, Any], voice)
+        required_fields = {
+            "id",
+            "name",
+            "language",
+            "quality",
+            "num_speakers",
+            "speaker_id_map",
+            "aliases",
+            "artifacts",
+        }
+        fields = set(voice)
         _require(
-            set(voice)
-            == {
-                "id",
-                "name",
-                "language",
-                "quality",
-                "num_speakers",
-                "speaker_id_map",
-                "aliases",
-                "artifacts",
-            },
+            fields == required_fields or fields == required_fields | {"gender"},
             f"{voice_id}: invalid voice fields",
         )
+        if "gender" in voice:
+            gender = voice["gender"]
+            _require(
+                isinstance(gender, str) and gender in _VALID_GENDERS,
+                f"{voice_id}: invalid gender",
+            )
         _require(voice.get("id") == voice_id, f"{voice_id}: mismatched id")
         _require(
             isinstance(voice.get("name"), str) and bool(voice["name"]),

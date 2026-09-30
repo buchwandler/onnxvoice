@@ -7,7 +7,9 @@ import json
 import pytest
 
 import onnxvoice.catalog_tools.piper as piper
+from onnxvoice.catalog import CatalogClient
 from onnxvoice.catalog_tools.piper import CatalogError, build_catalog, verify_catalog
+from onnxvoice.manager import OnnxVoice
 
 
 def _artifact(path: str, payload: bytes) -> dict[str, object]:
@@ -49,6 +51,68 @@ def test_build_catalog_pins_revision_and_is_deterministic():
         "/resolve/" in artifact["url"]
         for artifact in first["voices"]["en_US-test-medium"]["artifacts"].values()
     )
+
+
+def test_explicit_gender_round_trips_through_runtime_and_list_voices(tmp_path):
+    voice_id = "en_US-test-medium"
+    upstream = _upstream()
+    upstream[voice_id]["gender"] = "female"
+    catalog = build_catalog(upstream, resolved_revision="a" * 40)
+
+    assert catalog["voices"][voice_id]["gender"] == "female"
+    catalog_path = tmp_path / "piper.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"piper": str(catalog_path)})
+    item = client.resolve(f"piper:{voice_id}")
+    assert item.metadata["gender"] == "female"
+
+    manager = OnnxVoice(
+        cache_dir=tmp_path / "manager-cache",
+        catalog_sources={"piper": str(catalog_path)},
+        offline=True,
+    )
+    record = next(
+        record
+        for record in manager.list_voices(system="piper")
+        if record.available and record.voice_id == voice_id
+    )
+    assert record.gender == "female"
+    assert record.metadata.gender == "female"
+
+
+def test_missing_gender_stays_unknown_through_catalog_and_runtime(tmp_path):
+    voice_id = "en_US-test-medium"
+    catalog = build_catalog(_upstream(), resolved_revision="b" * 40)
+    assert "gender" not in catalog["voices"][voice_id]
+
+    catalog_path = tmp_path / "piper.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    manager = OnnxVoice(
+        cache_dir=tmp_path / "cache",
+        catalog_sources={"piper": str(catalog_path)},
+        offline=True,
+    )
+    record = next(
+        record
+        for record in manager.list_voices(system="piper")
+        if record.available and record.voice_id == voice_id
+    )
+    assert record.gender == "unknown"
+    assert record.metadata.gender == "unknown"
+
+
+def test_invalid_upstream_and_normalized_gender_are_rejected():
+    voice_id = "en_US-test-medium"
+    upstream = _upstream()
+    upstream[voice_id]["gender"] = "Female"
+    with pytest.raises(CatalogError, match="invalid gender"):
+        build_catalog(upstream, resolved_revision="c" * 40)
+
+    normalized = build_catalog(_upstream(), resolved_revision="d" * 40)
+    normalized["voices"][voice_id]["gender"] = "Female"
+    with pytest.raises(CatalogError, match="invalid gender"):
+        verify_catalog(normalized)
 
 
 def test_verify_rejects_unsafe_paths_aliases_and_duplicate_speaker_ids():

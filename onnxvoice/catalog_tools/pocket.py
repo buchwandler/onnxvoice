@@ -11,6 +11,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, cast
 
+from ..inventory import VALID_GENDERS, language_base, normalize_language_tag
+
 DEFAULT_REPOSITORY = "KevinAHM/pocket-tts-onnx"
 DEFAULT_REVISION = "main"
 USER_AGENT = "onnxvoice/0.1.0"
@@ -484,6 +486,79 @@ def _normalize_voice_states(bundle_id: str, raw: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _normalize_voice_detail_tag(value: Any, field: str, bundle_id: str) -> str:
+    if value is None or value == "":
+        return ""
+    _require(isinstance(value, str), f"{bundle_id}: voice detail {field} must be a string")
+    normalized = normalize_language_tag(value)
+    parts = normalized.split("-")
+    _require(
+        bool(normalized)
+        and parts[0].isalpha()
+        and all(part and not any(char.isspace() for char in part) for part in parts),
+        f"{bundle_id}: invalid voice detail {field}",
+    )
+    return normalized
+
+
+def _normalize_voice_details(
+    bundle_id: str, raw: Any, declared_names: set[str]
+) -> list[dict[str, str]]:
+    if raw is None:
+        return []
+    _require(isinstance(raw, list), f"{bundle_id}: voice_details must be a list")
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    allowed = {"id", "language", "locale", "language_label", "gender"}
+    for index, value in enumerate(raw):
+        _require(
+            isinstance(value, dict),
+            f"{bundle_id}: voice detail {index} must be an object",
+        )
+        _require(
+            not (set(value) - allowed),
+            f"{bundle_id}: voice detail {index} has unexpected fields",
+        )
+        voice_id = value.get("id")
+        _safe_name(voice_id, f"{bundle_id} voice detail id")
+        assert isinstance(voice_id, str)
+        _require(
+            voice_id in declared_names,
+            f"{bundle_id}: voice detail references unknown voice {voice_id!r}",
+        )
+        _require(voice_id not in seen, f"{bundle_id}: duplicate voice detail {voice_id!r}")
+        seen.add(voice_id)
+
+        language_tag = _normalize_voice_detail_tag(value.get("language"), "language", bundle_id)
+        locale = _normalize_voice_detail_tag(value.get("locale"), "locale", bundle_id)
+        _require(
+            not language_tag or not locale or language_base(language_tag) == language_base(locale),
+            f"{bundle_id}/{voice_id}: language and locale do not agree",
+        )
+        locale = locale or language_tag
+        language = language_base(locale) if locale else ""
+
+        label = value.get("language_label")
+        label = "" if not isinstance(label, str) else label.strip()
+        if not label or (len(label) == 2 and label.isalpha() and label.isupper()):
+            label = locale or language or "unknown"
+        gender = value.get("gender", "unknown")
+        _require(
+            isinstance(gender, str) and gender in VALID_GENDERS,
+            f"{bundle_id}/{voice_id}: invalid gender",
+        )
+        normalized.append(
+            {
+                "id": voice_id,
+                "language": language,
+                "locale": locale,
+                "language_label": label,
+                "gender": gender,
+            }
+        )
+    return normalized
+
+
 def _artifact_entries(raw: Any) -> list[tuple[str, Any]]:
     if isinstance(raw, dict):
         return list(raw.items())
@@ -631,6 +706,24 @@ def _parse_bundle_entry(
             )
 
     voice_states = _normalize_voice_states(bundle_id, bundle_data.get("voice_states"))
+    raw_predefined_names = bundle_data.get("predefined_voice_names") or []
+    _require(
+        isinstance(raw_predefined_names, list),
+        f"{bundle_id}: predefined_voice_names must be a list",
+    )
+    predefined_voice_names: list[str] = []
+    for name in raw_predefined_names:
+        _safe_name(name, f"{bundle_id} predefined voice name")
+        assert isinstance(name, str)
+        _require(
+            name not in predefined_voice_names,
+            f"{bundle_id}: duplicate predefined voice {name!r}",
+        )
+        predefined_voice_names.append(name)
+    declared_voice_names = {state["name"] for state in voice_states} | set(predefined_voice_names)
+    voice_details = _normalize_voice_details(
+        bundle_id, bundle_data.get("voice_details"), declared_voice_names
+    )
     entry: dict[str, Any] = {
         "id": bundle_id,
         "aliases": aliases,
@@ -646,11 +739,13 @@ def _parse_bundle_entry(
                 artifact["quality"] or "",
             ),
         ),
-        "predefined_voice_names": bundle_data.get("predefined_voice_names") or [],
+        "predefined_voice_names": predefined_voice_names,
         "metadata": bundle_data.get("metadata") or {},
     }
     if voice_states:
         entry["voice_states"] = voice_states
+    if "voice_details" in bundle_data:
+        entry["voice_details"] = voice_details
     for key in (
         "max_token_per_chunk",
         "model_recommended_frames_after_eos",
@@ -725,6 +820,32 @@ def _verify_voice_states(bundle: dict[str, Any], bundle_id: str) -> None:
     _require(
         raw == normalized,
         f"{bundle_id}: voice_states must use the normalized record shape",
+    )
+
+
+def _verify_voice_details(bundle: dict[str, Any], bundle_id: str) -> None:
+    if "voice_details" not in bundle:
+        return
+    raw_states = bundle.get("voice_states", [])
+    raw_predefined = bundle.get("predefined_voice_names", [])
+    _require(isinstance(raw_states, list), f"{bundle_id}: voice_states must be a list")
+    _require(
+        isinstance(raw_predefined, list),
+        f"{bundle_id}: predefined_voice_names must be a list",
+    )
+    state_names = {state["name"] for state in raw_states}
+    predefined_names: set[str] = set()
+    for name in raw_predefined:
+        _safe_name(name, f"{bundle_id} predefined voice name")
+        assert isinstance(name, str)
+        _require(name not in predefined_names, f"{bundle_id}: duplicate predefined voice {name!r}")
+        predefined_names.add(name)
+    normalized = _normalize_voice_details(
+        bundle_id, bundle.get("voice_details"), state_names | predefined_names
+    )
+    _require(
+        bundle["voice_details"] == normalized,
+        f"{bundle_id}: voice_details must use the normalized record shape",
     )
 
 
@@ -843,6 +964,7 @@ def verify_catalog(catalog: Any) -> None:
         _require(isinstance(raw_bundle, dict), f"{map_id}: bundle must be an object")
         bundle = cast(dict[str, Any], raw_bundle)
         _verify_voice_states(bundle, map_id)
+        _verify_voice_details(bundle, map_id)
         for field in ("language", "layers", "bundle_schema", "profiles", "artifacts"):
             _require(field in bundle, f"{map_id}: missing required field {field!r}")
         _require(

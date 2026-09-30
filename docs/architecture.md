@@ -10,6 +10,15 @@ This identity alias is distinct from producer semantic voice aliases and style p
 
 Pocket selector identity is bundle-scoped as `(pocket, bundle_id, voice_id)` and is allocated only when canonical catalog metadata includes an explicit matching `voice_states` record. `predefined_voice_names` alone is not sufficient to construct a stable identity. The current canonical Pocket catalog has no explicit `voice_states`, so its predefined voices remain unassigned. Selector capability is independent of runtime adapter registration.
 
+## Descriptive language and voice metadata
+
+Descriptive metadata does not define selector identity. `locale` records the most specific source-backed language tag, while `language` is its lowercase base language. Selector namespaces remain permanent: English Piper locales use `en`, while Kokoro `en-US` and `en-GB` use `en_us` and `en_gb`. Existing selector mappings are not rewritten when descriptive tags are normalized.
+
+Language compatibility is deliberately symmetric for generic capabilities: a generic `en` capability satisfies an `en-US` request, and a generic `en` request matches specific English locales. Conflicting specific locales such as `en-US` and `en-GB` do not match.
+
+Language labels prefer authoritative human-readable source names, then locale/base tags, and never use a bare region code such as `US`.
+`VoiceRecord.metadata` is the normalized projection for language, locale, language label, and gender; the existing `languages` and `gender` fields remain available. Gender is taken only from explicit authoritative metadata, with `unknown` as the fallback. Pocket `voice_details` describes declared voices independently of asset identity. Only explicit `voice_states` can qualify a Pocket voice for permanent selector assignment.
+
 ## Runtime boundary
 
 ```text

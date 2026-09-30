@@ -12,29 +12,47 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .types import Artifact, CatalogItem, Installation, InstalledArtifact
+from .types import Artifact, CatalogItem, Installation, InstalledArtifact, VoiceMetadata
 
 # ---------------------------------------------------------------------------
 # Language normalization
 # ---------------------------------------------------------------------------
 
 
-def normalize_language_code(raw: Any) -> str:
-    """Normalize a raw language value to canonical display form (e.g. 'en-US').
+def normalize_language_tag(value: Any) -> str:
+    """Normalize a language tag to canonical display casing.
 
-    Handles:
-    - Piper: dict like {"code": "en_US", ...}
-    - Pocket: string like "en"
-    - Kokoro: list like ["en-us", "en-gb"]
-    - Already-normalized strings
+    Accepts strings and legacy language mappings such as ``{"code": "en_US"}``.
+    This is display normalization, not complete BCP-47 validation.
     """
-    if isinstance(raw, dict):
-        code = raw.get("code", "")
-        if isinstance(code, str) and code:
-            return _display_code(code)
-    if isinstance(raw, str) and raw:
-        return _display_code(raw)
-    return ""
+    if isinstance(value, Mapping):
+        value = value.get("code", "")
+    if not isinstance(value, str) or not value:
+        return ""
+
+    subtags = value.strip().replace("_", "-").split("-")
+    if not subtags[0]:
+        return ""
+    normalized = [subtags[0].lower()]
+    for subtag in subtags[1:]:
+        if len(subtag) == 2 and subtag.isalpha():
+            normalized.append(subtag.upper())
+        elif len(subtag) == 4 and subtag.isalpha():
+            normalized.append(subtag.title())
+        else:
+            normalized.append(subtag.lower())
+    return "-".join(normalized)
+
+
+def normalize_language_code(raw: Any) -> str:
+    """Compatibility alias for :func:`normalize_language_tag`."""
+    return normalize_language_tag(raw)
+
+
+def language_base(value: Any) -> str:
+    """Return the lowercase primary language subtag, or an empty string."""
+    normalized = normalize_language_tag(value)
+    return normalized.split("-", 1)[0] if normalized else ""
 
 
 def language_codes_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
@@ -72,25 +90,26 @@ def primary_language_from_metadata(metadata: Mapping[str, Any]) -> str | None:
     return codes[0] if codes else None
 
 
-def _display_code(code: str) -> str:
-    """Convert internal code like 'en_US' to display form 'en-US'."""
-    return code.replace("_", "-")
+def language_tags_match(requested: str, available: str) -> bool:
+    """Return whether an available language capability satisfies a request.
+
+    A generic tag matches any specific tag with the same base language. Two
+    different specific tags do not match.
+    """
+    requested_tag = normalize_language_tag(requested)
+    available_tag = normalize_language_tag(available)
+    if not requested_tag or not available_tag:
+        return False
+    requested_base = language_base(requested_tag)
+    available_base = language_base(available_tag)
+    return requested_base == available_base and (
+        requested_tag in (available_tag, requested_base) or available_tag == available_base
+    )
 
 
 def _match_code(pattern: str, code: str) -> bool:
-    """Subtag-aware language matching.
-
-    --lang en    matches en, en-US, en-GB
-    --lang en-US matches en-US only
-    --lang de    matches de-DE, de-AT
-    """
-    pattern = pattern.replace("_", "-").casefold()
-    code = code.replace("_", "-").casefold()
-    if pattern == code:
-        return True
-    # Pattern "en" matches "en-US", "en-GB", etc.
-    # But pattern "en-US" should NOT match "en-GB"
-    return "-" not in pattern and code.startswith(pattern + "-")
+    """Compatibility wrapper for :func:`language_tags_match`."""
+    return language_tags_match(pattern, code)
 
 
 def matches_language(metadata: Mapping[str, Any], language_filter: str) -> bool:
@@ -121,6 +140,95 @@ def normalize_gender(raw: Any) -> str:
 def gender_from_metadata(metadata: Mapping[str, Any]) -> str:
     """Extract gender from item/installation metadata, defaulting to 'unknown'."""
     return normalize_gender(metadata.get("gender"))
+
+
+def _language_tags_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+    tags: list[str] = []
+    locale = normalize_language_tag(metadata.get("locale"))
+    if locale:
+        tags.append(locale)
+
+    language = metadata.get("language")
+    language_tag = normalize_language_tag(language)
+    if language_tag:
+        tags.append(language_tag)
+
+    language_codes = metadata.get("language_codes")
+    if isinstance(language_codes, (list, tuple)):
+        tags.extend(
+            tag for tag in (normalize_language_tag(value) for value in language_codes) if tag
+        )
+    return tuple(dict.fromkeys(tags))
+
+
+def _normalize_language_label(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    label = value.strip()
+    if not label or (len(label) == 2 and label.isalpha() and label.isupper()):
+        return None
+    return label
+
+
+def _language_label_from_metadata(metadata: Mapping[str, Any]) -> str | None:
+    for key in ("language_label", "language_name"):
+        label = _normalize_language_label(metadata.get(key))
+        if label:
+            return label
+
+    language = metadata.get("language")
+    if isinstance(language, Mapping):
+        return _normalize_language_label(language.get("name"))
+    return None
+
+
+def _voice_details_for(metadata: Mapping[str, Any], voice_id: str) -> Mapping[str, Any] | None:
+    details = metadata.get("voice_details")
+    if isinstance(details, Mapping):
+        value = details.get(voice_id)
+        return value if isinstance(value, Mapping) else None
+    if isinstance(details, (list, tuple)):
+        for value in details:
+            if isinstance(value, Mapping) and value.get("id") == voice_id:
+                return value
+    return None
+
+
+def voice_metadata_from_catalog(item: CatalogItem, voice_id: str) -> VoiceMetadata:
+    """Extract normalized descriptive metadata without inferring demographics."""
+    metadata = item.metadata
+    details = _voice_details_for(metadata, voice_id)
+    detail_tags = _language_tags_from_metadata(details) if details is not None else ()
+    item_tags = _language_tags_from_metadata(metadata)
+    if detail_tags:
+        locale = detail_tags[0]
+    else:
+        locale = next((tag for tag in item_tags if "-" in tag), "")
+        if not locale and item_tags:
+            locale = item_tags[0]
+
+    detail_label = _language_label_from_metadata(details) if details is not None else None
+    language_label = (
+        detail_label
+        or _language_label_from_metadata(metadata)
+        or locale
+        or language_base(locale)
+        or "unknown"
+    )
+
+    if details is not None and details.get("gender") is not None:
+        gender = normalize_gender(details.get("gender"))
+    elif (item.kind == "voice" or len(item.voices) == 1) and metadata.get("gender") is not None:
+        gender = normalize_gender(metadata.get("gender"))
+    else:
+        gender = "unknown"
+
+    return VoiceMetadata(
+        language=language_base(locale),
+        locale=locale,
+        language_label=language_label,
+        gender=gender,
+    )
 
 
 # ---------------------------------------------------------------------------

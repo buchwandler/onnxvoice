@@ -13,6 +13,7 @@ from onnxvoice.catalog_tools.voice_selectors import (
     append_unassigned_registry_entries,
     check_registry_and_catalog,
     missing_registry_voices,
+    selector_language_for,
     unassigned_catalog_voices,
 )
 from onnxvoice.catalog_tools.voice_selectors import build_parser as build_selector_tool_parser
@@ -185,6 +186,42 @@ def test_engine_codes_and_packaged_baseline():
     assert {identity.engine_code for identity in iter_voice_identities()} == {"ko", "pi"}
     assert VOICE_ENGINE_CODES == {"kokoro": "ko", "piper": "pi", "pocket": "po"}
     assert load_voice_selector_registry().identities == iter_voice_identities()
+    assert resolve_voice_selector("en-pi-13").canonical_key == (
+        "piper",
+        "en_US-amy-medium",
+        "en_US-amy-medium",
+    )
+
+
+def test_selector_language_policy_keeps_identity_separate_from_locale():
+    assert selector_language_for("kokoro", "en-US") == "en_us"
+    assert selector_language_for("kokoro", "en-GB") == "en_gb"
+    assert selector_language_for("piper", "en-US") == "en"
+    assert selector_language_for("piper", "en-GB") == "en"
+    assert selector_language_for("piper", "de-DE") == "de"
+
+
+def test_future_piper_english_entries_share_existing_namespace():
+    existing = _entry("en", "pi", 13, "piper", "existing", "existing")
+    registry_data = {
+        "schema": 1,
+        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
+        "entries": [existing],
+    }
+    items = [
+        _piper_voice("en_US-new-medium", "en_US"),
+        _piper_voice("en_GB-new-medium", "en_GB"),
+    ]
+
+    updated, additions = append_unassigned_registry_entries(items, registry_data)
+
+    assert updated["entries"][0] == existing
+    assert [entry["language"] for entry in additions] == ["en", "en"]
+    assert [entry["slot"] for entry in additions] == [14, 15]
+    assert [
+        format_voice_selector(entry["language"], entry["engine_code"], entry["slot"])
+        for entry in additions
+    ] == ["en-pi-14", "en-pi-15"]
 
 
 def test_packaged_german_selectors_remain_unchanged():
@@ -315,6 +352,62 @@ def test_catalog_projection_reports_assigned_and_unassigned_voices():
     assert unassigned_record.state == "unassigned"
 
 
+def test_list_voices_specific_language_includes_generic_but_excludes_conflicts():
+    items = [
+        _piper_voice("generic", "en"),
+        _piper_voice("us", "en_US"),
+        _piper_voice("gb", "en_GB"),
+    ]
+    manager = object.__new__(OnnxVoice)
+    manager.catalog = type("Catalog", (), {"list": lambda self, system, **_: items})()
+
+    records = manager.list_voices(system="piper", language="en-US")
+
+    assert {record.voice_id for record in records if record.available} == {"generic", "us"}
+
+
+def test_list_voices_projects_normalized_metadata_without_system_gender_branch():
+    piper = CatalogItem(
+        system="piper",
+        id="explicit-gender",
+        kind="voice",
+        artifacts=(),
+        metadata={
+            "language": {"code": "en_US", "name": "English (US)"},
+            "gender": "female",
+        },
+    )
+    pocket = CatalogItem(
+        system="pocket",
+        id="bundle",
+        kind="bundle",
+        artifacts=(),
+        voices=("alba",),
+        metadata={
+            "language": "en",
+            "voice_details": [
+                {"id": "alba", "locale": "en", "language_label": "English", "gender": "female"}
+            ],
+        },
+    )
+    items = [piper, pocket]
+    manager = object.__new__(OnnxVoice)
+    manager.catalog = type("Catalog", (), {"list": lambda self, system, **_: items})()
+
+    records = {record.voice_id: record for record in manager.list_voices() if record.available}
+
+    piper_record = records["explicit-gender"]
+    pocket_record = records["alba"]
+    assert piper_record.languages == ("en-US",)
+    assert piper_record.gender == piper_record.metadata.gender == "female"
+    assert piper_record.metadata.language == "en"
+    assert piper_record.metadata.locale == "en-US"
+    assert piper_record.metadata.language_label == "English (US)"
+    assert pocket_record.languages == ("en",)
+    assert pocket_record.gender == pocket_record.metadata.gender == "female"
+    assert pocket_record.metadata.locale == "en"
+
+
 def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
     pocket = CatalogItem(
         system="pocket",
@@ -324,6 +417,40 @@ def test_pocket_voice_states_are_projected_without_implicit_selector() -> None:
         voices=("alba",),
     )
     assert catalog_voice_keys([pocket]) == ((pocket, "english_2026-04", "alba"),)
+
+
+def test_voice_details_without_voice_state_do_not_assign_a_selector():
+    pocket = CatalogItem(
+        system="pocket",
+        id="bundle",
+        kind="bundle",
+        artifacts=(),
+        voices=(),
+        metadata={
+            "language": "en",
+            "predefined_voice_names": ["alba"],
+            "voice_details": [
+                {
+                    "id": "alba",
+                    "language": "en",
+                    "locale": "en",
+                    "language_label": "English",
+                    "gender": "female",
+                }
+            ],
+        },
+    )
+    registry_data = {
+        "schema": 1,
+        "engine_codes": {"kokoro": "ko", "piper": "pi", "pocket": "po"},
+        "entries": [],
+    }
+
+    updated, additions = append_unassigned_registry_entries([pocket], registry_data)
+
+    assert catalog_voice_keys([pocket]) == ()
+    assert additions == ()
+    assert updated["entries"] == []
 
 
 def test_pocket_selector_identity_uses_permanent_engine_code_and_bundle():

@@ -16,16 +16,20 @@ from onnxvoice.inventory import (
     gender_from_metadata,
     inventory_record_from_catalog,
     inventory_record_from_installation,
+    language_base,
     language_codes_from_metadata,
+    language_tags_match,
     logical_size_bytes,
     matches_filter,
     matches_language,
     merge_inventory,
     normalize_gender,
     normalize_language_code,
+    normalize_language_tag,
     primary_language_from_metadata,
     query_inventory,
     version_label,
+    voice_metadata_from_catalog,
 )
 from onnxvoice.types import Artifact, CatalogItem, Installation, InstalledArtifact
 
@@ -53,13 +57,13 @@ class TestLanguageNormalization:
         """Kokoro stores language_codes as a list."""
         metadata = {"language_codes": ["en-us", "en-gb"]}
         codes = language_codes_from_metadata(metadata)
-        assert codes == ("en-us", "en-gb")
+        assert codes == ("en-US", "en-GB")
 
     def test_kokoro_takes_priority_over_language_field(self):
         """When language_codes is present, it's used even if language also exists."""
         metadata = {"language": "de", "language_codes": ["en-us"]}
         codes = language_codes_from_metadata(metadata)
-        assert codes == ("en-us",)
+        assert codes == ("en-US",)
 
     def test_normalize_language_code_dict(self):
         assert normalize_language_code({"code": "en_US"}) == "en-US"
@@ -68,6 +72,31 @@ class TestLanguageNormalization:
         assert normalize_language_code("en") == "en"
         assert normalize_language_code("en_US") == "en-US"
 
+    def test_normalize_language_tag_canonical_casing(self):
+        assert normalize_language_tag("en_US") == "en-US"
+        assert normalize_language_tag("en-us") == "en-US"
+        assert normalize_language_tag("EN_us") == "en-US"
+        assert normalize_language_tag("pt_BR") == "pt-BR"
+        assert normalize_language_tag("zh_cn") == "zh-CN"
+        assert normalize_language_tag("en") == "en"
+
+    def test_language_base(self):
+        assert language_base("en") == "en"
+        assert language_base("en-US") == "en"
+        assert language_base("en-GB") == "en"
+        assert language_base("de-DE") == "de"
+        assert language_base("pt-BR") == "pt"
+
+    def test_language_tags_match_generic_and_specific_tags(self):
+        assert language_tags_match("en", "en")
+        assert language_tags_match("en", "en-US")
+        assert language_tags_match("en", "en-GB")
+        assert language_tags_match("en-US", "en")
+        assert language_tags_match("en-US", "en-US")
+        assert not language_tags_match("en-US", "en-GB")
+        assert language_tags_match("en_US", "en")
+        assert not language_tags_match("en_US", "en_GB")
+
     def test_normalize_language_code_empty(self):
         assert normalize_language_code(None) == ""
         assert normalize_language_code({}) == ""
@@ -75,7 +104,7 @@ class TestLanguageNormalization:
 
     def test_primary_language_from_metadata(self):
         meta = {"language_codes": ["en-us", "en-gb"]}
-        assert primary_language_from_metadata(meta) == "en-us"
+        assert primary_language_from_metadata(meta) == "en-US"
 
     def test_primary_language_returns_none_when_empty(self):
         assert primary_language_from_metadata({}) is None
@@ -106,7 +135,7 @@ class TestLanguageNormalization:
     def test_matches_language_pocket(self):
         meta = {"language": "en"}
         assert matches_language(meta, "en") is True
-        assert matches_language(meta, "en-US") is False
+        assert matches_language(meta, "en-US") is True
 
     def test_matches_language_kokoro(self):
         meta = {"language_codes": ["en-us", "en-gb"]}
@@ -169,6 +198,110 @@ class TestGenderNormalization:
         """Even if the name looks gendered, metadata absence means 'unknown'."""
         meta = {"name": "Female Voice", "language": "en"}
         assert gender_from_metadata(meta) == "unknown"
+
+
+class TestVoiceMetadataExtraction:
+    def test_per_voice_details_take_precedence(self):
+        item = CatalogItem(
+            system="pocket",
+            id="bundle",
+            kind="bundle",
+            artifacts=(),
+            voices=("alba", "other"),
+            metadata={
+                "language": {"code": "en_US", "name": "English (US)"},
+                "gender": "male",
+                "voice_details": [
+                    {
+                        "id": "alba",
+                        "language": "pt",
+                        "locale": "pt_br",
+                        "language_label": "Brazilian Portuguese",
+                        "gender": "female",
+                    }
+                ],
+            },
+        )
+
+        details = voice_metadata_from_catalog(item, "alba")
+
+        assert details.language == "pt"
+        assert details.locale == "pt-BR"
+        assert details.language_label == "Brazilian Portuguese"
+        assert details.gender == "female"
+
+    def test_item_level_exact_metadata_and_multi_voice_gender(self):
+        item = CatalogItem(
+            system="kokoro",
+            id="model",
+            kind="model",
+            artifacts=(),
+            voices=("voice-a", "voice-b"),
+            metadata={
+                "language": {"code": "en_US", "name": "English (US)"},
+                "language_codes": ["en-GB"],
+                "gender": "female",
+            },
+        )
+
+        details = voice_metadata_from_catalog(item, "voice-a")
+
+        assert details.language == "en"
+        assert details.locale == "en-US"
+        assert details.language_label == "English (US)"
+        assert details.gender == "unknown"
+
+    def test_bare_region_is_not_used_as_language_label(self):
+        item = CatalogItem(
+            system="piper",
+            id="voice",
+            kind="voice",
+            artifacts=(),
+            metadata={
+                "language": {"code": "en_US", "name": "US"},
+                "language_label": "US",
+            },
+        )
+
+        details = voice_metadata_from_catalog(item, "voice")
+
+        assert details.locale == "en-US"
+        assert details.language_label == "en-US"
+
+    def test_generic_single_voice_metadata_and_unknown_fallback(self):
+        item = CatalogItem(
+            system="pocket",
+            id="bundle",
+            kind="bundle",
+            artifacts=(),
+            voices=("alba",),
+            metadata={"language": "en", "gender": "female"},
+        )
+        details = voice_metadata_from_catalog(item, "alba")
+        assert (details.language, details.locale, details.language_label) == ("en", "en", "en")
+        assert details.gender == "female"
+
+        unknown = voice_metadata_from_catalog(
+            CatalogItem(system="test", id="item", kind="item", artifacts=()), "item"
+        )
+        assert (unknown.language, unknown.locale, unknown.language_label) == ("", "", "unknown")
+        assert unknown.gender == "unknown"
+
+    def test_missing_pocket_voice_details_keeps_gender_unknown(self):
+        item = CatalogItem(
+            system="pocket",
+            id="bundle",
+            kind="bundle",
+            artifacts=(),
+            voices=("alba",),
+            metadata={"language": "en"},
+        )
+
+        details = voice_metadata_from_catalog(item, "alba")
+
+        assert details.language == "en"
+        assert details.locale == "en"
+        assert details.gender == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +460,11 @@ class TestInventoryFilter:
     def test_filter_by_language(self):
         spec = InventoryFilter(languages=("en-US",))
         rec = _make_record(language_codes=("en-US",))
+        assert matches_filter(rec, spec) is True
+
+    def test_specific_language_filter_matches_generic_catalog_language(self):
+        spec = InventoryFilter(languages=("en-US",))
+        rec = _make_record(language_codes=("en",))
         assert matches_filter(rec, spec) is True
 
     def test_filter_by_language_subtag(self):

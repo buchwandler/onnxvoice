@@ -14,6 +14,7 @@ from typing import Any
 from platformdirs import user_cache_path
 
 from .errors import AssetNotFoundError, CatalogError, OfflineError
+from .inventory import VALID_GENDERS, language_base, normalize_language_tag
 from .store import FileLock, ProgressCallback
 from .types import Artifact, AssetProgress, CatalogItem, validate_relative_path
 
@@ -504,6 +505,72 @@ def _parse_pocket_voice_states(
     return tuple(names), records
 
 
+def _normalize_pocket_voice_tag(value: Any, field: str, bundle_id: str) -> str:
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise CatalogError(f"{bundle_id}: voice detail {field} must be a string")
+    normalized = normalize_language_tag(value)
+    if not normalized or any(
+        not part or any(char.isspace() for char in part) for part in normalized.split("-")
+    ):
+        raise CatalogError(f"{bundle_id}: invalid voice detail {field}")
+    if not normalized.split("-", 1)[0].isalpha():
+        raise CatalogError(f"{bundle_id}: invalid voice detail {field}")
+    return normalized
+
+
+def _parse_pocket_voice_details(
+    raw: Any, bundle_id: str, declared_names: set[str]
+) -> list[dict[str, str]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise CatalogError(f"{bundle_id}: voice_details must be a sequence")
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    allowed = {"id", "language", "locale", "language_label", "gender"}
+    for index, value in enumerate(raw):
+        if not isinstance(value, Mapping):
+            raise CatalogError(f"{bundle_id}: voice detail {index} must be an object")
+        if set(value) - allowed:
+            raise CatalogError(f"{bundle_id}: voice detail {index} has unexpected fields")
+        voice_id = value.get("id")
+        if not isinstance(voice_id, str):
+            raise CatalogError(f"{bundle_id}: voice detail {index} has no id")
+        _require_pocket_safe_id(voice_id, f"{bundle_id} voice detail id")
+        if voice_id not in declared_names:
+            raise CatalogError(f"{bundle_id}: voice detail references unknown voice {voice_id!r}")
+        if voice_id in seen:
+            raise CatalogError(f"{bundle_id}: duplicate voice detail {voice_id!r}")
+        seen.add(voice_id)
+
+        language_tag = _normalize_pocket_voice_tag(value.get("language"), "language", bundle_id)
+        locale = _normalize_pocket_voice_tag(value.get("locale"), "locale", bundle_id)
+        if language_tag and locale and language_base(language_tag) != language_base(locale):
+            raise CatalogError(f"{bundle_id}/{voice_id}: language and locale do not agree")
+        locale = locale or language_tag
+        language = language_base(locale) if locale else ""
+
+        label = value.get("language_label")
+        label = "" if not isinstance(label, str) else label.strip()
+        if not label or (len(label) == 2 and label.isalpha() and label.isupper()):
+            label = locale or language or "unknown"
+        gender = value.get("gender", "unknown")
+        if not isinstance(gender, str) or gender not in VALID_GENDERS:
+            raise CatalogError(f"{bundle_id}/{voice_id}: invalid gender")
+        result.append(
+            {
+                "id": voice_id,
+                "language": language,
+                "locale": locale,
+                "language_label": label,
+                "gender": gender,
+            }
+        )
+    return result
+
+
 def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
     if "schema" in data and data["schema"] != 1:
         raise CatalogError("Pocket catalog schema must be 1")
@@ -606,6 +673,10 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             if name in predefined_voice_names:
                 raise CatalogError(f"{bundle_id}: duplicate predefined voice {name!r}")
             predefined_voice_names.append(name)
+        declared_voice_names = set(voice_names) | set(predefined_voice_names)
+        voice_details = _parse_pocket_voice_details(
+            entry.get("voice_details"), bundle_id, declared_voice_names
+        )
         metadata = {
             **(entry.get("metadata") or {}),
             "language": entry.get("language"),
@@ -623,6 +694,8 @@ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
             "predefined_voice_names": predefined_voice_names,
             "canonical_catalog": canonical,
         }
+        if "voice_details" in entry:
+            metadata["voice_details"] = voice_details
         result.append(
             CatalogItem(
                 system="pocket",

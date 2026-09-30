@@ -21,6 +21,12 @@ from .errors import (
     VoiceSelectorRegistryError,
     VoiceSelectorRetiredError,
 )
+from .inventory import (
+    language_base,
+    language_tags_match,
+    normalize_language_code,
+    normalize_language_tag,
+)
 from .manager import OnnxVoice
 from .runtime import OnnxSession, available_providers
 from .store import AssetStore
@@ -36,6 +42,7 @@ from .types import (
     SessionDiagnostic,
     TensorSpec,
     VoiceIdentity,
+    VoiceMetadata,
     VoiceRecord,
 )
 from .voice_selectors import (
@@ -100,6 +107,10 @@ __all__ = [
     "__version__",
     "OnnxVoice",
     "CatalogClient",
+    "language_base",
+    "language_tags_match",
+    "normalize_language_code",
+    "normalize_language_tag",
     "AssetStore",
     "OnnxSession",
     "Artifact",
@@ -119,6 +130,7 @@ __all__ = [
     "available_providers",
     "VoiceIdentity",
     "VoiceRecord",
+    "VoiceMetadata",
     "format_voice_selector",
     "parse_voice_selector",
     "is_voice_selector",

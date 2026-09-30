@@ -121,6 +121,25 @@ def _upstream_bundle() -> dict[str, Any]:
     }
 
 
+def _build_catalog_from_upstream(upstream: dict[str, Any]) -> dict[str, Any]:
+    tree = [
+        {"path": artifact["path"], "size": artifact["size"], "lfs": {"oid": artifact["sha256"]}}
+        for artifact in _artifacts()
+    ]
+    with (
+        patch(
+            "onnxvoice.catalog_tools.pocket._list_bundle_paths",
+            return_value=[f"{BASE}/bundle.json"],
+        ),
+        patch(
+            "onnxvoice.catalog_tools.pocket._fetch_bundle_json",
+            return_value=(upstream, "b" * 64),
+        ),
+        patch("onnxvoice.catalog_tools.pocket._repository_tree", return_value=tree),
+    ):
+        return build_catalog(resolved_revision=REVISION)
+
+
 class TestConstants:
     def test_roles(self) -> None:
         assert VALID_ROLES == REQUIRED_ONNX_ROLES | STATIC_ROLES
@@ -252,6 +271,72 @@ def test_build_catalog_from_explicit_fixture_is_deterministic() -> None:
         result2 = build_catalog(resolved_revision=REVISION)
     assert result1 == result2
     verify_catalog(result1)
+
+
+def test_build_catalog_normalizes_voice_details():
+    upstream = _upstream_bundle()
+    upstream["predefined_voices"] = ["alba"]
+    upstream["voice_details"] = [
+        {
+            "id": "alba",
+            "language": "en",
+            "locale": "en_US",
+            "language_label": "English",
+            "gender": "female",
+        }
+    ]
+
+    catalog = _build_catalog_from_upstream(upstream)
+
+    assert catalog["bundles"]["english_2026-04"]["voice_details"] == [
+        {
+            "id": "alba",
+            "language": "en",
+            "locale": "en-US",
+            "language_label": "English",
+            "gender": "female",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("details", "message"),
+    [
+        ([{"id": "unknown", "language": "en"}], "references unknown voice"),
+        ([{"id": "alba"}, {"id": "alba"}], "duplicate voice detail"),
+        ([{"id": "alba", "gender": "other"}], "invalid gender"),
+        ([{"id": "alba", "language": "fr", "locale": "en-US"}], "do not agree"),
+        ([{"id": "alba", "locale": "en__US"}], "invalid voice detail locale"),
+    ],
+)
+def test_build_catalog_rejects_invalid_voice_details(details, message):
+    upstream = _upstream_bundle()
+    upstream["predefined_voices"] = ["alba"]
+    upstream["voice_details"] = details
+
+    with pytest.raises(CatalogError, match=message):
+        _build_catalog_from_upstream(upstream)
+
+
+def test_verify_catalog_requires_normalized_voice_details():
+    catalog = _catalog()
+    entry = catalog["bundles"]["english_2026-04"]
+    entry["predefined_voice_names"] = ["alba"]
+    entry["voice_details"] = [
+        {
+            "id": "alba",
+            "language": "en",
+            "locale": "en-US",
+            "language_label": "English",
+            "gender": "female",
+        }
+    ]
+    verify_catalog(catalog)
+
+    invalid = copy.deepcopy(catalog)
+    invalid["bundles"]["english_2026-04"]["voice_details"][0]["gender"] = "other"
+    with pytest.raises(CatalogError, match="invalid gender"):
+        verify_catalog(invalid)
 
 
 def test_build_catalog_discovers_upstream_files_and_metadata() -> None:

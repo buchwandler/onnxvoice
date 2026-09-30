@@ -102,7 +102,11 @@ class OnnxVoice:
         progress: ProgressCallback | None = None,
     ) -> builtins.list[VoiceRecord]:
         """List flattened catalog voices joined to stable selector identities."""
-        from .inventory import language_codes_from_metadata, matches_language
+        from .inventory import (
+            language_codes_from_metadata,
+            matches_language,
+            voice_metadata_from_catalog,
+        )
         from .voice_selectors import get_voice_selector_registry
 
         supported_systems = voice_selector_systems()
@@ -139,16 +143,16 @@ class OnnxVoice:
             metadata = item.metadata
             if language is not None and not matches_language(metadata, language):
                 continue
+            details = voice_metadata_from_catalog(item, voice_id)
             records.append(
                 make_voice_record(
                     identity,
                     available=True,
                     catalog_item=item,
                     languages=language_codes_from_metadata(metadata),
-                    gender=str(metadata.get("gender") or "unknown")
-                    if item.system == "piper"
-                    else "unknown",
+                    gender=details.gender,
                     voice_id=voice_id,
+                    metadata=details,
                 )
             )
 
