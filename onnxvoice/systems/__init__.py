@@ -6,11 +6,13 @@ from .kokoro import KokoroAdapter
 from .kokoro_split import SplitKokoroRuntime
 from .piper import PiperAdapter
 from .pocket import PocketAdapter
+from .supertonic import SupertonicAdapter
 
 _ADAPTERS: dict[str, type[SystemAdapter]] = {
     PiperAdapter.system: PiperAdapter,
     KokoroAdapter.system: KokoroAdapter,
     PocketAdapter.system: PocketAdapter,
+    SupertonicAdapter.system: SupertonicAdapter,
 }
 
 
@@ -34,6 +36,7 @@ __all__ = [
     "PiperAdapter",
     "KokoroAdapter",
     "PocketAdapter",
+    "SupertonicAdapter",
     "SplitKokoroRuntime",
     "register_adapter",
     "get_adapter",

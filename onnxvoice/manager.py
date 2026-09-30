@@ -295,24 +295,38 @@ class OnnxVoice:
                 merged_files["voices"] = voices
 
         local_artifacts: list[InstalledArtifact] = []
+        model_components = {
+            "duration_predictor",
+            "text_encoder",
+            "vector_estimator",
+            "vocoder",
+        }
         for key, raw_path in merged_files.items():
-            if key in {"prosody", "curves", "decoder"}:
-                local_artifacts.append(
-                    OnnxVoice._local_artifact(
-                        "model",
-                        raw_path,
-                        component=key,
-                        extra_metadata=(artifact_metadata or {}).get(key),
-                    )
-                )
+            component = None
+            if system == "supertonic":
+                if key in model_components:
+                    role = "model"
+                    component = key
+                elif key.startswith("voice_style:"):
+                    component = key.partition(":")[2]
+                    if not component:
+                        raise ValueError("voice_style keys must include a component name")
+                    role = "voice_style"
+                else:
+                    role = key
+            elif key in {"prosody", "curves", "decoder"}:
+                role = "model"
+                component = key
             else:
-                local_artifacts.append(
-                    OnnxVoice._local_artifact(
-                        key,
-                        raw_path,
-                        extra_metadata=(artifact_metadata or {}).get(key),
-                    )
+                role = key
+            local_artifacts.append(
+                OnnxVoice._local_artifact(
+                    role,
+                    raw_path,
+                    component=component,
+                    extra_metadata=(artifact_metadata or {}).get(key),
                 )
+            )
         model_artifact = next(
             (artifact for artifact in local_artifacts if artifact.role == "model"), None
         )
