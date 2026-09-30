@@ -35,6 +35,13 @@ def validate_relative_path(value: str, *, field_name: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Artifact:
+    """Remote or local artifact metadata belonging to a catalog item.
+
+
+    ``role`` identifies the artifact's purpose. ``component`` and ``quality`` disambiguate
+    multi-file and variant layouts; checksums and size are optional catalog pins.
+    """
+
     role: str
     filename: str
     url: str | None = None
@@ -72,6 +79,13 @@ class VoiceIdentity:
 
 @dataclass(frozen=True, slots=True)
 class CatalogItem:
+    """Normalized installable item from a system catalog.
+
+
+    ``ref`` is the canonical ``system:id`` reference. ``artifacts`` describe the files;
+    ``voices`` and ``default_voice`` describe catalog voice identities when applicable.
+    """
+
     system: str
     id: str
     kind: str
@@ -175,6 +189,8 @@ class CatalogItem:
 
 @dataclass(frozen=True, slots=True)
 class VoiceMetadata:
+    """Authoritative descriptive language and gender metadata for a voice."""
+
     language: str
     locale: str
     language_label: str
@@ -183,7 +199,12 @@ class VoiceMetadata:
 
 @dataclass(frozen=True, slots=True)
 class VoiceRecord:
-    """A catalog voice joined to its optional stable selector identity."""
+    """Catalog voice metadata joined to an optional stable identity.
+
+
+    ``available`` describes presence in the current catalog. Selector assignment is
+    independent and may be absent, in which case ``selector`` is ``None``.
+    """
 
     identity: VoiceIdentity | None
     available: bool  # current catalog presence; selector availability is separate
@@ -231,6 +252,13 @@ class VoiceRecord:
 
 @dataclass(frozen=True, slots=True)
 class InstalledArtifact:
+    """Verified file installed under a managed installation.
+
+
+    The record includes the role, path, size, digest, and optional component, quality,
+    format, and metadata from the selected catalog artifact.
+    """
+
     role: str
     filename: str
     path: Path
@@ -244,6 +272,14 @@ class InstalledArtifact:
 
 @dataclass(frozen=True, slots=True)
 class Installation:
+    """Verified managed representation of a catalog item or imported model.
+
+
+    ``id`` is the canonical item ID; ``storage_id`` can distinguish explicit
+    quality/distribution selections. Use ``artifacts_for`` or ``require_artifact`` to
+    query installed files by role, component, and quality.
+    """
+
     system: str
     id: str
     kind: str
@@ -350,6 +386,8 @@ class Installation:
 
 @dataclass(frozen=True, slots=True)
 class SessionDiagnostic:
+    """Provider and graph metadata for one ONNX Runtime session."""
+
     component: str | None
     model_path: Path
     providers_requested: tuple[str, ...]
@@ -360,6 +398,8 @@ class SessionDiagnostic:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeDiagnostic:
+    """Runtime-level diagnostics containing one or more session records."""
+
     system: str
     ref: str
     layout: str
@@ -368,6 +408,8 @@ class RuntimeDiagnostic:
 
 @dataclass(frozen=True, slots=True)
 class TensorSpec:
+    """Name, ONNX Runtime type, and declared shape of one graph tensor."""
+
     name: str
     ort_type: str
     shape: tuple[Any, ...]
@@ -375,6 +417,13 @@ class TensorSpec:
 
 @dataclass(frozen=True, slots=True)
 class InferenceResult:
+    """Canonical inference result returned by a system adapter.
+
+
+    ``audio`` is a one-dimensional float32 NumPy array and ``sample_rate`` is positive.
+    Optional ``timings``, named outputs, and metadata preserve adapter-specific results.
+    """
+
     audio: np.ndarray
     sample_rate: int
     timings: np.ndarray | None = None
@@ -394,7 +443,7 @@ class InferenceResult:
 
 @dataclass(frozen=True, slots=True)
 class CacheUsage:
-    """Report of cache storage usage."""
+    """Logical, physical, and auxiliary byte/count totals for the cache."""
 
     root: Path
     installation_count: int
@@ -416,7 +465,12 @@ class CacheUsage:
 
 @dataclass(frozen=True, slots=True)
 class GcReport:
-    """Result of garbage collection."""
+    """Garbage-collection counts and byte totals.
+
+
+    ``removed_bytes`` counts content blobs; auxiliary Pocket state reclamation is
+    reported separately.
+    """
 
     removed_blobs: int
     removed_bytes: int
@@ -426,6 +480,8 @@ class GcReport:
 
 @dataclass(frozen=True, slots=True)
 class AssetProgress:
+    """Progress event emitted during asset and installation operations."""
+
     phase: str
     ref: str | None = None
     artifact: str | None = None

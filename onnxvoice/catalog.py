@@ -68,6 +68,13 @@ DEFAULT_SOURCES = {
 
 @dataclass(slots=True)
 class CatalogClient:
+    """Read and normalize configured system catalogs.
+
+
+    A catalog load can read the network when cached data is stale or missing. In
+    offline mode, only cached catalog data is available.
+    """
+
     cache_dir: Path | None = None
     sources: dict[str, str] | None = None
     ttl_seconds: int = 24 * 60 * 60
@@ -87,6 +94,7 @@ class CatalogClient:
         self.sources = merged
 
     def systems(self) -> tuple[str, ...]:
+        """Return configured systems with catalog sources."""
         return tuple(sorted(self.sources or {}))
 
     def _cache_path(self, system: str) -> Path:
@@ -113,6 +121,12 @@ class CatalogClient:
         refresh: bool = False,
         progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
+        """Load raw catalog data from cache or its configured source.
+
+
+        Network access occurs when the cache cannot satisfy the request and offline
+        mode is disabled. ``refresh=True`` bypasses the normal cache freshness check.
+        """
         system = system.lower()
         if not self.sources or system not in self.sources:
             raise CatalogError(f"No catalog source configured for system {system!r}")
@@ -144,6 +158,7 @@ class CatalogClient:
         refresh: bool = False,
         progress: ProgressCallback | None = None,
     ) -> list[CatalogItem]:
+        """Return parsed catalog items for a system."""
         system = system.lower()
         raw = self.load_raw(system, refresh=refresh, progress=progress)
         if system == "piper":
@@ -165,6 +180,12 @@ class CatalogClient:
         distribution: str | None = None,
         progress: ProgressCallback | None = None,
     ) -> CatalogItem:
+        """Resolve a canonical reference or alias to a selected catalog item.
+
+
+        This may load the system catalog and can perform network I/O. Quality and
+        distribution select system-specific artifact variants.
+        """
         system, item_id = parse_ref(ref)
         if system == "kokoro":
             raw = self.load_raw(system, refresh=refresh, progress=progress)

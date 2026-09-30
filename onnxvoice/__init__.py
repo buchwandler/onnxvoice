@@ -45,6 +45,7 @@ from .types import (
     VoiceMetadata,
     VoiceRecord,
 )
+from .validation import validate_audio, validate_onnx, verify_installation
 from .voice_selectors import (
     format_voice_selector,
     is_voice_selector,
@@ -66,40 +67,61 @@ def _manager() -> OnnxVoice:
 
 
 def install(ref: str, **kwargs) -> Installation:
+    """Install a catalog asset into the shared store.
+
+
+    Catalog resolution and asset acquisition may perform network I/O.
+    """
     return _manager().install(ref, **kwargs)
 
 
 def open(ref: str | Installation, **kwargs: Any):
+    """Open an existing managed installation without acquiring assets.
+
+
+    Install the reference first with :func:`install` when it is not already stored.
+    """
     return _manager().open(ref, **kwargs)
 
 
 def open_local(**kwargs: Any):
+    """Open explicit local model files without registering or copying them.
+
+
+    See :meth:`OnnxVoice.open_local` for supported file mappings.
+    """
     return OnnxVoice.open_local(**kwargs)
 
 
 def resolve(ref: str, **kwargs) -> Installation:
+    """Resolve and verify an existing local installation without catalog access."""
     return _manager().resolve(ref, **kwargs)
 
 
 def load(ref: str | Installation, **kwargs: Any):
+    """Deprecated alias for :func:`open`; this function does not install assets."""
     if kwargs.get("download") is True:
         raise ValueError("load(download=True) is obsolete; call install() before open()")
     return _manager().load(ref, **kwargs)
 
 
 def load_local(**kwargs: Any):
+    """Deprecated alias for :func:`open_local`."""
     return OnnxVoice.load_local(**kwargs)
 
 
 def installed(system: str | None = None) -> list[Installation]:
+    """List locally installed assets, optionally restricted to one system."""
     return _manager().installed(system)
 
 
 def where(ref: str, **kwargs):
+    """Return the path of a verified local installation."""
     return _manager().where(ref, **kwargs)
 
 
 def remove(ref: str, **kwargs):
+    """Remove an installation; shared blobs may remain until garbage collection."""
     return _manager().remove(ref, **kwargs)
 
 

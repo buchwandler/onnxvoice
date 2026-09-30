@@ -48,10 +48,12 @@ def _ort() -> Any:
 
 
 def available_providers() -> tuple[str, ...]:
+    """Return providers available in the installed ONNX Runtime build."""
     return tuple(_ort().get_available_providers())
 
 
 def normalize_provider_name(provider: str) -> str:
+    """Normalize a supported provider alias to its ONNX Runtime name."""
     if not isinstance(provider, str) or not provider.strip():
         raise RuntimeContractError("Provider names must be non-empty strings")
     name = provider.strip()
@@ -120,6 +122,13 @@ def provider_options_for(
 
 
 class OnnxSession:
+    """Create ONNX Runtime sessions lazily and expose graph metadata.
+
+
+    Provider selection is resolved when a session is first needed. Importing this
+    module does not require the optional ``onnxruntime`` package.
+    """
+
     def __init__(
         self,
         model: str | Path,
@@ -129,6 +138,7 @@ class OnnxSession:
         provider_options: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
         session_options: Any | None = None,
     ) -> None:
+        """Configure a model path and optional provider policy."""
         self.model = Path(model)
         self.component = component
         self.provider_request = providers
@@ -142,28 +152,34 @@ class OnnxSession:
 
     @property
     def session(self) -> Any:
+        """Create and return the ONNX Runtime session on first access."""
         if self._session is None:
             self._session = self._create()
         return self._session
 
     @property
     def input_names(self) -> tuple[str, ...]:
+        """Return input tensor names, creating the session if necessary."""
         return tuple(node.name for node in self.session.get_inputs())
 
     @property
     def output_names(self) -> tuple[str, ...]:
+        """Return output tensor names, creating the session if necessary."""
         return tuple(node.name for node in self.session.get_outputs())
 
     @property
     def input_specs(self) -> tuple[TensorSpec, ...]:
+        """Return input names, runtime types, and shapes."""
         return self._tensor_specs(self.session.get_inputs())
 
     @property
     def output_specs(self) -> tuple[TensorSpec, ...]:
+        """Return output names, runtime types, and shapes."""
         return self._tensor_specs(self.session.get_outputs())
 
     @property
     def resolved_providers(self) -> tuple[str, ...]:
+        """Return the selected provider after session initialization."""
         _ = self.session
         assert self._resolved_providers is not None
         return self._resolved_providers
@@ -198,9 +214,11 @@ class OnnxSession:
         )
 
     def run(self, inputs: dict[str, Any]) -> list[Any]:
+        """Run inference with a mapping of graph input names to values."""
         return self.session.run(None, inputs)
 
     def diagnostics(self) -> SessionDiagnostic:
+        """Return provider and input/output diagnostics for this session."""
         return SessionDiagnostic(
             component=self.component,
             model_path=self.model,
@@ -214,4 +232,5 @@ class OnnxSession:
         )
 
     def close(self) -> None:
+        """Release the current session so it can be recreated on next access."""
         self._session = None

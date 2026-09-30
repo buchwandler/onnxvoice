@@ -32,7 +32,18 @@ Installations = list[Installation]
 
 
 class OnnxVoice:
-    """High-level catalog, store and local runtime facade."""
+    """High-level facade for catalogs, managed assets, and local runtimes.
+
+
+    Parameters
+    ----------
+    cache_dir : str or pathlib.Path, optional
+        Shared asset and catalog cache location.
+    catalog_sources : dict, optional
+        System-to-source overrides for catalog loading.
+    offline : bool, default=False
+        Read local/cache data without making network requests.
+    """
 
     def __init__(
         self,
@@ -41,6 +52,7 @@ class OnnxVoice:
         catalog_sources: dict[str, str] | None = None,
         offline: bool = False,
     ) -> None:
+        """Create a manager using the selected cache and catalog configuration."""
         self.store = AssetStore(cache_dir, offline=offline)
         self.catalog = CatalogClient(
             cache_dir=Path(cache_dir) if cache_dir is not None else None,
@@ -58,6 +70,12 @@ class OnnxVoice:
         refresh: bool = False,
         progress: ProgressCallback | None = None,
     ) -> CatalogResults:
+        """List catalog items or installed assets for one system.
+
+
+        Catalog listing may access the configured source when cached data is not usable.
+        Set ``installed=True`` for local-only results.
+        """
         from .inventory import matches_language
 
         if installed:
@@ -101,7 +119,12 @@ class OnnxVoice:
         include_unassigned: bool = True,
         progress: ProgressCallback | None = None,
     ) -> builtins.list[VoiceRecord]:
-        """List flattened catalog voices joined to stable selector identities."""
+        """List catalog voices joined to stable selector assignments.
+
+
+        Catalog data may be loaded from the network unless cached or offline. Set
+        ``include_unassigned=False`` to hide catalog voices without a selector.
+        """
         from .inventory import (
             language_codes_from_metadata,
             matches_language,
@@ -194,6 +217,12 @@ class OnnxVoice:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Installation:
+        """Resolve and install a catalog asset into the shared store.
+
+
+        Catalog access or asset download can perform network I/O. Explicit quality
+        and distribution selections are retained in the installation identity.
+        """
         item = self.catalog.resolve(
             ref,
             refresh=refresh,
@@ -222,7 +251,12 @@ class OnnxVoice:
         provider_options: Sequence[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
         session_options: Any | None = None,
     ):
-        """Open an existing local installation without catalog or network access."""
+        """Open and verify an existing managed installation without acquisition.
+
+
+        Accepts an ``Installation`` or a reference already installed in this cache.
+        Catalog lookup and network access are not performed.
+        """
         installation = (
             ref
             if isinstance(ref, Installation)
@@ -264,7 +298,12 @@ class OnnxVoice:
         voice_cache_dir: str | Path | None = None,
         offline: bool = False,
     ):
-        """Open explicit local files without registering or copying them."""
+        """Open explicit files without copying or registering them in the store.
+
+
+        Supply exactly one of ``model``, ``artifacts``, or ``files``. Named component
+        mappings support multi-file runtimes; paths remain unmanaged.
+        """
         if provider is not None:
             if providers is not None:
                 raise ValueError("Use provider or providers, not both")
@@ -405,6 +444,7 @@ class OnnxVoice:
         return installation
 
     def installed(self, system: str | None = None) -> Installations:
+        """List verified managed installations without catalog access."""
         return self.store.installed(system)
 
     def find_installed(self, ref: str) -> builtins.list[Installation]:
@@ -597,6 +637,12 @@ class OnnxVoice:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Installation:
+        """Import a model and optional config/voices files as a managed installation.
+
+
+        This convenience method handles a single model plus optional companion files.
+        Use ``open_local`` with a complete component mapping for multi-component runtimes.
+        """
         files: dict[str, str | Path] = {"model": model}
         if config is not None:
             files["config"] = config

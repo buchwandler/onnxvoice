@@ -52,3 +52,23 @@ Provider aliases are normalized without importing ONNX Runtime. The explicit `au
 ## Local resources
 
 `open_local(system="kokoro", artifacts={...}, runtime={"layout": "split-onnx-v1"})` creates the same `Installation` representation used by managed assets. Paths are resolved and verified before sessions are created. Missing components, invalid manifests, unsafe paths, unsupported layouts, and graph contract mismatches use OnnxVoice errors.
+
+## Adapter extension boundary
+
+A system adapter owns its model-specific ONNX input/output contract and runtime lifecycle. The adapter registry does not itself define a catalog source, parser, or stable selector namespace. Applications can register a `SystemAdapter` implementation with `register_adapter`; catalog tooling and selector support remain separate integrations.
+
+## Validation layers
+
+`verify_installation()` checks installed-file presence, size, and SHA-256. `validate_onnx()` checks that a model loads and exposes input/output metadata through ONNX Runtime. `validate_audio()` checks returned audio is numeric, finite, and non-silent. These inexpensive checks do not constitute waveform parity or release-grade quality gates.
+
+## Package versioning
+
+Package versions are generated with `setuptools_scm` from version-control metadata. Source distributions without SCM metadata use the configured fallback version.
+
+## Further reading
+
+- [Concepts](concepts.md)
+- [Storage](storage.md)
+- [Stable voice selectors](voices.md)
+- [Provider handling](providers.md)
+- [System adapters](systems/index.md)

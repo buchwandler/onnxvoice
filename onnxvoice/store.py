@@ -126,6 +126,17 @@ class AssetStore:
     """Content-addressed local store shared by all onnxvoice consumers."""
 
     def __init__(self, root: str | Path | None = None, *, offline: bool = False) -> None:
+        """Create the local store and its blob/install roots.
+
+
+        Parameters
+        ----------
+        root : str or pathlib.Path, optional
+            Cache directory. Defaults to the platform cache or
+            ``ONNXVOICE_CACHE_DIR``.
+        offline : bool, default=False
+            Disallow network access for store operations that can download files.
+        """
         self.root = Path(
             root or os.environ.get("ONNXVOICE_CACHE_DIR") or user_cache_path("onnxvoice")
         )
@@ -136,17 +147,21 @@ class AssetStore:
         self.installs.mkdir(parents=True, exist_ok=True)
 
     def install_path(self, system: str, item_id: str) -> Path:
+        """Return the managed installation directory for a system and item ID."""
         self._safe_component(system, "system")
         self._safe_component(item_id, "item id")
         return self.installs / system / item_id
 
     def manifest_path(self, system: str, item_id: str) -> Path:
+        """Return the manifest path for a managed installation."""
         return self.install_path(system, item_id) / "manifest.json"
 
     def is_installed(self, system: str, item_id: str) -> bool:
+        """Return whether the requested installation has a manifest."""
         return self.manifest_path(system, item_id).is_file()
 
     def installed(self, system: str | None = None) -> list[Installation]:
+        """List managed installations, optionally filtered by system."""
         roots = (
             [self.installs / self._safe_component(system, "system")]
             if system
@@ -163,15 +178,18 @@ class AssetStore:
         return result
 
     def get(self, system: str, item_id: str) -> Installation:
+        """Load one managed installation from its manifest."""
         manifest = self.manifest_path(system, item_id)
         if not manifest.is_file():
             raise AssetNotFoundError(f"Not installed: {system}:{item_id}")
         return self._load_manifest(manifest)
 
     def where(self, system: str, item_id: str) -> Path:
+        """Return the path recorded for one managed installation."""
         return self.get(system, item_id).path
 
     def remove(self, system: str, item_id: str) -> None:
+        """Remove an installation without collecting shared unreferenced blobs."""
         with FileLock(self._install_lock_path(system, item_id)), FileLock(self._gc_lock_path()):
             path = self.install_path(system, item_id)
             if not path.exists():
@@ -185,6 +203,11 @@ class AssetStore:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Installation:
+        """Install and verify catalog artifacts in the shared content-addressed store.
+
+
+        Existing installations are verified and reused unless ``force=True``.
+        """
         storage_id = self._storage_item_id(item)
         with FileLock(self._install_lock_path(item.system, storage_id)):
             return self._install_unlocked(item, force=force, progress=progress)
@@ -329,6 +352,7 @@ class AssetStore:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Installation:
+        """Import explicit files by creating a catalog-like managed installation."""
         artifacts = []
         for role, raw_path in files.items():
             path = Path(raw_path).expanduser().resolve()
@@ -354,6 +378,7 @@ class AssetStore:
         return self.install(item, force=force, progress=progress)
 
     def verify(self, installation: Installation) -> None:
+        """Verify every installed artifact's path, size, and SHA-256 digest."""
         root = installation.path.resolve()
         for artifact in installation.artifacts:
             path = artifact.path
@@ -512,7 +537,7 @@ class AssetStore:
         )
 
     def gc(self) -> GcReport:
-        """Remove unreferenced blobs and Pocket voice-state cache records."""
+        """Collect unreferenced content blobs and Pocket voice-state records."""
         from .types import GcReport
 
         with FileLock(self._gc_lock_path()):
@@ -569,11 +594,7 @@ class AssetStore:
             )
 
     def usage(self) -> CacheUsage:
-        """Compute cache storage usage statistics.
-
-        Uses inode-based unique file accounting to avoid double-counting
-        hard-linked files.
-        """
+        """Compute logical, physical, orphan, and auxiliary cache usage."""
         from .types import CacheUsage
 
         installations = self.installed()

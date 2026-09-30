@@ -1,498 +1,79 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/onnxvoice)](https://pypi.org/project/onnxvoice/)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/onnxvoice)
-![PyPI - Downloads](https://img.shields.io/pypi/dm/onnxvoice)
 [![codecov](https://codecov.io/gh/buchwandler/onnxvoice/graph/badge.svg?token=qKZyL4Zidh)](https://codecov.io/gh/buchwandler/onnxvoice)
 
 # onnxvoice
 
-`onnxvoice` is the published Python infrastructure package for shared ONNX voice-model catalogs, asset installation, integrity verification, ONNX Runtime sessions, and model tensor-contract execution.
+`onnxvoice` manages, verifies, stores, and executes ONNX voice-model assets through shared catalogs, a content-addressed cache, and a common Python API.
 
-Install the package and an optional ONNX Runtime provider with:
-
-```bash
-pip install onnxvoice
-pip install "onnxvoice[cpu]"
-pip install "onnxvoice[gpu]"
-pip install "onnxvoice[directml]"
-pip install "onnxvoice[openvino]"
-```
-
-Model catalogs and model artifacts remain external data. `onnxvoice` does not bundle model files or speech-engine policy.
-
-## Why
-
-Without a shared layer, each TTS package tends to implement its own catalog client, download logic, cache directory, checksums, ONNX Runtime provider handling and model-specific inference glue. `onnxvoice` centralizes that middle layer.
-
-The cache is content-addressed:
-
-```text
-~/.cache/onnxvoice/
-├── blobs/sha256/ab/abcdef...
-├── catalogs/
-│   ├── kokoro.json
-│   ├── piper.json
-│   └── pocket.json
-├── pocket-voice-states/
-└── installs/
-    ├── kokoro/v1.0/manifest.json
-    └── piper/en_US-lessac-medium/manifest.json
-```
-
-Installations hard-link to immutable blobs when the platform and filesystem support hard links. Otherwise `onnxvoice` falls back to copying the verified blob into the installation directory. The blob cache remains content-addressed; copy-mode installations may use additional disk space. The same bytes therefore do not need to be stored twice by different model installations.
-
-## Stable low-level contract
-
-Milestone A defines the dependency boundary used by downstream frontends:
-
-- Installation manifests use schema 2 and preserve artifact component, format, quality, and metadata fields. Schema 1 manifests remain readable.
-- System, item, and artifact paths are validated before filesystem access.
-- Installations, catalog writes, blob publication, and garbage collection use process locks. Interrupted staging is removed.
-- Asset operations accept progress callbacks receiving `AssetProgress` events.
-- The canonical inference result is float32, one-dimensional NumPy audio with a positive sample rate. Kokoro timing and named auxiliary outputs are available on the result.
-- `open()` resolves and verifies an existing installation only. `open_local()` uses explicit local files without copying them into the shared cache. Call `install()` explicitly for catalog access and downloads.
-- Provider names support aliases such as `cpu`, `cuda`, `gpu`, `directml`, and `openvino`. Use `auto` for deterministic priority selection, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an environment policy.
-- Provider names support aliases `cpu`, `cuda`, `gpu`, `directml`, `dml`, `openvino`, `coreml`, `nnapi`, and `xnnpack`, plus canonical ONNX Runtime names. Use `auto` for the documented deterministic priority policy, or set `ONNXVOICE_PROVIDER` / `ONNXVOICE_PROVIDERS` for an explicit environment policy. The `coreml`, `nnapi`, `xnnpack`, and `mobile` extras are markers because compatible platform ONNX Runtime builds supply those providers.
-
-The shared cache is never required for importing the package. Offline mode reads existing catalog, blob, and Pocket voice-state cache data only and does not make network requests.
-
-## Stable voice selectors
-
-Short voice selectors are persisted identity aliases, not positions in the current catalog. The canonical form is `<language-key>-<engine-code>-<slot>`:
-
-```text
-de-ko-1       -> kokoro:de-anna, logical voice df_anna
-de-pi-1       -> piper:de_DE-eva_k-x_low
-en_us-ko-1    -> kokoro:v1.0, voice af_alloy
-en_us-ko-4    -> kokoro:v1.0, voice af_heart
-en_us-ko-26   -> kokoro:v1.1-zh, voice af_maple
-```
-
-For Kokoro catalog filtering, the input locale may use a hyphen, while the persisted selector uses the canonical underscore language key:
-
-```text
-language filter/input locale: en-us or en-US
-canonical selector language key: en_us
-```
-
-Descriptive metadata is separate from selector identity. Catalog `locale` is the most specific authoritative language tag, such as `en-US`; `language` is its lowercase base language, such as `en`. The selector language is a permanent registry namespace and may differ: Piper English uses `en` for both `en-US` and `en-GB`, while Kokoro uses `en_us` and `en_gb`. Selector strings and slots are never rewritten to match descriptive locale tags.
-
-Language filtering follows compatibility rather than exact string equality. `--lang en` matches `en`, `en-US`, and `en-GB`. `--lang en-US` matches `en-US` and a generic `en` catalog capability, but not the conflicting specific locale `en-GB`.
-
-Voice records expose normalized `metadata.language`, `metadata.locale`, `metadata.language_label`, and `metadata.gender` alongside the existing `languages` and `gender` fields. Optional Pocket `voice_details` provides authoritative per-voice descriptions and remains separate from `voice_states`; descriptive details alone cannot assign a stable selector. Gender is never inferred, so `unknown` is expected when the catalog has no authoritative value.
-Language labels prefer an authoritative human-readable source label, then the locale or base language; a bare region code such as `US` is not used as a label.
-`ko` is the permanent Kokoro code, `pi` is the permanent Piper code, and `po` is the permanent Pocket code. Slots are append-only and remain reserved when a voice is removed, so catalog insertion, sorting, filtering, installation state, and network availability cannot silently rename an existing selector. Pocket identities are bundle-scoped `(pocket, bundle_id, voice_id)` records and require explicit catalog `voice_states`. The current canonical Pocket catalog exposes predefined names without those records, so they remain unassigned and receive no Pocket selector. Use the selector API to resolve the complete identity of assigned selectors:
-
-```python
-from onnxvoice import resolve_voice_selector
-
-identity = resolve_voice_selector("de-ko-1")
-assert identity.backing_ref == "kokoro:de-anna"
-assert identity.voice_id == "df_anna"
-```
-
-Asset operations still use canonical `system:id` references such as `kokoro:de-anna` and `piper:de_DE-eva_k-x_low`. Resolving a Kokoro selector does not choose a style tensor; producer packages remain responsible for style/policy selection. Catalog voices without registry assignments are reported as unassigned rather than receiving a runtime-generated number. Pocket `predefined_voice_names` are not stable identities on their own.
-
-The maintenance tool checks selector/catalog drift and previews append-only assignments. Pocket candidates without explicit `voice_states` records are rejected, even when `predefined_voice_names` lists them:
-
-```bash
-python -m onnxvoice.catalog_tools.voice_selectors --check
-python -m onnxvoice.catalog_tools.voice_selectors --append-unassigned \
-  --registry /path/to/voice_selectors.json --catalog pocket=/path/to/catalog.json
-```
-
-Preview is the default. Add `--apply` to the append command to write the explicitly selected registry file. Existing slots are never reused or automatically retired.
+It is a model asset and runtime layer, not a complete text-to-speech frontend. Text normalization, G2P/phonemization, sentence planning, and higher-level voice policy belong to producer packages.
 
 ## Install
 
-The base package does not install ONNX Runtime. Choose the extra for the deployment provider:
+The base package does not install ONNX Runtime. Install the provider extra for the target system:
 
 ```bash
-pip install onnxvoice
-pip install "onnxvoice[cpu]"
-pip install "onnxvoice[gpu]"
-pip install "onnxvoice[directml]"
-pip install "onnxvoice[openvino]"
+python -m pip install onnxvoice
+python -m pip install "onnxvoice[cpu]"
+python -m pip install "onnxvoice[gpu]"
+python -m pip install "onnxvoice[directml]"
+python -m pip install "onnxvoice[openvino]"
 ```
 
-For development, install `onnxvoice[dev,cpu]`.
+For Pocket's optional Hugging Face voice-state downloads, add the `pocket` extra. See [Pocket download setup](docs/pocket-downloads.md).
 
-The MVP directly understands the existing catalogs from:
+## Quick start
 
-- `buchwandler/piper-onnx-voices` (`catalog/voices.json`)
-- `buchwandler/kokoro-onnx-models` (`catalog/models.json`)
-
-Override them without changing code:
+### CLI
 
 ```bash
-export ONNXVOICE_PIPER_CATALOG=/path/to/voices.json
-export ONNXVOICE_KOKORO_CATALOG=/path/to/models.json
-```
-
-A local path or HTTP(S) URL is accepted.
-
-## CLI
-
-### Pocket downloads
-
-Install `onnxvoice[pocket]` for direct Pocket use, or use `pocketsynth[cpu]` / `pocketsynth[gpu]`. Public ONNX bundle artifacts do not require login. Predefined voice states are separate and may require access to a gated repository plus standard Hugging Face authentication (`hf auth login` or `HF_TOKEN`).
-
-The diagnostic is local-only and never displays a token or checks gated access over the network:
-
-```bash
-onnxvoice doctor --system pocket
-onnxvoice --offline doctor --system pocket --format json
-```
-
-See [`docs/pocket-downloads.md`](docs/pocket-downloads.md) for setup, access, offline caching, and troubleshooting details.
-
-### Inventory and discovery
-
-```bash
-# Everything installed locally
-onnxvoice installed
-
-# Installed US English voices
-onnxvoice installed --kind voice --lang en-US
-
-# Installed male US English voices
-onnxvoice installed --kind voice --lang en-US --gender male
-
-# Installed + available male US English voices (merged inventory)
-onnxvoice list --kind voice --lang en-US --gender male
-
-# Only available (not installed) entries
-onnxvoice list --status available
-
-# JSON output for scripting
-onnxvoice installed --format json
-```
-
-### Updates
-
-```bash
-# Check what's outdated (refreshes catalogs by default)
-onnxvoice updates
-
-# Check against cached catalogs only
-onnxvoice updates --cached
-
-# Update one asset (preserves quality/distribution selection)
-onnxvoice update piper:en_US-lessac-medium
-
-# Update all outdated assets
-onnxvoice update --all
-```
-
-### Storage
-
-```bash
-# Show cache usage with byte totals
-onnxvoice cache info
-
-# Show cache usage as JSON
-onnxvoice cache info --format json
-
-# Show what GC would remove
-onnxvoice cache gc --dry-run
-
-# Remove orphaned blobs and unreachable Pocket voice states
-onnxvoice cache gc
-```
-
-`cache info` includes `auxiliary_bytes`, `pocket_voice_state_count`, `pocket_voice_state_bytes`, `orphan_auxiliary_count`, and `orphan_auxiliary_bytes`. The dry run reports unreachable Pocket state records alongside orphan blobs. Garbage collection retains state files referenced by any installed matching bundle variant, then removes the record only when no installed variant needs it.
-
-### Removal
-
-```bash
-# Show what would be removed (dry run)
-onnxvoice remove piper:en_US-lessac-medium --dry-run
-
-# Remove one asset
-onnxvoice remove piper:en_US-lessac-medium
-
-# Remove and clean up orphaned blobs
-onnxvoice remove piper:en_US-lessac-medium --gc
-
-# Remove multiple assets
-onnxvoice remove piper:en_US-lessac-medium kokoro:v1.0
-
-# Remove all variants of a ref
-onnxvoice remove kokoro:v1.0 --all-variants --yes
-```
-
-### Info
-
-```bash
-# Detailed info about an installed asset
-onnxvoice info piper:en_US-lessac-medium
-
-# Info with update check
-onnxvoice info piper:en_US-lessac-medium --check-updates
-```
-
-### Install and verify
-
-```bash
+onnxvoice list --kind voice --lang en-US
 onnxvoice install piper:en_US-lessac-medium
-onnxvoice install kokoro:v1.0 --quality fp16
-onnxvoice path piper:en_US-lessac-medium
-onnxvoice verify piper:en_US-lessac-medium
-onnxvoice show piper:en_US-lessac-medium
+onnxvoice installed
+onnxvoice cache info
 ```
 
-### Catalog management
+### Python
+
+```python
+from onnxvoice import OnnxVoice
+
+voice = OnnxVoice()
+installation = voice.install("piper:en_US-lessac-medium")
+runtime = voice.open(installation, provider="cpu")
+try:
+    # Supply model-ready token IDs from your frontend.
+    result = runtime.infer([1, 20, 14, 5, 2])
+    print(result.audio.shape, result.sample_rate)
+finally:
+    runtime.close()
+```
+
+`install()` acquires catalog assets. `open()` uses an existing managed installation and does not download assets. `open_local()` opens explicit files without copying or registering them.
+
+## Supported systems
+
+| System     | Built-in adapter | Catalog | Stable voice selectors                                |
+| ---------- | ---------------- | ------- | ----------------------------------------------------- |
+| Piper      | Yes              | Yes     | Yes                                                   |
+| Kokoro     | Yes              | Yes     | Yes                                                   |
+| Pocket     | Yes              | Yes     | Conditional on explicit voice-state identity metadata |
+| Supertonic | Yes              | Yes     | No                                                    |
+
+Adapters execute system-specific model contracts. They do not imply text normalization or phonemization support. The selector registry and catalogs are independent capabilities.
+
+## Documentation
+
+The [full documentation](docs/index.md) includes task-oriented CLI and Python guides, storage and update behavior, provider setup, local-model workflows, per-system runtime contracts, and the API reference.
+
+## Development
 
 ```bash
-onnxvoice catalog piper build --output catalog/voices.json --source-output catalog/source.json
-onnxvoice catalog piper verify --catalog catalog/voices.json --source catalog/source.json
+python -m pip install -e ".[dev,cpu]"
+pytest -q
+python docs/make.py html
 ```
-
-### Filter flags
-
-Common flags for `list`, `installed`, and `updates`:
-
-| Flag                  | Description                             |
-| --------------------- | --------------------------------------- | ------- | ---------------------------- | ---------------- |
-| `--system piper       | kokoro                                  | pocket` | Filter by system             |
-| `--kind voice         | model                                   | bundle` | Filter by kind               |
-| `--lang / --language` | Filter by language (e.g. `en`, `en-US`) |
-| `--gender male        | female                                  | neutral | unknown`                     | Filter by gender |
-| `--quality`           | Filter by quality                       |
-| `--distribution`      | Filter by distribution                  |
-| `--status installed   | available                               | local`  | Filter by status (list only) |
-| `--format table       | plain                                   | json    | tsv`                         | Output format    |
-
-**Note on gender**: Gender metadata depends on authoritative catalog sources. If the catalog does not supply a gender field, entries default to `unknown`. The CLI never infers gender from voice names or IDs.
-
-**Note on cache reclamation**: After `onnxvoice remove REF`, installation files are gone, but content-addressed blobs and Pocket predefined voice states can remain until `onnxvoice cache gc` is run. `cache info` reports blob and auxiliary cache sizes. Pocket state cache entries are retained while any installed matching bundle variant references them.
-
-Kokoro has multiple ONNX model qualities in one distribution. `onnxvoice install kokoro:v1.0` selects `fp32` by default rather than downloading all model variants. Non-model runtime artifacts from the selected distribution are installed with it.
-
-## Python API
-
-### Discover and install
-
-```python
-from onnxvoice import OnnxVoice
-
-ov = OnnxVoice()
-
-for voice in ov.list("piper", language="en_US"):
-    print(voice.ref)
-
-piper = ov.install("piper:en_US-lessac-medium")
-kokoro = ov.install("kokoro:v1.0", quality="fp16")
-
-print(ov.where("piper:en_US-lessac-medium"))
-print([item.ref for item in ov.installed()])
-```
-
-### Piper inference
-
-`onnxvoice` expects already-tokenized Piper IDs and a model-ready numeric speaker ID when the graph has a `sid` input. It does not phonemize text or resolve speaker names.
-
-```python
-from onnxvoice import open
-
-runtime = open("piper:en_US-lessac-medium")
-result = runtime.infer(
-    [1, 20, 14, 5, 2],
-    speaker_id=0,
-    length_scale=1.0,
-    noise_scale=0.667,
-    noise_w=0.8,
-)
-
-print(result.audio.dtype)
-print(result.sample_rate)
-runtime.close()
-```
-
-### Kokoro inference
-
-Kokoro receives an explicit model-ready style tensor. Logical voice selection and style archives belong to the higher-level engine.
-
-```python
-runtime = open("kokoro:v1.0", quality="fp16")
-result = runtime.infer(
-    [50, 31, 12, 99],
-    style=style_tensor,
-    speed=1.0,
-)
-print(result.audio.shape, result.sample_rate)
-runtime.close()
-```
-
-### Pocket inference
-
-Pocket bundles use the canonical `pocket-onnx-bundles` catalog and select a complete quality profile, including the mixed-precision `int8` profile:
-
-```python
-import numpy as np
-from onnxvoice import OnnxVoice
-
-ov = OnnxVoice()
-installation = ov.install("pocket:english_2026-04", quality="int8")
-with ov.open(installation, provider="cpu") as runtime:
-    voice = runtime.prepare_voice(reference_audio, sample_rate=24000)
-    result = runtime.infer(
-        token_ids,
-        voice_state=voice,
-        temperature=0.7,
-        lsd_steps=1,
-        max_frames=200,
-    )
-```
-
-`prepare_voice()` runs the Mimi encoder once and returns reusable voice embeddings. Each `infer()` call creates fresh Flow-LM and Mimi recurrent state. `max_frames` is a generation-frame limit, not a token or sample limit; `frames_after_eos` can request bounded post-EOS frames. Runtime opening validates the named graph inputs, outputs, and state manifests before inference.
-
-For explicit local files, use the existing unmanaged boundary without catalog or HTTP access:
-
-```python
-with OnnxVoice.open_local(
-    system="pocket",
-    files={
-        "bundle_metadata": "bundle.json",
-        "bos_conditioning": "bos_before_voice.npy",
-        "mimi_encoder": "mimi_encoder.onnx",
-        "text_conditioner": "text_conditioner.onnx",
-        "flow_lm_main": "flow_lm_main.onnx",
-        "flow_lm_flow": "flow_lm_flow.onnx",
-        "mimi_decoder": "mimi_decoder.onnx",
-    },
-    metadata=bundle_metadata,
-    sample_rate=24000,
-    provider="cpu",
-) as runtime:
-    result = runtime.infer(token_ids, voice_state=runtime.prepare_voice(audio, sample_rate=24000))
-```
-
-The optional real-bundle smoke test is enabled by setting `ONNXVOICE_POCKET_BUNDLE_DIR` to a checked-out pinned bundle directory; otherwise it is skipped while fake-session contract tests remain mandatory.
-The same call works for the catalog's `split-onnx-v1` layout. The frontend still supplies token IDs and a complete style row; OnnxVoice does not select voices or phonemize text.
-
-### Local split Kokoro
-
-```python
-runtime = open_local(
-    system="kokoro",
-    artifacts={
-        "prosody": "prosody.onnx",
-        "curves": "curves.onnx",
-        "decoder": "decoder.onnx",
-        "voices": "voices.npz",
-        "config": "manifest.json",
-        "source_params": "source-params.npz",
-    },
-    runtime={"layout": "split-onnx-v1"},
-    sample_rate=24000,
-    provider="cpu",
-)
-result = runtime.infer(token_ids, style=style, speed=1.0, seed=1234)
-```
-
-Runtime diagnostics are available through `runtime.diagnostics()` for both single and multi-session layouts.
-
-### External/local models
-
-External files can be imported into the same store:
-
-```python
-ov.import_model(
-    system="piper",
-    item_id="my-voice",
-    model="voice.onnx",
-    config="voice.onnx.json",
-)
-
-runtime = ov.open("piper:my-voice")
-```
-
-For Kokoro:
-
-```python
-ov.import_model(
-    system="kokoro",
-    item_id="my-kokoro",
-    model="kokoro.onnx",
-    voices="voices.npz",
-    sample_rate=24000,
-)
-```
-
-Local files can be opened without cache registration:
-
-```python
-from onnxvoice import open_local
-
-runtime = open_local(
-    system="piper",
-    model="voice.onnx",
-    config="voice.onnx.json",
-    provider="cpu",
-)
-```
-
-The unmanaged runtime keeps the original file paths. Use `import_model()` when a durable managed installation and manifest are required.
-
-## System adapters
-
-A TTS system adapter owns only the model-specific ONNX contract. It does not own text normalization, G2P, sentence splitting or document planning.
-
-```python
-from onnxvoice.systems import SystemAdapter, register_adapter
-
-
-class MyTTSAdapter(SystemAdapter):
-    system = "mytts"
-    ...
-
-
-register_adapter("mytts", MyTTSAdapter)
-```
-
-The built-in MVP adapters are `piper` and `kokoro`.
-
-## Validation levels
-
-The MVP includes three inexpensive building blocks:
-
-- installed asset verification: file presence, size and SHA-256
-- ONNX load/contract smoke check via ONNX Runtime
-- returned audio sanity: numeric, finite and non-silent
-
-Release-grade waveform parity, spectral gates and reference comparisons belong in a later validation layer. They should not run on every inference.
-
-## Architecture
-
-```text
-PyKokoro / PiperSynth / another frontend
-             │
-             │ tokens + voice/model choice
-             ▼
-        onnxvoice
-        ├── CatalogClient
-        ├── AssetStore
-        ├── SystemAdapter
-        │   ├── PiperAdapter
-        │   ├── KokoroAdapter
-        │   └── SplitKokoroRuntime (prosody / curves / decoder)
-        ├── OnnxSession
-        └── validation
-             │
-             ▼
-        NumPy audio
-```
-
-UtterRender should normally consume PyKokoro/PiperSynth and let those packages use `onnxvoice` underneath, rather than becoming another downloader/cache owner.
-
-## Versioning
-
-The project uses `setuptools_scm`. There is no hard-coded project version and no `src/` layout. Tagged Git commits produce package versions dynamically. A source tree without SCM metadata falls back to `0.1.0`.
-
-## Current limitations
-
-The current release supports the built-in Piper and Kokoro catalog formats, the canonical Pocket ONNX bundle catalog, single-file Kokoro, and the first-class `split-onnx-v1` multi-component Kokoro layout. Catalog distributions are selectable by identifier and cached with distinct identities. Pocket predefined states remain separate assets; stable Pocket selectors require explicit canonical `voice_states` records. Resumable downloads, general third-party catalog schemas, and release-grade waveform parity gates remain separate work.
 
 ## License
 
-The `onnxvoice` source code is Apache-2.0. Downloaded models, voice packs and model cards retain their own licenses and terms; installing them through `onnxvoice` does not relicense those artifacts.
+The source code is Apache-2.0. Downloaded models, voices, and model cards retain their own licenses and terms. Installing an asset through `onnxvoice` does not relicense it.

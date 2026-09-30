@@ -13,6 +13,8 @@ from .types import InferenceResult, Installation
 
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
+    """Outcome and names of the validation checks that passed."""
+
     ok: bool
     checks: tuple[str, ...]
 
