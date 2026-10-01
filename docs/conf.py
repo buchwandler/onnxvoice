@@ -21,7 +21,6 @@ author = "Holger Nahrstaedt"
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.doctest",
-    "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "myst_parser",
@@ -90,10 +89,3 @@ html_theme_options = {
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 # html_static_path = ['_static']
-
-# Set up intersphinx maps
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "numpy": ("https://numpy.org/doc/stable", None),
-    "PIL": ("https://pillow.readthedocs.io/en/stable", None),
-}
