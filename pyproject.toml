@@ -16,7 +16,18 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [{name = "onnxvoice contributors"}]
-keywords = ["onnx", "tts", "speech", "voice", "piper", "kokoro", "pocket", "asset-cache"]
+keywords = [
+  "onnx",
+  "tts",
+  "speech",
+  "voice",
+  "piper",
+  "kokoro",
+  "pocket",
+  "kitten",
+  "kitten-tts",
+  "asset-cache",
+]
 dependencies = [
   "numpy>=1.23",
   "platformdirs>=4,<5",
@@ -67,7 +78,7 @@ dev = [
 
 [tool.setuptools_scm]
 write_to = "onnxvoice/_version.py"
-fallback_version = "0.1.0"
+fallback_version = "0.2.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

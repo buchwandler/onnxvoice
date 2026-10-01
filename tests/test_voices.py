@@ -144,6 +144,58 @@ def test_list_voices_flattens_all_catalogs_and_filters_descriptive_language() ->
     }
 
 
+def test_multilingual_bundle_capabilities_filter_list_and_resolve() -> None:
+    languages = ("en", "ko", "ja", "de")
+    item = CatalogItem(
+        system="supertonic",
+        id="supertonic-3",
+        kind="bundle",
+        artifacts=(),
+        voices=("F1", "M1"),
+        metadata={"language_codes": languages},
+    )
+    manager = object.__new__(OnnxVoice)
+    manager.catalog = _Catalog((item,))
+
+    for language in ("de", "ja"):
+        assert {record.voice_id for record in manager.list_voices(language=language)} == {
+            "F1",
+            "M1",
+        }
+
+    assert manager.list_voices(language="fr") == []
+    record = manager.resolve_voice("supertonic:supertonic-3/F1")
+    assert record.languages == languages
+
+
+def test_per_voice_language_capabilities_restrict_generic_bundle_filtering() -> None:
+    item = CatalogItem(
+        system="generic",
+        id="bundle",
+        kind="bundle",
+        artifacts=(),
+        voices=("voice-a", "voice-b"),
+        metadata={
+            "language_codes": ("en", "de"),
+            "voice_details": {
+                "voice-a": {"locale": "en"},
+                "voice-b": {"locale": "de"},
+            },
+        },
+    )
+    manager = object.__new__(OnnxVoice)
+    manager.catalog = _Catalog((item,))
+
+    records = {record.voice_id: record for record in manager.list_voices("generic")}
+    assert records["voice-a"].languages == ("en",)
+    assert records["voice-b"].languages == ("de",)
+    assert [record.voice_id for record in manager.list_voices("generic", language="de")] == [
+        "voice-b"
+    ]
+    assert manager.resolve_voice("generic:bundle/voice-a").languages == ("en",)
+    assert manager.resolve_voice("generic:bundle/voice-b").languages == ("de",)
+
+
 def test_list_voices_passes_catalog_options_and_uses_requested_system() -> None:
     manager = object.__new__(OnnxVoice)
     manager.catalog = _Catalog((_piper_voice(), _supertonic_bundle()))

@@ -14,8 +14,8 @@ from .checksums import digest_file
 from .errors import AssetNotFoundError, NotInstalledError, VoiceNotFoundError
 from .inventory import (
     InventoryRecord,
-    language_codes_from_metadata,
     matches_language,
+    voice_language_codes_from_catalog,
     voice_metadata_from_catalog,
 )
 from .store import AssetStore, ProgressCallback
@@ -122,7 +122,7 @@ class OnnxVoice:
             catalog_item=item,
             voice_id=voice_id,
             metadata=voice_metadata_from_catalog(item, voice_id),
-            languages=language_codes_from_metadata(item.metadata),
+            languages=voice_language_codes_from_catalog(item, voice_id),
         )
 
     def list_voices(
@@ -148,8 +148,9 @@ class OnnxVoice:
             seen.add(key)
 
             metadata = voice_metadata_from_catalog(item, voice_id)
+            languages = voice_language_codes_from_catalog(item, voice_id)
             if language is not None and not matches_language(
-                {"language_codes": (metadata.locale or metadata.language,)}, language
+                {"language_codes": languages}, language
             ):
                 continue
             records.append(
@@ -157,7 +158,7 @@ class OnnxVoice:
                     catalog_item=item,
                     voice_id=voice_id,
                     metadata=metadata,
-                    languages=language_codes_from_metadata(item.metadata),
+                    languages=languages,
                 )
             )
 

@@ -29,6 +29,7 @@ from onnxvoice.inventory import (
     primary_language_from_metadata,
     query_inventory,
     version_label,
+    voice_language_codes_from_catalog,
     voice_metadata_from_catalog,
 )
 from onnxvoice.types import Artifact, CatalogItem, Installation, InstalledArtifact
@@ -307,6 +308,50 @@ class TestVoiceMetadataExtraction:
 # ---------------------------------------------------------------------------
 # Effective quality / distribution tests
 # ---------------------------------------------------------------------------
+
+
+class TestVoiceLanguageCapabilities:
+    def test_child_language_metadata_precedes_bundle_capabilities(self):
+        item = CatalogItem(
+            system="generic",
+            id="bundle",
+            kind="bundle",
+            artifacts=(),
+            voices=("voice-a", "voice-b"),
+            metadata={
+                "language_codes": ("en", "de"),
+                "voice_details": {
+                    "voice-a": {"locale": "en"},
+                    "voice-b": {"locale": "de"},
+                },
+            },
+        )
+
+        assert voice_language_codes_from_catalog(item, "voice-a") == ("en",)
+        assert voice_language_codes_from_catalog(item, "voice-b") == ("de",)
+
+    def test_bundle_capabilities_are_inherited_when_voice_metadata_is_absent(self):
+        item = CatalogItem(
+            system="generic",
+            id="bundle",
+            kind="bundle",
+            artifacts=(),
+            voices=("voice-a",),
+            metadata={"language_codes": ("en", "de", "ja")},
+        )
+
+        assert voice_language_codes_from_catalog(item, "voice-a") == ("en", "de", "ja")
+
+    def test_descriptive_locale_is_the_last_language_fallback(self):
+        item = CatalogItem(
+            system="generic",
+            id="voice-a",
+            kind="voice",
+            artifacts=(),
+            metadata={"locale": "pt_br"},
+        )
+
+        assert voice_language_codes_from_catalog(item, "voice-a") == ("pt-BR",)
 
 
 class TestEffectiveSelection:

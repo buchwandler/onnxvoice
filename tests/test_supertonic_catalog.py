@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from onnxvoice.catalog import DEFAULT_SOURCES, CatalogClient, _parse_supertonic
-from onnxvoice.errors import AssetNotFoundError, CatalogError
+from onnxvoice.errors import AssetNotFoundError, CatalogError, VoiceNotFoundError
 from onnxvoice.manager import OnnxVoice
 from onnxvoice.systems.supertonic import SupertonicAdapter
 
@@ -309,6 +309,41 @@ def _installable_catalog() -> tuple[dict, dict[str, bytes], tuple[str, ...]]:
         artifact["size"] = len(payload)
         artifact["sha256"] = hashlib.sha256(payload).hexdigest()
     return catalog, payloads, languages
+
+
+def test_supertonic_semantic_voice_discovery_and_multilingual_filters(tmp_path: Path) -> None:
+    catalog, _, languages = _installable_catalog()
+    catalog_path = tmp_path / "supertonic.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    manager = OnnxVoice(
+        cache_dir=tmp_path / "cache",
+        catalog_sources={"supertonic": str(catalog_path)},
+    )
+
+    expected_refs = {f"supertonic:supertonic-3/{voice_id}" for voice_id in STYLE_COMPONENTS}
+    records = manager.list_voices(system="supertonic")
+    assert {record.ref for record in records} == expected_refs
+    assert all(record.languages == languages for record in records)
+
+    for language in ("en", "de", "ja", "fr", "uk"):
+        assert {
+            record.ref for record in manager.list_voices(system="supertonic", language=language)
+        } == expected_refs
+    assert manager.list_voices(system="supertonic", language="zz") == []
+
+    record = manager.resolve_voice("supertonic:supertonic-3/F1")
+    assert (record.ref, record.backing_ref, record.voice_id) == (
+        "supertonic:supertonic-3/F1",
+        "supertonic:supertonic-3",
+        "F1",
+    )
+    assert record.languages == languages
+    assert manager.resolve_voice("supertonic:st3/F1").ref == "supertonic:supertonic-3/F1"
+
+    with pytest.raises(VoiceNotFoundError, match="required"):
+        manager.resolve_voice("supertonic:supertonic-3")
+    with pytest.raises(VoiceNotFoundError, match="not declared"):
+        manager.resolve_voice("supertonic:supertonic-3/invalid")
 
 
 def test_install_open_offline_reopen_and_inventory_use_standard_bundle_flow(

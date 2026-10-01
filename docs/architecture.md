@@ -4,7 +4,7 @@ OnnxVoice executes installed voice-model runtimes and derives voice identity fro
 
 ## Catalog-backed voice identity
 
-A voice is identified by `(system, asset_id, voice_id)`. Its semantic reference is `<system>:<asset-id>[/<voice-id>]`: `piper:en_US-lessac-medium` identifies an asset that is itself a voice, while `kokoro:v1.0/af_heart` identifies a child voice in a model catalog item. The reference identifies catalog data, while the backing asset reference remains the `system:asset_id` used for installation.
+A voice is identified by `(system, asset_id, voice_id)`. Its semantic reference is `<system>:<asset-id>[/<voice-id>]`: `piper:en_US-lessac-medium` identifies an asset that is itself a voice, while `kokoro:v1.0/af_heart`, `supertonic:supertonic-3/F1`, and `kitten:nano-0.8-int8/Bella` identify child voices in model or bundle catalog items. The reference identifies catalog data, while the backing asset reference remains the `system:asset_id` used for installation.
 
 `OnnxVoice.list_voices()` discovers voices from normalized catalog items. It uses the item ID for items whose kind is `voice` and uses the explicitly exposed child IDs for items with `CatalogItem.voices`. `resolve_voice()` validates a semantic reference against current catalog data. Voice identity and discovery derive directly from the catalog.
 
@@ -14,7 +14,7 @@ Pocket discovery follows the current normalized `CatalogItem.voices` field. It d
 
 ## Descriptive language and voice metadata
 
-Language, locale, labels, and gender are descriptive metadata, not parts of voice identity. `locale` records the most specific source-backed language tag, while `language` is its lowercase base language. Language filters support generic and specific compatible tags; conflicting specific locales such as `en-US` and `en-GB` do not match.
+Language, locale, labels, and gender are descriptive metadata, not parts of voice identity. `VoiceRecord.languages` separately describes supported synthesis-language capabilities. A multilingual Supertonic style keeps one semantic ref, such as `supertonic:supertonic-3/F1`, across those languages. `locale` records the most specific source-backed language tag, while `language` is its lowercase base language. Language filters support generic and specific compatible tags; conflicting specific locales such as `en-US` and `en-GB` do not match.
 
 Language labels prefer authoritative human-readable source names, then locale/base tags, and never use a bare region code such as `US`.
 
@@ -33,6 +33,7 @@ InferenceResult(audio, sample_rate, timings, outputs, metadata)
 ```
 
 The Kokoro adapter dispatches from catalog runtime metadata. A single layout owns one ONNX session. `split-onnx-v1` owns prosody, curves, and decoder sessions and keeps source generation, duration expansion, and STFT preparation inside OnnxVoice. Both layouts expose the same `infer(token_ids, style=..., speed=..., seed=...)` contract.
+The Kitten adapter accepts model-ready token IDs, a caller-selected style tensor, and speed. It validates the graph ABI, applies the required 5,000-sample output trim, and returns mono audio at 24 kHz; KittenSynth remains responsible for text processing and style selection.
 
 ## Installation metadata
 

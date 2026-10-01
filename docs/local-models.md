@@ -51,5 +51,6 @@ Kokoro supports single-model and `split-onnx-v1` layouts. For local split layout
 Supertonic uses named model components, a config, a Unicode indexer, and one or more voice-style files. Pass these roles through `files=`. See [Supertonic](systems/supertonic.md).
 
 Pocket local opening requires a complete bundle and its contract metadata. See [Pocket](systems/pocket.md).
+Kitten uses a model ONNX file and `voices.npz`. Supply both through the `model=` and `voices=` parameters to `open_local()`; style extraction and selection stay with the caller. See [KittenTTS](systems/kitten.md).
 
 The simple CLI `onnxvoice import --model ...` is not a generic multi-component bundle importer.

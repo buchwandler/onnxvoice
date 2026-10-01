@@ -22,7 +22,8 @@ for record in voice.list_voices(language="en-US"):
     print(record.ref, record.system, record.asset_id, record.voice_id, record.gender)
 ```
 
-`list()` returns catalog items by system, or local installations when called with `installed=True`. `list_voices()` returns voices explicitly exposed by normalized catalog items. Each `VoiceRecord` includes its semantic `ref`, `system`, `asset_id`, `voice_id`, and descriptive metadata. Use `voice.resolve_voice(ref)` to validate and resolve a voice against current catalog data.
+`list()` returns catalog items by system, or local installations when called with `installed=True`. `list_voices()` returns voices explicitly exposed by normalized catalog items. Each `VoiceRecord` includes its semantic `ref`, `system`, `asset_id`, `voice_id`, and descriptive metadata. Use `voice.resolve_voice(ref)` to validate and resolve a voice against current catalog data. Bundle children use refs such as `supertonic:supertonic-3/F1`; the `VoiceRecord.languages` tuple describes supported synthesis languages and does not change that ref.
+Kitten child refs include `kitten:nano-0.8-int8/Bella`, and the backing asset ref is `kitten:nano-0.8-int8`. OnnxVoice does not select a model-ready style tensor; see [KittenTTS](systems/kitten.md) for the runtime interface and ownership boundary.
 
 For merged installed and available inventory, use `inventory()`:
 
@@ -50,6 +51,8 @@ finally:
 ```
 
 `install()` resolves catalog data and downloads verified assets as needed. `open()` verifies and opens an existing managed installation only. It does not acquire missing assets. `resolve()` retrieves and verifies the existing local installation without opening a runtime.
+
+Kitten uses the same managed lifecycle. Its runtime receives model-ready token IDs, a selected `style` tensor, and `speed`; the text frontend and style selection belong to the producer. See [KittenTTS](systems/kitten.md).
 
 An installation can also be found with `voice.installed()` or `voice.find_installed(ref)`. `voice.update(ref)` refreshes catalog data and atomically replaces the selected installation while preserving its quality and distribution by default.
 

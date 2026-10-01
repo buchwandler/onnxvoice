@@ -42,16 +42,16 @@ onnxvoice list --system piper --format json
 onnxvoice installed --format tsv
 ```
 
-| Flag                   | Accepted values or meaning                     |
-| ---------------------- | ---------------------------------------------- |
-| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`      |
-| `--kind`               | `voice`, `model`, `bundle`                     |
-| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE` |
-| `--gender`             | `male`, `female`, `neutral`, `unknown`         |
-| `--quality`            | Quality selection                              |
-| `--distribution`       | Distribution identifier                        |
-| `--status`             | `installed`, `available`, `local`              |
-| `--format`             | `table`, `plain`, `json`, `tsv`                |
+| Flag                   | Accepted values or meaning                          |
+| ---------------------- | --------------------------------------------------- |
+| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten` |
+| `--kind`               | `voice`, `model`, `bundle`                          |
+| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`      |
+| `--gender`             | `male`, `female`, `neutral`, `unknown`              |
+| `--quality`            | Quality selection                                   |
+| `--distribution`       | Distribution identifier                             |
+| `--status`             | `installed`, `available`, `local`                   |
+| `--format`             | `table`, `plain`, `json`, `tsv`                     |
 
 Generic language tags match compatible specific locales. An `en` filter matches English locales such as `en-US` and `en-GB`. An `en-US` filter matches a generic `en` capability, but not a conflicting specific locale such as `en-GB`. Case and hyphen normalization are supported.
 
@@ -113,9 +113,13 @@ onnxvoice voices list --lang en-US
 onnxvoice voices list --system kokoro
 onnxvoice voices show piper:en_US-lessac-medium
 onnxvoice voices show kokoro:v1.0/af_heart
+onnxvoice voices list --system supertonic --lang de
+onnxvoice voices show supertonic:supertonic-3/F1
+onnxvoice voices list --system kitten --lang en-US
+onnxvoice voices show kitten:nano-0.8-int8/Bella
 ```
 
-`voices list` accepts language and system filters, `--refresh`, and `--format`. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. See [Catalog voices](voices.md) for reference forms and record fields.
+`voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`. See [KittenTTS](systems/kitten.md) for the runtime boundary. See [Catalog voices](voices.md) for reference forms and record fields.
 
 ## Pocket diagnostics and offline use
 
@@ -147,6 +151,12 @@ onnxvoice catalog pocket build --output catalog/bundles.json
 onnxvoice catalog pocket verify --catalog catalog/bundles.json
 onnxvoice catalog supertonic build --output catalog/supertonic.json
 onnxvoice catalog supertonic verify --catalog catalog/supertonic.json
+onnxvoice catalog kitten build \
+  --seed-catalog catalog/models.json \
+  --output catalog/models.json \
+  --source-output catalog/source.json \
+  --revision main
+onnxvoice catalog kitten verify --catalog catalog/models.json --source catalog/source.json
 ```
 
-Build commands accept pinned repository and revision options. Verification can use a source record when one was written during catalog generation. See `onnxvoice catalog <system> <action> --help` for all arguments.
+Piper, Pocket, and Supertonic builders accept repository and revision options. The Kitten builder uses the normalized catalog as a seed manifest and refreshes each listed Hugging Face repository; it reads upstream `config.json` and artifact metadata. Build requires network access, while verification is offline. See [KittenTTS](systems/kitten.md) and `onnxvoice catalog <system> <action> --help` for details.

@@ -15,9 +15,11 @@ For bundles or models that expose child voice IDs, include the voice ID after `/
 ```text
 kokoro:v1.0/af_heart
 pocket:english_2026-04/alba
+supertonic:supertonic-3/F1
+kitten:nano-0.8-int8/Bella
 ```
 
-The reference identifies a catalog voice, not an installation. `backing_ref` is the asset reference used to install or open the underlying asset. Resolving a Kokoro voice does not construct or choose a model-ready style tensor.
+The reference identifies a catalog voice, not an installation. `backing_ref` is the asset reference used to install or open the underlying asset. Resolving a Kokoro voice does not construct or choose a model-ready style tensor. Child voice refs include `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`; their backing asset refs are `supertonic:supertonic-3` and `kitten:nano-0.8-int8`.
 
 ## Discovery and metadata
 
@@ -31,7 +33,7 @@ for record in voice.list_voices(language="en-US"):
     print(record.ref, record.system, record.asset_id, record.voice_id)
 ```
 
-`VoiceRecord` includes the semantic `ref`, `system`, `asset_id`, `voice_id`, and `backing_ref`, along with descriptive language, locale, label, and gender metadata. Language and gender describe a voice. They do not form part of its identity. Missing authoritative gender metadata is represented as `unknown`.
+`VoiceRecord` includes the semantic `ref`, `system`, `asset_id`, `voice_id`, and `backing_ref`, along with descriptive language, locale, label, and gender metadata. Its `languages` field separately lists supported synthesis-language capabilities. Neither those capabilities nor descriptive language and gender form part of voice identity. A multilingual Supertonic style keeps the same ref, such as `supertonic:supertonic-3/F1`, across its supported languages. Missing authoritative gender metadata is represented as `unknown`.
 
 Pocket discovery is limited to voice IDs already present in normalized `CatalogItem.voices`. Predefined names or descriptive details outside that field are not added as voices by discovery.
 

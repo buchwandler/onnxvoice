@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .catalog_tools import kitten as kitten_catalog_tools
 from .catalog_tools import pocket as pocket_catalog_tools
 from .catalog_tools import supertonic as supertonic_catalog_tools
 from .catalog_tools.piper import (
@@ -247,6 +248,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     supertonic_verify_parser.add_argument("--catalog", type=Path, required=True)
     supertonic_verify_parser.add_argument("--source", type=Path)
+    kitten_parser = catalog_sub.add_parser("kitten", help="Manage the KittenTTS catalog")
+    kitten_sub = kitten_parser.add_subparsers(dest="catalog_action", required=True)
+
+    kitten_build_parser = kitten_sub.add_parser("build", help="Build a pinned KittenTTS catalog")
+    kitten_build_parser.add_argument("--seed-catalog", type=Path, required=True)
+    kitten_build_parser.add_argument("--output", type=Path, required=True)
+    kitten_build_parser.add_argument("--source-output", type=Path)
+    kitten_build_parser.add_argument("--revision", default=kitten_catalog_tools.DEFAULT_REVISION)
+
+    kitten_verify_parser = kitten_sub.add_parser(
+        "verify", help="Verify a KittenTTS catalog offline"
+    )
+    kitten_verify_parser.add_argument("--catalog", type=Path, required=True)
+    kitten_verify_parser.add_argument("--source", type=Path)
     return parser
 
 
@@ -886,6 +901,24 @@ def main(argv: list[str] | None = None) -> int:
                 if args.catalog_action == "verify":
                     catalog = supertonic_catalog_tools.load_catalog(args.catalog, args.source)
                     print(f"Verified {len(catalog['bundles'])} Supertonic bundles")
+                    return 0
+            elif args.catalog_system == "kitten":
+                if args.catalog_action == "build":
+                    seed_catalog = kitten_catalog_tools.load_catalog(args.seed_catalog)
+                    catalog = kitten_catalog_tools.build_catalog(
+                        seed_catalog,
+                        revision=args.revision,
+                    )
+                    source = kitten_catalog_tools.build_source(catalog)
+                    kitten_catalog_tools.verify_catalog(catalog, source)
+                    _write_json(args.output, catalog)
+                    if args.source_output is not None:
+                        _write_json(args.source_output, source)
+                    print(f"Wrote {len(catalog['models'])} Kitten models to {args.output}")
+                    return 0
+                if args.catalog_action == "verify":
+                    catalog = kitten_catalog_tools.load_catalog(args.catalog, args.source)
+                    print(f"Verified {len(catalog['models'])} Kitten models")
                     return 0
             else:
                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")

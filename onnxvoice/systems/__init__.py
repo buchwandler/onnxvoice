@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..errors import UnsupportedSystemError
 from .base import SystemAdapter
+from .kitten import KittenAdapter
 from .kokoro import KokoroAdapter
 from .kokoro_split import SplitKokoroRuntime
 from .piper import PiperAdapter
@@ -13,6 +14,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
     KokoroAdapter.system: KokoroAdapter,
     PocketAdapter.system: PocketAdapter,
     SupertonicAdapter.system: SupertonicAdapter,
+    KittenAdapter.system: KittenAdapter,
 }
 
 
@@ -37,6 +39,7 @@ __all__ = [
     "KokoroAdapter",
     "PocketAdapter",
     "SupertonicAdapter",
+    "KittenAdapter",
     "SplitKokoroRuntime",
     "register_adapter",
     "get_adapter",

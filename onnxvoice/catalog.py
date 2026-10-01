@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -63,6 +64,7 @@ DEFAULT_SOURCES = {
     "kokoro": "https://raw.githubusercontent.com/buchwandler/kokoro-onnx-models/main/catalog/models.json",
     "pocket": "https://raw.githubusercontent.com/buchwandler/pocket-onnx-bundles/main/catalog/bundles.json",
     "supertonic": "https://raw.githubusercontent.com/buchwandler/supertonic-onnx-bundles/main/catalog/bundles.json",
+    "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
 }
 
 
@@ -169,6 +171,8 @@ class CatalogClient:
             return _parse_pocket(raw)
         if system == "supertonic":
             return _parse_supertonic(raw)
+        if system == "kitten":
+            return _parse_kitten(raw)
         raise CatalogError(f"No parser for system {system!r}")
 
     def resolve(
@@ -845,6 +849,271 @@ def _parse_supertonic(data: dict[str, Any]) -> list[CatalogItem]:
                     "source_repository": repository,
                     "requested_revision": requested_revision,
                 },
+            )
+        )
+    return result
+
+
+_KITTEN_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_KITTEN_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_KITTEN_HF_REPOSITORY_RE = re.compile(r"^[^/\\\\\s]+/[^/\\\\\s]+$")
+_KITTEN_HF_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+_KITTEN_MODEL_FIELDS = frozenset(
+    {
+        "id",
+        "aliases",
+        "name",
+        "version",
+        "language",
+        "sample_rate",
+        "quality",
+        "runtime",
+        "upstream",
+        "artifacts",
+        "voice_aliases",
+        "speed_priors",
+        "metadata",
+    }
+)
+
+
+def _require_kitten_safe_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _KITTEN_SAFE_ID_RE.fullmatch(value) is None:
+        raise CatalogError(f"{label} is unsafe: {value!r}")
+    return value
+
+
+def _require_kitten_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise CatalogError(f"{label} must be a non-empty string")
+    return value
+
+
+def _require_kitten_fields(
+    value: Mapping[str, Any], expected: set[str] | frozenset[str], label: str
+) -> None:
+    if set(value) != set(expected):
+        missing = sorted(set(expected) - set(value))
+        unexpected = sorted(set(value) - set(expected))
+        details = []
+        if missing:
+            details.append(f"missing: {', '.join(missing)}")
+        if unexpected:
+            details.append(f"unexpected: {', '.join(unexpected)}")
+        raise CatalogError(f"{label} fields mismatch ({'; '.join(details)})")
+
+
+def _kitten_artifact_url(repository: str, revision: str, filename: str) -> str:
+    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
+    name = urllib.parse.quote(filename, safe="")
+    return f"https://huggingface.co/{repo}/resolve/{revision}/{name}"
+
+
+def _parse_kitten(data: Mapping[str, Any]) -> list[CatalogItem]:
+    if not isinstance(data, Mapping):
+        raise CatalogError("Kitten catalog must be an object")
+    if set(data) != {"schema", "kind", "models"}:
+        raise CatalogError("Kitten catalog must contain exactly schema, kind, and models")
+    if type(data.get("schema")) is not int or data["schema"] != 1:
+        raise CatalogError("Kitten catalog schema must be 1")
+    if data.get("kind") != "kitten-onnx-model-catalog":
+        raise CatalogError(f"Unexpected Kitten catalog kind: {data.get('kind')!r}")
+
+    models = data.get("models")
+    if not isinstance(models, Mapping) or not models:
+        raise CatalogError("Kitten catalog models must be a non-empty mapping")
+    model_ids = set(models)
+    for model_id in model_ids:
+        _require_kitten_safe_id(model_id, "Kitten model ID")
+
+    result: list[CatalogItem] = []
+    all_aliases: set[str] = set()
+    for model_id, raw_model in models.items():
+        if not isinstance(raw_model, Mapping):
+            raise CatalogError(f"{model_id}: model entry must be an object")
+        _require_kitten_fields(raw_model, _KITTEN_MODEL_FIELDS, f"{model_id} model")
+        if raw_model.get("id") != model_id:
+            raise CatalogError(f"Kitten model map key {model_id!r} does not match id")
+
+        raw_aliases = raw_model["aliases"]
+        if not isinstance(raw_aliases, Sequence) or isinstance(raw_aliases, (str, bytes)):
+            raise CatalogError(f"{model_id}: aliases must be a sequence")
+        aliases: list[str] = []
+        for raw_alias in raw_aliases:
+            alias = _require_kitten_safe_id(raw_alias, f"{model_id} alias")
+            if alias == model_id or alias in model_ids or alias in all_aliases:
+                raise CatalogError(f"{model_id}: duplicate or conflicting alias {alias!r}")
+            all_aliases.add(alias)
+            aliases.append(alias)
+
+        name = _require_kitten_text(raw_model["name"], f"{model_id} name")
+        version = _require_kitten_text(raw_model["version"], f"{model_id} version")
+        language = _require_kitten_text(raw_model["language"], f"{model_id} language")
+        sample_rate = raw_model["sample_rate"]
+        if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate <= 0:
+            raise CatalogError(f"{model_id}: sample_rate must be a positive integer")
+
+        quality = raw_model["quality"]
+        if quality is not None and (
+            not isinstance(quality, str) or quality not in {"int8", "fp32"}
+        ):
+            raise CatalogError(f"{model_id}: quality must be 'int8', 'fp32', or null")
+
+        runtime = raw_model["runtime"]
+        if not isinstance(runtime, Mapping):
+            raise CatalogError(f"{model_id}: runtime must be an object")
+        _require_kitten_fields(runtime, {"profile"}, f"{model_id} runtime")
+        if not isinstance(runtime["profile"], str) or runtime["profile"] not in {"ONNX1", "ONNX2"}:
+            raise CatalogError(f"{model_id}: runtime profile must be ONNX1 or ONNX2")
+
+        upstream = raw_model["upstream"]
+        if not isinstance(upstream, Mapping):
+            raise CatalogError(f"{model_id}: upstream must be an object")
+        _require_kitten_fields(
+            upstream, {"provider", "repository", "revision", "license"}, f"{model_id} upstream"
+        )
+        if upstream["provider"] != "huggingface":
+            raise CatalogError(f"{model_id}: upstream provider must be huggingface")
+        repository = upstream["repository"]
+        if (
+            not isinstance(repository, str)
+            or _KITTEN_HF_REPOSITORY_RE.fullmatch(repository) is None
+        ):
+            raise CatalogError(f"{model_id}: upstream repository must have owner/name form")
+        revision = upstream["revision"]
+        if not isinstance(revision, str) or _KITTEN_HF_REVISION_RE.fullmatch(revision) is None:
+            raise CatalogError(
+                f"{model_id}: upstream revision must be a lowercase 40-character SHA"
+            )
+        license_name = _require_kitten_text(upstream["license"], f"{model_id} upstream license")
+
+        raw_artifacts = raw_model["artifacts"]
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{model_id}: artifacts must be a sequence")
+        artifacts: list[Artifact] = []
+        seen_roles: set[str] = set()
+        for raw_artifact in raw_artifacts:
+            if not isinstance(raw_artifact, Mapping):
+                raise CatalogError(f"{model_id}: artifact must be an object")
+            _require_kitten_fields(
+                raw_artifact,
+                {"role", "format", "filename", "url", "size", "sha256"},
+                f"{model_id} artifact",
+            )
+            role = raw_artifact["role"]
+            expected_formats = {"model": "onnx", "voices": "npz"}
+            if not isinstance(role, str) or role not in expected_formats:
+                raise CatalogError(f"{model_id}: unknown Kitten artifact role {role!r}")
+            if role in seen_roles:
+                raise CatalogError(f"{model_id}: duplicate {role!r} artifact")
+            seen_roles.add(role)
+            format_name = raw_artifact["format"]
+            if format_name != expected_formats[role]:
+                raise CatalogError(f"{model_id}/{role}: format must be {expected_formats[role]!r}")
+            filename = _require_kitten_safe_id(
+                raw_artifact["filename"], f"{model_id}/{role} filename"
+            )
+            url = raw_artifact["url"]
+            if not isinstance(url, str) or url != _kitten_artifact_url(
+                repository, revision, filename
+            ):
+                raise CatalogError(
+                    f"{model_id}/{role}: URL is not pinned to upstream repository/revision"
+                )
+            size = raw_artifact["size"]
+            if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+                raise CatalogError(f"{model_id}/{role}: size must be a positive integer")
+            sha256 = raw_artifact["sha256"]
+            if not isinstance(sha256, str) or _KITTEN_SHA256_RE.fullmatch(sha256) is None:
+                raise CatalogError(f"{model_id}/{role}: sha256 must be lowercase 64-character hex")
+            artifacts.append(
+                Artifact(
+                    role=role,
+                    filename=filename,
+                    url=url,
+                    size=size,
+                    sha256=sha256,
+                    quality=quality if role == "model" else None,
+                    format=format_name,
+                    metadata={
+                        "source": {
+                            "provider": "huggingface",
+                            "repository": repository,
+                            "revision": revision,
+                            "path": filename,
+                            "filename": filename,
+                        }
+                    },
+                )
+            )
+        if seen_roles != {"model", "voices"}:
+            raise CatalogError(f"{model_id}: artifacts must contain exactly model and voices roles")
+
+        raw_voice_aliases = raw_model["voice_aliases"]
+        if not isinstance(raw_voice_aliases, Mapping) or not raw_voice_aliases:
+            raise CatalogError(f"{model_id}: voice_aliases must be a non-empty mapping")
+        voice_aliases: dict[str, str] = {}
+        for public_name, internal_id in raw_voice_aliases.items():
+            public_name = _require_kitten_safe_id(public_name, f"{model_id} public voice alias")
+            internal_id = _require_kitten_safe_id(
+                internal_id, f"{model_id}/{public_name} internal voice ID"
+            )
+            voice_aliases[public_name] = internal_id
+
+        raw_speed_priors = raw_model["speed_priors"]
+        if not isinstance(raw_speed_priors, Mapping):
+            raise CatalogError(f"{model_id}: speed_priors must be an object")
+        speed_priors: dict[str, float] = {}
+        internal_ids = set(voice_aliases.values())
+        for internal_id, speed in raw_speed_priors.items():
+            if internal_id not in internal_ids:
+                raise CatalogError(
+                    f"{model_id}: speed prior references unknown voice {internal_id!r}"
+                )
+            if isinstance(speed, bool) or not isinstance(speed, (int, float)):
+                raise CatalogError(
+                    f"{model_id}/{internal_id}: speed prior must be a positive finite number"
+                )
+            try:
+                speed_value = float(speed)
+            except OverflowError as exc:
+                raise CatalogError(
+                    f"{model_id}/{internal_id}: speed prior must be a positive finite number"
+                ) from exc
+            if not math.isfinite(speed_value) or speed_value <= 0:
+                raise CatalogError(
+                    f"{model_id}/{internal_id}: speed prior must be a positive finite number"
+                )
+            speed_priors[internal_id] = speed_value
+
+        raw_metadata = raw_model["metadata"]
+        if not isinstance(raw_metadata, Mapping):
+            raise CatalogError(f"{model_id}: metadata must be an object")
+        metadata = {
+            **raw_metadata,
+            "name": name,
+            "version": version,
+            "language": language,
+            "quality": quality,
+            "runtime": dict(runtime),
+            "upstream": dict(upstream),
+            "source_repository": repository,
+            "source_revision": revision,
+            "license": license_name,
+            "voice_aliases": voice_aliases,
+            "speed_priors": speed_priors,
+        }
+        result.append(
+            CatalogItem(
+                system="kitten",
+                id=model_id,
+                kind="model",
+                artifacts=tuple(artifacts),
+                aliases=tuple(aliases),
+                sample_rate=sample_rate,
+                voices=tuple(voice_aliases),
+                default_voice=None,
+                metadata=metadata,
             )
         )
     return result

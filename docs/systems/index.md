@@ -8,6 +8,7 @@ Each system adapter owns the model-specific ONNX graph contract. It does not pro
 | Kokoro     | Yes              | Yes              | Child voice IDs on model items         | Token IDs and caller-provided model-ready style         |
 | Pocket     | Yes              | Yes              | IDs in each item's `voices` field      | Token IDs and prepared voice state                      |
 | Supertonic | Yes              | Yes              | Child voice IDs on model items         | Token IDs, text mask, and caller-provided style tensors |
+| Kitten     | Yes              | Yes              | Child voice IDs on model items         | Model-ready token IDs, style tensor, and speed          |
 
 `OnnxVoice` discovers voices from the normalized catalog data shown above. A catalog item whose kind is `voice` contributes its own ID; items with child voices contribute the IDs already present in `CatalogItem.voices`. The catalog determines which voices are available.
 Adapter registration and catalog availability are distinct. A built-in adapter does not guarantee that external catalog data is available.
@@ -19,4 +20,5 @@ piper
 kokoro
 pocket
 supertonic
+kitten
 ```

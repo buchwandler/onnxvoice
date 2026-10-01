@@ -1,7 +1,13 @@
 """Catalog generation and verification helpers."""
 
+from . import kitten as kitten_tools
 from . import pocket as pocket_tools
 from . import supertonic as supertonic_tools
+from .kitten import CatalogError as KittenCatalogError
+from .kitten import build_catalog as build_kitten_catalog
+from .kitten import build_source as build_kitten_source
+from .kitten import load_catalog as load_kitten_catalog
+from .kitten import verify_catalog as verify_kitten_catalog
 from .piper import (
     DEFAULT_REPOSITORY,
     DEFAULT_REVISION,
@@ -37,5 +43,11 @@ __all__ = [
     "build_supertonic_catalog",
     "load_supertonic_catalog",
     "supertonic_tools",
+    "KittenCatalogError",
+    "build_kitten_catalog",
+    "build_kitten_source",
+    "load_kitten_catalog",
+    "verify_kitten_catalog",
+    "kitten_tools",
     "verify_supertonic_catalog",
 ]
