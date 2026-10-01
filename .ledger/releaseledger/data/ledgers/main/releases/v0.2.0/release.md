@@ -3,13 +3,13 @@ schema_version: 2
 object_type: release
 versioning:
   schema_version: 1
-  revision: 4
-version: v0.1.8
-status: released
+  revision: 1
+version: v0.2.0
+status: planned
 history_state: curated
-title: Release v0.1.8
-released_at: "2026-09-20"
-previous_version: v0.1.7
+title: Release v0.2.0
+released_at: null
+previous_version: v0.1.13
 cancel_reason: null
 superseded_by: null
 changelog_file: docs/changelog.md

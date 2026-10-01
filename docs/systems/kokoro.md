@@ -1,6 +1,6 @@
 # Kokoro
 
-Kokoro runs either a single ONNX model or the `split-onnx-v1` multi-component layout. The caller supplies token IDs and a model-ready style tensor. Resolving a stable voice selector does not construct or choose that tensor.
+Kokoro runs either a single ONNX model or the `split-onnx-v1` multi-component layout. The caller supplies token IDs and a model-ready style tensor. Resolving a semantic catalog voice reference identifies the voice but does not construct or choose that tensor.
 
 ## Quality and distribution
 

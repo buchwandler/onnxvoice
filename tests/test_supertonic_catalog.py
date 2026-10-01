@@ -11,7 +11,6 @@ from onnxvoice.catalog import DEFAULT_SOURCES, CatalogClient, _parse_supertonic
 from onnxvoice.errors import AssetNotFoundError, CatalogError
 from onnxvoice.manager import OnnxVoice
 from onnxvoice.systems.supertonic import SupertonicAdapter
-from onnxvoice.voice_selectors import voice_selector_systems
 
 REPOSITORY = "supertone-oss-archive/supertonic-3"
 REVISION = "aafc6e32416a594460b32413efc49d7fe4ce6d46"
@@ -354,7 +353,10 @@ def test_install_open_offline_reopen_and_inventory_use_standard_bundle_flow(
         for artifact in record.installation.artifacts
         if artifact.role == "voice_style"
     } == set(STYLE_COMPONENTS)
-    assert "supertonic" not in voice_selector_systems()
+    voice_records = manager.list_voices(system="supertonic")
+    assert {voice.ref for voice in voice_records} == {
+        f"supertonic:supertonic-3/{voice_id}" for voice_id in STYLE_COMPONENTS
+    }
 
     monkeypatch.setattr(
         store_module,

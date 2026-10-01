@@ -73,9 +73,7 @@ def test_explicit_gender_round_trips_through_runtime_and_list_voices(tmp_path):
         offline=True,
     )
     record = next(
-        record
-        for record in manager.list_voices(system="piper")
-        if record.available and record.voice_id == voice_id
+        record for record in manager.list_voices(system="piper") if record.voice_id == voice_id
     )
     assert record.gender == "female"
     assert record.metadata.gender == "female"
@@ -94,9 +92,7 @@ def test_missing_gender_stays_unknown_through_catalog_and_runtime(tmp_path):
         offline=True,
     )
     record = next(
-        record
-        for record in manager.list_voices(system="piper")
-        if record.available and record.voice_id == voice_id
+        record for record in manager.list_voices(system="piper") if record.voice_id == voice_id
     )
     assert record.gender == "unknown"
     assert record.metadata.gender == "unknown"

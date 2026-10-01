@@ -2,22 +2,6 @@ class OnnxVoiceError(Exception):
     """Base exception for onnxvoice."""
 
 
-class VoiceSelectorError(OnnxVoiceError):
-    """Base error for short voice selector parsing and resolution."""
-
-
-class VoiceSelectorNotFoundError(VoiceSelectorError):
-    """A syntactically valid selector or identity is not registered."""
-
-
-class VoiceSelectorRetiredError(VoiceSelectorError):
-    """A selector is known but its assigned identity is retired."""
-
-
-class VoiceSelectorRegistryError(VoiceSelectorError):
-    """The authoritative voice selector registry is invalid."""
-
-
 class CatalogError(OnnxVoiceError):
     """Catalog loading or resolution failed."""
 
@@ -28,6 +12,10 @@ class AssetNotFoundError(OnnxVoiceError):
 
 class NotInstalledError(AssetNotFoundError):
     """Requested model or voice is not installed locally."""
+
+
+class VoiceNotFoundError(AssetNotFoundError):
+    """Requested voice is not declared by its resolved catalog item."""
 
 
 class IntegrityError(OnnxVoiceError):

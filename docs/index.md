@@ -8,7 +8,7 @@ It provides:
 - deterministic model installation;
 - content-addressed storage and checksum verification;
 - installed and available inventory, plus model update checks;
-- stable voice selectors;
+- catalog-based voice discovery and semantic references;
 - ONNX Runtime provider selection;
 - system-specific runtime adapters;
 - local unmanaged model opening.
@@ -19,7 +19,7 @@ It deliberately does not own text normalization, G2P/phonemization, sentence pla
 
 - [Getting started](getting-started.md)
 - [CLI reference and common workflows](cli.md)
-- [Voice selectors and discovery](voices.md)
+- [Catalog voices and semantic references](voices.md)
 - [Python usage](python-api.md)
 - [Storage and cache management](storage.md)
 - [ONNX Runtime providers](providers.md)

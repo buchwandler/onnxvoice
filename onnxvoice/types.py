@@ -55,29 +55,6 @@ class Artifact:
 
 
 @dataclass(frozen=True, slots=True)
-class VoiceIdentity:
-    """Stable identity assigned to a catalog voice selector."""
-
-    selector: str
-    language: str
-    engine_code: str
-    slot: int
-    system: str
-    asset_id: str
-    voice_id: str
-    state: str = "active"
-
-    @property
-    def backing_ref(self) -> str:
-        """Canonical asset reference used by install/open operations."""
-        return f"{self.system}:{self.asset_id}"
-
-    @property
-    def canonical_key(self) -> tuple[str, str, str]:
-        return (self.system, self.asset_id, self.voice_id)
-
-
-@dataclass(frozen=True, slots=True)
 class CatalogItem:
     """Normalized installable item from a system catalog.
 
@@ -199,55 +176,46 @@ class VoiceMetadata:
 
 @dataclass(frozen=True, slots=True)
 class VoiceRecord:
-    """Catalog voice metadata joined to an optional stable identity.
+    """A current voice exposed by a normalized catalog item."""
 
-
-    ``available`` describes presence in the current catalog. Selector assignment is
-    independent and may be absent, in which case ``selector`` is ``None``.
-    """
-
-    identity: VoiceIdentity | None
-    available: bool  # current catalog presence; selector availability is separate
-    catalog_item: CatalogItem | None
+    catalog_item: CatalogItem
+    voice_id: str
+    metadata: VoiceMetadata
     languages: tuple[str, ...] = ()
-    gender: str = "unknown"
-    catalog_voice_id: str | None = None
-    metadata: VoiceMetadata | None = None
 
     @property
-    def selector(self) -> str | None:
-        return self.identity.selector if self.identity is not None else None
+    def system(self) -> str:
+        return self.catalog_item.system
 
     @property
-    def system(self) -> str | None:
-        if self.identity is not None:
-            return self.identity.system
-        return self.catalog_item.system if self.catalog_item is not None else None
+    def asset_id(self) -> str:
+        return self.catalog_item.id
 
     @property
-    def asset_id(self) -> str | None:
-        if self.identity is not None:
-            return self.identity.asset_id
-        return self.catalog_item.id if self.catalog_item is not None else None
+    def backing_ref(self) -> str:
+        return self.catalog_item.ref
 
     @property
-    def voice_id(self) -> str | None:
-        if self.identity is not None:
-            return self.identity.voice_id
-        if self.catalog_item is None:
-            return None
-        if self.catalog_voice_id is not None:
-            return self.catalog_voice_id
-        return self.catalog_item.id if self.catalog_item.kind == "voice" else None
+    def ref(self) -> str:
+        if self.catalog_item.kind == "voice" and self.voice_id == self.catalog_item.id:
+            return self.catalog_item.ref
+        return f"{self.catalog_item.ref}/{self.voice_id}"
 
     @property
-    def state(self) -> str:
-        return self.identity.state if self.identity is not None else "unassigned"
+    def language(self) -> str:
+        return self.metadata.language
 
     @property
-    def selector_available(self) -> bool:
-        """Whether the record has an active selector assignment in the catalog."""
-        return self.identity is not None and self.identity.state == "active" and self.available
+    def locale(self) -> str:
+        return self.metadata.locale
+
+    @property
+    def language_label(self) -> str:
+        return self.metadata.language_label
+
+    @property
+    def gender(self) -> str:
+        return self.metadata.gender
 
 
 @dataclass(frozen=True, slots=True)

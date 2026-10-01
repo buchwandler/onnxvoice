@@ -16,7 +16,6 @@ catalog
 store
 runtime
 inventory
-voice-selectors
 types
 validation
 errors

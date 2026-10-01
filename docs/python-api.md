@@ -19,10 +19,10 @@ for item in voice.list("piper", language="en-US"):
     print(item.ref)
 
 for record in voice.list_voices(language="en-US"):
-    print(record.selector, record.system, record.voice_id, record.gender)
+    print(record.ref, record.system, record.asset_id, record.voice_id, record.gender)
 ```
 
-`list()` returns catalog items by system, or local installations when called with `installed=True`. `list_voices()` combines catalog voice records with any stable selector assignment. A voice may be unassigned.
+`list()` returns catalog items by system, or local installations when called with `installed=True`. `list_voices()` returns voices explicitly exposed by normalized catalog items. Each `VoiceRecord` includes its semantic `ref`, `system`, `asset_id`, `voice_id`, and descriptive metadata. Use `voice.resolve_voice(ref)` to validate and resolve a voice against current catalog data.
 
 For merged installed and available inventory, use `inventory()`:
 
@@ -88,4 +88,4 @@ Inference returns an `InferenceResult` with one-dimensional float32 `audio`, a p
 
 ## Lower-level modules
 
-The [API reference](api/index.md) covers the catalog client, asset store, runtime session, inventory helpers, stable selector functions, public data types, validation helpers, and errors.
+The [API reference](api/index.md) covers the catalog client, asset store, runtime session, inventory helpers, semantic voice APIs, public data types, validation helpers, and errors.

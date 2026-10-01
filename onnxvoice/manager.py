@@ -11,21 +11,17 @@ from typing import Any
 
 from .catalog import CatalogClient, filter_items, parse_ref
 from .checksums import digest_file
-from .errors import AssetNotFoundError, NotInstalledError
-from .inventory import InventoryRecord
+from .errors import AssetNotFoundError, NotInstalledError, VoiceNotFoundError
+from .inventory import (
+    InventoryRecord,
+    language_codes_from_metadata,
+    matches_language,
+    voice_metadata_from_catalog,
+)
 from .store import AssetStore, ProgressCallback
 from .systems import get_adapter
-from .types import CatalogItem, Installation, InstalledArtifact
-from .voice_selectors import (
-    VoiceIdentity,
-    VoiceRecord,
-    catalog_voice_keys,
-    iter_voice_identities,
-    make_voice_record,
-    selector_for_voice,
-    voice_selector_systems,
-)
-from .voice_selectors import resolve_voice_selector as _resolve_voice_selector
+from .types import CatalogItem, Installation, InstalledArtifact, VoiceRecord
+from .voices import iter_catalog_voices, parse_voice_ref
 
 CatalogResults = list[CatalogItem] | list[Installation]
 Installations = list[Installation]
@@ -100,14 +96,34 @@ class OnnxVoice:
             quality=quality,
         )
 
-    def resolve_voice_selector(
+    def resolve_voice(
         self,
-        value: str,
+        ref: str,
         *,
-        include_retired: bool = False,
-    ) -> VoiceIdentity:
-        """Resolve a stable short selector without opening or selecting an asset."""
-        return _resolve_voice_selector(value, include_retired=include_retired)
+        refresh: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> VoiceRecord:
+        """Resolve a semantic voice reference against the normalized catalog."""
+        parsed = parse_voice_ref(ref)
+        item = self.catalog.resolve(parsed.backing_ref, refresh=refresh, progress=progress)
+
+        if item.kind == "voice":
+            if parsed.voice_id is not None and parsed.voice_id != item.id:
+                raise VoiceNotFoundError(f"Voice {parsed.voice_id!r} is not declared by {item.ref}")
+            voice_id = item.id
+        else:
+            if parsed.voice_id is None:
+                raise VoiceNotFoundError(f"A voice ID is required for {item.ref}")
+            if parsed.voice_id not in item.voices:
+                raise VoiceNotFoundError(f"Voice {parsed.voice_id!r} is not declared by {item.ref}")
+            voice_id = parsed.voice_id
+
+        return VoiceRecord(
+            catalog_item=item,
+            voice_id=voice_id,
+            metadata=voice_metadata_from_catalog(item, voice_id),
+            languages=language_codes_from_metadata(item.metadata),
+        )
 
     def list_voices(
         self,
@@ -115,97 +131,37 @@ class OnnxVoice:
         *,
         language: str | None = None,
         refresh: bool = False,
-        include_retired: bool = False,
-        include_unassigned: bool = True,
         progress: ProgressCallback | None = None,
     ) -> builtins.list[VoiceRecord]:
-        """List catalog voices joined to stable selector assignments.
-
-
-        Catalog data may be loaded from the network unless cached or offline. Set
-        ``include_unassigned=False`` to hide catalog voices without a selector.
-        """
-        from .inventory import (
-            language_codes_from_metadata,
-            matches_language,
-            voice_metadata_from_catalog,
-        )
-        from .voice_selectors import get_voice_selector_registry
-
-        supported_systems = voice_selector_systems()
-        systems = (system.casefold(),) if system is not None else supported_systems
-        unsupported = set(systems) - set(supported_systems)
-        if unsupported:
-            raise ValueError(
-                f"voice selectors are not available for: {', '.join(sorted(unsupported))}"
-            )
-
+        """List current voices exposed by normalized catalog items."""
+        systems = (system.casefold(),) if system is not None else self.catalog.systems()
         items: list[CatalogItem] = []
         for catalog_system in systems:
             items.extend(self.catalog.list(catalog_system, refresh=refresh, progress=progress))
-        registry = get_voice_selector_registry()
+
         records: list[VoiceRecord] = []
         seen: set[tuple[str, str, str]] = set()
-
-        for item, asset_id, voice_id in catalog_voice_keys(items):
-            key = (item.system, asset_id, voice_id)
+        for item, voice_id in iter_catalog_voices(items):
+            key = (item.system, item.id, voice_id)
             if key in seen:
                 continue
             seen.add(key)
-            identity = selector_for_voice(
-                system=item.system,
-                asset_id=asset_id,
-                voice_id=voice_id,
-                include_retired=True,
-                registry=registry,
-            )
-            if identity is not None and identity.state == "retired" and not include_retired:
+
+            metadata = voice_metadata_from_catalog(item, voice_id)
+            if language is not None and not matches_language(
+                {"language_codes": (metadata.locale or metadata.language,)}, language
+            ):
                 continue
-            if identity is None and not include_unassigned:
-                continue
-            metadata = item.metadata
-            if language is not None and not matches_language(metadata, language):
-                continue
-            details = voice_metadata_from_catalog(item, voice_id)
             records.append(
-                make_voice_record(
-                    identity,
-                    available=True,
+                VoiceRecord(
                     catalog_item=item,
-                    languages=language_codes_from_metadata(metadata),
-                    gender=details.gender,
                     voice_id=voice_id,
-                    metadata=details,
+                    metadata=metadata,
+                    languages=language_codes_from_metadata(item.metadata),
                 )
             )
 
-        for identity in iter_voice_identities(
-            system=system, include_retired=include_retired, registry=registry
-        ):
-            if identity.canonical_key in seen:
-                continue
-            if language is not None and identity.language != language.casefold().replace("-", "_"):
-                continue
-            records.append(
-                make_voice_record(
-                    identity,
-                    available=False,
-                    catalog_item=None,
-                    languages=(identity.language,),
-                    gender="unknown",
-                )
-            )
-
-        return sorted(
-            records,
-            key=lambda record: (
-                record.selector is None,
-                record.selector or "",
-                record.system or "",
-                record.asset_id or "",
-                record.voice_id or "",
-            ),
-        )
+        return sorted(records, key=lambda record: (record.system, record.asset_id, record.voice_id))
 
     def install(
         self,

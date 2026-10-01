@@ -14,13 +14,7 @@ except ImportError:  # source checkout before setuptools_scm has generated _vers
 from typing import Any
 
 from .catalog import CatalogClient
-from .errors import (
-    NotInstalledError,
-    VoiceSelectorError,
-    VoiceSelectorNotFoundError,
-    VoiceSelectorRegistryError,
-    VoiceSelectorRetiredError,
-)
+from .errors import NotInstalledError, VoiceNotFoundError
 from .inventory import (
     language_base,
     language_tags_match,
@@ -41,20 +35,10 @@ from .types import (
     RuntimeDiagnostic,
     SessionDiagnostic,
     TensorSpec,
-    VoiceIdentity,
     VoiceMetadata,
     VoiceRecord,
 )
 from .validation import validate_audio, validate_onnx, verify_installation
-from .voice_selectors import (
-    format_voice_selector,
-    is_voice_selector,
-    iter_voice_identities,
-    load_voice_selector_registry,
-    parse_voice_selector,
-    resolve_voice_selector,
-    selector_for_voice,
-)
 
 _default: OnnxVoice | None = None
 
@@ -91,6 +75,11 @@ def open_local(**kwargs: Any):
     See :meth:`OnnxVoice.open_local` for supported file mappings.
     """
     return OnnxVoice.open_local(**kwargs)
+
+
+def resolve_voice(ref: str, **kwargs: Any) -> VoiceRecord:
+    """Resolve a semantic voice reference from the normalized catalog."""
+    return _manager().resolve_voice(ref, **kwargs)
 
 
 def resolve(ref: str, **kwargs) -> Installation:
@@ -139,10 +128,7 @@ __all__ = [
     "AssetProgress",
     "InstalledArtifact",
     "NotInstalledError",
-    "VoiceSelectorError",
-    "VoiceSelectorNotFoundError",
-    "VoiceSelectorRetiredError",
-    "VoiceSelectorRegistryError",
+    "VoiceNotFoundError",
     "InferenceResult",
     "TensorSpec",
     "RuntimeDiagnostic",
@@ -150,16 +136,8 @@ __all__ = [
     "CatalogItem",
     "Installation",
     "available_providers",
-    "VoiceIdentity",
     "VoiceRecord",
     "VoiceMetadata",
-    "format_voice_selector",
-    "parse_voice_selector",
-    "is_voice_selector",
-    "resolve_voice_selector",
-    "selector_for_voice",
-    "iter_voice_identities",
-    "load_voice_selector_registry",
     "register_adapter",
     "registered_systems",
     "SplitKokoroRuntime",
@@ -170,6 +148,7 @@ __all__ = [
     "open",
     "open_local",
     "resolve",
+    "resolve_voice",
     "load",
     "load_local",
     "installed",

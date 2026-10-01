@@ -1,77 +1,59 @@
-# Voice selectors and discovery
+# Catalog voices and semantic references
 
-## Asset references and voice selectors are different
+## Voice identity
 
-An asset reference identifies an installable catalog item, using the canonical `system:id` form:
+OnnxVoice derives each voice's identity from normalized catalog data: `(system, asset_id, voice_id)`. Its semantic reference is `<system>:<asset-id>[/<voice-id>]`.
+
+For catalog items that are themselves voices, the item ID is the voice ID and the reference has no suffix:
 
 ```text
 piper:en_US-lessac-medium
-kokoro:v1.0
-pocket:english_2026-04
 ```
 
-A stable voice selector is a short persisted alias for a logical voice identity:
+For bundles or models that expose child voice IDs, include the voice ID after `/`:
 
 ```text
-de-ko-1
-de-pi-1
-en_us-ko-4
+kokoro:v1.0/af_heart
+pocket:english_2026-04/alba
 ```
 
-The selector does not identify a model installation, and resolving a Kokoro selector does not create or choose a model-ready style tensor.
+The reference identifies a catalog voice, not an installation. `backing_ref` is the asset reference used to install or open the underlying asset. Resolving a Kokoro voice does not construct or choose a model-ready style tensor.
 
-## Canonical form
+## Discovery and metadata
 
-```text
-<language-key>-<engine-code>-<slot>
-```
-
-| Engine code | System |
-| ----------- | ------ |
-| `ko`        | Kokoro |
-| `pi`        | Piper  |
-| `po`        | Pocket |
-
-Language keys are normalized to lowercase with underscores, so `en-us-ko-4` canonicalizes to `en_us-ko-4`. Catalog locale, base language, and selector namespace are related but separate values. For example, a catalog locale can be `en-US`, its base language can be `en`, and its selector namespace can be `en_us`.
-
-## Identity stability
-
-Selectors are registry assignments, not positions in a live catalog response:
-
-- Slots are append-only. Removed voices do not make their slots reusable.
-- Sorting, filtering, installation state, or network availability cannot renumber a selector.
-- Catalog voices can exist without a selector assignment. They are reported as unassigned rather than assigned a generated number.
-- A selector resolves to a system, backing asset, and logical voice ID. It does not change the asset reference used for installation.
-- Retired assignments remain part of the registry and can be included explicitly when listing or resolving.
-
-Language filters use compatible language tags. `en` can match `en-US` and `en-GB`; `en-US` does not match `en-GB`. Gender comes only from authoritative metadata. Missing gender is represented as `unknown`.
-
-## Pocket identity
-
-Pocket selector identities are bundle-scoped. They require explicit catalog `voice_states` records. A name appearing only in `predefined_voice_names` or descriptive `voice_details` is not enough to allocate a stable selector. The current catalog may therefore expose Pocket voices without selector assignments.
-
-## CLI discovery
-
-```bash
-onnxvoice voices list
-onnxvoice voices list --lang en-US
-onnxvoice voices list --system kokoro
-onnxvoice voices list --include-retired
-onnxvoice voices list --no-unassigned
-onnxvoice voices show en_us-ko-4
-```
-
-Listing accepts `--refresh` and `--format table|plain|json|tsv`. `show` resolves a selector to its complete identity. See the [CLI reference](cli.md) for inventory filters.
-
-## Python resolution
+`OnnxVoice.list_voices()` reads the available catalog items and returns the voice IDs explicitly exposed by each normalized item. Voice discovery therefore follows catalog contents. It does not assign IDs or infer extra voices from descriptive names.
 
 ```python
-from onnxvoice import resolve_voice_selector
+from onnxvoice import OnnxVoice
 
-identity = resolve_voice_selector("de-ko-1")
-print(identity.system)
-print(identity.backing_ref)
-print(identity.voice_id)
+voice = OnnxVoice()
+for record in voice.list_voices(language="en-US"):
+    print(record.ref, record.system, record.asset_id, record.voice_id)
 ```
 
-The selector API resolves identity only. Producer/front-end packages remain responsible for semantic voice policy and model-specific inputs such as Kokoro style tensors.
+`VoiceRecord` includes the semantic `ref`, `system`, `asset_id`, `voice_id`, and `backing_ref`, along with descriptive language, locale, label, and gender metadata. Language and gender describe a voice. They do not form part of its identity. Missing authoritative gender metadata is represented as `unknown`.
+
+Pocket discovery is limited to voice IDs already present in normalized `CatalogItem.voices`. Predefined names or descriptive details outside that field are not added as voices by discovery.
+
+## Resolve a voice
+
+Use `resolve_voice()` to look up a semantic reference in the current catalog:
+
+```python
+from onnxvoice import OnnxVoice
+
+voice = OnnxVoice()
+record = voice.resolve_voice("kokoro:v1.0/af_heart")
+print(record.backing_ref, record.voice_id)
+```
+
+For an asset that is itself a voice, resolve its asset reference without a suffix:
+
+```python
+from onnxvoice import OnnxVoice
+
+voice = OnnxVoice()
+record = voice.resolve_voice("piper:en_US-lessac-medium")
+```
+
+The resolver validates the asset and, when present, the child voice ID against normalized catalog data. See the [Python usage guide](python-api.md) for manager configuration and the [CLI reference](cli.md) for command-line discovery.

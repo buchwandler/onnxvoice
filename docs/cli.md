@@ -7,7 +7,7 @@ The CLI is organized around catalog discovery, local inventory, installation lif
 | Command               | Purpose                                                               |
 | --------------------- | --------------------------------------------------------------------- |
 | `onnxvoice list`      | Merged installed and available inventory                              |
-| `onnxvoice voices`    | Discover or resolve stable voice selectors                            |
+| `onnxvoice voices`    | Discover or resolve catalog voices                                    |
 | `onnxvoice installed` | Local-only installed inventory                                        |
 | `onnxvoice install`   | Install a catalog asset                                               |
 | `onnxvoice updates`   | Compare installed assets with catalog entries                         |
@@ -105,16 +105,17 @@ onnxvoice cache gc
 
 Cache reports distinguish installation logical bytes, blob bytes, unique file bytes, orphan blobs, auxiliary bytes, Pocket state usage, and orphan auxiliary data. Pocket state is retained while an installed matching bundle variant still references it.
 
-## Stable voice selectors
+## Catalog voices
 
 ```bash
 onnxvoice voices list
 onnxvoice voices list --lang en-US
 onnxvoice voices list --system kokoro
-onnxvoice voices show en_us-ko-4
+onnxvoice voices show piper:en_US-lessac-medium
+onnxvoice voices show kokoro:v1.0/af_heart
 ```
 
-`voices list` also accepts `--include-retired`, `--no-unassigned`, `--refresh`, and `--format`. A selector is a persistent voice identity alias, not an installation reference. See [Voice selectors](voices.md).
+`voices list` accepts language and system filters, `--refresh`, and `--format`. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. See [Catalog voices](voices.md) for reference forms and record fields.
 
 ## Pocket diagnostics and offline use
 

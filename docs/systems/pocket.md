@@ -27,7 +27,7 @@ finally:
 
 `prepare_voice()` encodes reference audio into reusable voice state. Each inference call creates fresh Flow-LM and Mimi recurrent state. `max_frames` limits generation frames, not tokens or audio samples. The adapter validates the bundle's graph inputs, outputs, state manifests, and runtime metadata.
 
-Predefined state downloads are a separate optional asset operation. Stable Pocket selectors require explicit catalog `voice_states` identity records; a predefined voice name alone does not allocate a selector.
+Predefined state downloads are a separate optional asset operation. Pocket voice discovery reflects the IDs already present in normalized `CatalogItem.voices`; it does not infer voices from other descriptive or predefined names.
 
 ## Open a local bundle
 

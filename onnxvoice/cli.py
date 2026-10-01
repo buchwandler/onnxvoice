@@ -18,7 +18,6 @@ from .catalog_tools.piper import (
 from .manager import OnnxVoice
 from .systems import registered_systems
 from .validation import verify_installation
-from .voice_selectors import voice_selector_systems
 
 
 def _manager(args: argparse.Namespace) -> OnnxVoice:
@@ -74,33 +73,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # --- voices ---
-    voices_parser = sub.add_parser("voices", help="List and resolve stable short voice selectors")
+    voices_parser = sub.add_parser("voices", help="List and inspect catalog voices")
     voices_sub = voices_parser.add_subparsers(dest="voices_command", required=True)
 
     voices_list_parser = voices_sub.add_parser(
-        "list", help="List catalog voices with stable selectors"
+        "list", help="List voices exposed by normalized catalogs"
     )
-    voices_list_parser.add_argument("--system", choices=voice_selector_systems())
+    voices_list_parser.add_argument("--system", choices=registered_systems())
     voices_list_parser.add_argument("--lang", "--language", dest="language")
     voices_list_parser.add_argument("--refresh", action="store_true")
-    voices_list_parser.add_argument("--include-retired", action="store_true")
-    voices_list_parser.add_argument(
-        "--no-unassigned",
-        dest="include_unassigned",
-        action="store_false",
-        help="Hide current catalog voices without a registry assignment",
-    )
-    voices_list_parser.set_defaults(include_unassigned=True)
     voices_list_parser.add_argument(
         "--format", choices=["table", "plain", "json", "tsv"], default="table"
     )
 
-    voices_show_parser = voices_sub.add_parser(
-        "show", help="Show the full identity behind a short selector"
-    )
-    voices_show_parser.add_argument("selector")
+    voices_show_parser = voices_sub.add_parser("show", help="Show one catalog voice")
+    voices_show_parser.add_argument("ref")
     voices_show_parser.add_argument("--refresh", action="store_true")
-    voices_show_parser.add_argument("--include-retired", action="store_true")
     voices_show_parser.add_argument(
         "--format", choices=["table", "plain", "json", "tsv"], default="table"
     )
@@ -268,47 +256,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _voice_payload(record) -> dict[str, Any]:
-    identity = record.identity
-    system = record.system
-    asset_id = record.asset_id
-    voice_id = record.voice_id
-    backing_ref = (
-        identity.backing_ref
-        if identity is not None
-        else (f"{system}:{asset_id}" if system and asset_id else None)
-    )
-    return {
-        "selector": record.selector,
-        "language_key": identity.language if identity is not None else None,
-        "engine_code": identity.engine_code if identity is not None else None,
-        "slot": identity.slot if identity is not None else None,
-        "system": system,
-        "asset_id": asset_id,
-        "voice_id": voice_id,
-        "backing_ref": backing_ref,
-        "state": record.state,
-        "available": record.available,
-        "selector_available": record.selector_available,
+    payload = {
+        "ref": record.ref,
+        "system": record.system,
+        "asset_id": record.asset_id,
+        "voice_id": record.voice_id,
+        "backing_ref": record.backing_ref,
         "languages": list(record.languages),
         "gender": record.gender,
     }
+    for key, value in {
+        "language": record.language,
+        "locale": record.locale,
+        "language_label": record.language_label,
+    }.items():
+        if value:
+            payload[key] = value
+    return payload
 
 
 def _render_voice_records(records, output_format: str) -> None:
-    columns = ["SELECTOR", "SYSTEM", "ASSET", "VOICE", "LANG", "STATUS"]
-    rows = []
-    for record in records:
-        status = record.state
-        rows.append(
-            [
-                record.selector or "-",
-                record.system or "-",
-                record.asset_id or "-",
-                record.voice_id or "-",
-                ",".join(record.languages) or "-",
-                status,
-            ]
-        )
+    columns = ["REF", "SYSTEM", "ASSET", "VOICE", "LOCALE", "GENDER"]
+    rows = [
+        [
+            record.ref,
+            record.system,
+            record.asset_id,
+            record.voice_id,
+            record.locale or "-",
+            record.gender,
+        ]
+        for record in records
+    ]
     if output_format == "json":
         print(
             json.dumps(
@@ -327,8 +306,6 @@ def _cmd_voices_list(args: argparse.Namespace) -> int:
         system=args.system,
         language=args.language,
         refresh=args.refresh,
-        include_retired=args.include_retired,
-        include_unassigned=args.include_unassigned,
     )
     _render_voice_records(records, args.format)
     return 0
@@ -336,57 +313,11 @@ def _cmd_voices_list(args: argparse.Namespace) -> int:
 
 def _cmd_voices_show(args: argparse.Namespace) -> int:
     manager = _manager(args)
-    identity = manager.resolve_voice_selector(args.selector, include_retired=args.include_retired)
-    record = None
-    try:
-        record = next(
-            (
-                item
-                for item in manager.list_voices(
-                    system=identity.system,
-                    language=identity.language,
-                    refresh=args.refresh,
-                    include_retired=args.include_retired,
-                    include_unassigned=True,
-                )
-                if item.identity is not None
-                and item.identity.canonical_key == identity.canonical_key
-            ),
-            None,
-        )
-    except Exception:
-        # Showing a known identity remains useful when the catalog is offline.
-        record = None
-    if record is None:
-        from .types import VoiceRecord
-
-        record = VoiceRecord(
-            identity=identity,
-            available=False,
-            catalog_item=None,
-            languages=(identity.language,),
-            gender="unknown",
-        )
+    record = manager.resolve_voice(args.ref, refresh=args.refresh)
     if args.format == "json":
         print(json.dumps(_voice_payload(record), indent=2, sort_keys=True))
-    elif args.format in {"plain", "tsv"}:
-        _render_voice_records([record], args.format)
     else:
-        payload = _voice_payload(record)
-        for key in (
-            "selector",
-            "system",
-            "asset_id",
-            "voice_id",
-            "backing_ref",
-            "language_key",
-            "engine_code",
-            "slot",
-            "state",
-            "available",
-            "selector_available",
-        ):
-            print(f"{key.replace('_', ' ').title():16} {payload[key]}")
+        _render_voice_records([record], args.format)
     return 0
 
 

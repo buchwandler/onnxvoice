@@ -2,7 +2,7 @@
 
 ## System
 
-A system identifies an adapter and catalog format. The built-in systems are Piper, Kokoro, Pocket, and Supertonic. Adapter support, catalog support, and stable voice-selector support are separate capabilities.
+A system identifies an adapter and catalog format. The built-in systems are Piper, Kokoro, Pocket, and Supertonic. Normalized catalog items determine which voices are exposed for each system.
 
 ## Catalog item and artifact
 
@@ -16,9 +16,9 @@ A reference is the canonical `system:id` name used to identify a catalog item, f
 
 An installation manifest records the artifacts and selected metadata. An installation may share immutable content-addressed blobs with other installations.
 
-## Voice record and stable selector
+## Voice record and semantic reference
 
-A voice record combines catalog voice information with a stable selector assignment when one exists. A selector such as `de-ko-1` identifies a logical catalog voice. It is not a model reference and does not select a model-ready style tensor. See [Voice selectors](voices.md).
+A voice record identifies a normalized catalog voice with `(system, asset_id, voice_id)`. Its semantic reference has the form `<system>:<asset-id>[/<voice-id>]`. For example, `piper:en_US-lessac-medium` identifies an asset that is itself a voice, while `kokoro:v1.0/af_heart` identifies a child voice in a model catalog item. See [Catalog voices](voices.md).
 
 ## Managed and local runtime opening
 
