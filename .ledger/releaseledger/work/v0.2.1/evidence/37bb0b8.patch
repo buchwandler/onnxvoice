@@ -1,0 +1,1538 @@
+ docs/systems/kokoro.md                          |  70 +++-
+ onnxvoice/__init__.py                           |  10 +-
+ onnxvoice/catalog.py                            |  38 ++
+ onnxvoice/manager.py                            |  18 +-
+ onnxvoice/systems/__init__.py                   |   3 +
+ onnxvoice/systems/kokoro.py                     |  52 ++-
+ onnxvoice/systems/kokoro_cloning.py             | 521 ++++++++++++++++++++++++
+ tests/fixtures/kokoro_cloning_reference_mel.npz | Bin 0 -> 385021 bytes
+ tests/test_catalog.py                           |  97 +++++
+ tests/test_kokoro_cloning.py                    | 497 ++++++++++++++++++++++
+ tests/test_local_runtime.py                     |  37 ++
+ 11 files changed, 1327 insertions(+), 16 deletions(-)
+
+diff --git a/docs/systems/kokoro.md b/docs/systems/kokoro.md
+index b5d5aec..5592e10 100644
+--- a/docs/systems/kokoro.md
++++ b/docs/systems/kokoro.md
+@@ -1,10 +1,10 @@
+ # Kokoro
+
+-Kokoro runs either a single ONNX model or the `split-onnx-v1` multi-component layout. The caller supplies token IDs and a model-ready style tensor. Resolving a semantic catalog voice reference identifies the voice but does not construct or choose that tensor.
++Kokoro supports a single ONNX model, the `split-onnx-v1` multi-component layout, and the reference-conditioned `cloning-onnx-v1` layout. Single and split inference accept caller-prepared model-ready style tensors. Cloning has a separate enrollment boundary and uses a reusable `KokoroReferenceState` instead of stock voices.
+
+ ## Quality and distribution
+
+-A quality selection chooses a model variant within a distribution. It does not install every quality variant. Non-model runtime artifacts required by the selected distribution are installed with it. Explicit quality and distribution selections can have separate installation identities.
++A quality selection chooses a model variant within a distribution. It does not install every quality variant. Non-model runtime artifacts required by the selected distribution are installed with it. Explicit quality and distribution selections can have separate installation identities. A cloning distribution includes its enrollment graphs, synthesis graphs, source parameters, and config together for each supported quality.
+
+ ## Single-model runtime
+
+@@ -50,4 +50,68 @@ runtime = OnnxVoice.open_local(
+ )
+ ```
+
+-Both layouts expose the same model-ready inference boundary. Timing outputs are available in `InferenceResult` when the selected model provides them.
++## Reference cloning layout
++
++`cloning-onnx-v1` enrolls a reference waveform once, then reuses its mapped style and reference memory for synthesis. All learned inference runs through ONNX Runtime. NumPy handles deterministic mel preprocessing and the existing split runtime's duration expansion, harmonic source, and STFT operations.
++
++A local installation requires all six model components, `metadata:source_params`, and a JSON `config`, `bundle`, or `manifest` artifact. It does not require a `voices` archive:
++
++```python
++from onnxvoice import OnnxVoice
++
++runtime = OnnxVoice.open_local(
++    system="kokoro",
++    artifacts={
++        "model:reference_wavlm": "reference_wavlm.onnx",
++        "model:reference_encoders": "reference_encoders.onnx",
++        "model:reference_mapper": "reference_mapper.onnx",
++        "model:prosody": "prosody.onnx",
++        "model:curves": "curves.onnx",
++        "model:decoder": "decoder.onnx",
++        "metadata:source_params": "source-params.npz",
++        "config": "config.json",
++    },
++    runtime={
++        "layout": "cloning-onnx-v1",
++        "voice_mode": "reference",
++        "max_tokens": 510,
++        "sample_rate": 24000,
++        "speed_supported": False,
++        "style_dimensions": {"acoustic": 128, "duration": 128},
++        "reference": {
++            "format": "akinvox-cloning-reference-v1",
++            "sample_rate": 24000,
++            "identity_sample_rate": 16000,
++            "min_seconds": 3.0,
++            "max_seconds": 30.0,
++            "style_width": 256,
++            "memory_width": 192,
++        },
++    },
++    sample_rate=24000,
++    provider="cpu",
++)
++```
++
++The high-level caller owns file I/O and audio resampling. Enrollment takes finite mono floating-point arrays at 24 kHz and 16 kHz with matching duration. The 24 kHz reference must last 3 to 30 seconds and must not be silent or severely clipped. `reference_token_ids` are the reference transcript's phone IDs without boundary tokens; the runtime adds boundaries and enforces the 510-token limit.
++
++```python
++reference = runtime.prepare_reference(
++    reference_token_ids,
++    audio_24k=wave_24k,
++    audio_16k=wave_16k,
++)
++
++result = runtime.infer(
++    token_ids,
++    reference=reference,
++    speed=1.0,
++    seed=1234,
++)
++```
++
++`KokoroReferenceState` is publicly available from `onnxvoice`. Its style, memory, and mask arrays are owned read-only copies and its fingerprint binds it to the exact installed component artifacts. Reuse it only with that same model build. Cross-build use is rejected. Clone synthesis rejects any speed other than `1.0`; stock style input is not accepted by the cloning layout. Reference-state persistence and WAV loading are outside this package.
++
++`runtime.close()` closes only sessions that were opened. `runtime.diagnostics()` reports the providers and components for those sessions. With a precomputed reference state, synthesis does not initialize the enrollment graphs.
++
++Timing outputs are available in `InferenceResult` when the selected model provides them.
+diff --git a/onnxvoice/__init__.py b/onnxvoice/__init__.py
+index 83231d8..464fc33 100644
+--- a/onnxvoice/__init__.py
++++ b/onnxvoice/__init__.py
+@@ -24,7 +24,13 @@ from .inventory import (
+ from .manager import OnnxVoice
+ from .runtime import OnnxSession, available_providers
+ from .store import AssetStore
+-from .systems import SplitKokoroRuntime, register_adapter, registered_systems
++from .systems import (
++    KokoroCloningRuntime,
++    KokoroReferenceState,
++    SplitKokoroRuntime,
++    register_adapter,
++    registered_systems,
++)
+ from .types import (
+     Artifact,
+     AssetProgress,
+@@ -141,6 +147,8 @@ __all__ = [
+     "register_adapter",
+     "registered_systems",
+     "SplitKokoroRuntime",
++    "KokoroReferenceState",
++    "KokoroCloningRuntime",
+     "verify_installation",
+     "validate_onnx",
+     "validate_audio",
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index 5caec52..4c7a558 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -66,6 +66,16 @@ DEFAULT_SOURCES = {
+     "supertonic": "https://raw.githubusercontent.com/buchwandler/supertonic-onnx-bundles/main/catalog/bundles.json",
+     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
+ }
++_KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
++    {
++        "reference_wavlm",
++        "reference_encoders",
++        "reference_mapper",
++        "prosody",
++        "curves",
++        "decoder",
++    }
++)
+
+
+ @dataclass(slots=True)
+@@ -400,6 +410,34 @@ def _parse_kokoro_entry(
+             )
+         )
+     runtime, onnx_contract = _normalize_kokoro_runtime(entry)
++    if runtime.get("layout") == "cloning-onnx-v1":
++        model_artifacts = [artifact for artifact in artifacts if artifact.role == "model"]
++        model_components = {artifact.component for artifact in model_artifacts}
++        missing = _KOKORO_CLONING_MODEL_COMPONENTS - model_components
++        if missing:
++            raise CatalogError(
++                "Kokoro cloning distribution is missing model components: "
++                + ", ".join(sorted(missing))
++            )
++        for quality in {artifact.quality for artifact in model_artifacts}:
++            quality_components = {
++                artifact.component
++                for artifact in model_artifacts
++                if artifact.quality in {None, quality}
++            }
++            missing_for_quality = _KOKORO_CLONING_MODEL_COMPONENTS - quality_components
++            if missing_for_quality:
++                raise CatalogError(
++                    f"Kokoro cloning quality {quality!r} is missing model components: "
++                    + ", ".join(sorted(missing_for_quality))
++                )
++        if not any(
++            artifact.role == "metadata" and artifact.component == "source_params"
++            for artifact in artifacts
++        ):
++            raise CatalogError("Kokoro cloning distribution is missing metadata source_params")
++        if not any(artifact.role in {"config", "bundle", "manifest"} for artifact in artifacts):
++            raise CatalogError("Kokoro cloning distribution is missing its config/bundle")
+     metadata = {
+         "model_version": entry.get("model_version"),
+         "frontend": entry.get("frontend"),
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index ca10f01..932fb0c 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -299,17 +299,15 @@ class OnnxVoice:
+         }
+         for key, raw_path in merged_files.items():
+             component = None
+-            if system == "supertonic":
+-                if key in model_components:
+-                    role = "model"
+-                    component = key
+-                elif key.startswith("voice_style:"):
+-                    component = key.partition(":")[2]
+-                    if not component:
++            if system == "supertonic" and key in model_components:
++                role = "model"
++                component = key
++            elif ":" in key:
++                role, _, component = key.partition(":")
++                if not role or not component or ":" in component:
++                    if key.startswith("voice_style:"):
+                         raise ValueError("voice_style keys must include a component name")
+-                    role = "voice_style"
+-                else:
+-                    role = key
++                    raise ValueError("Artifact keys must use non-empty role:component values")
+             elif key in {"prosody", "curves", "decoder"}:
+                 role = "model"
+                 component = key
+diff --git a/onnxvoice/systems/__init__.py b/onnxvoice/systems/__init__.py
+index 33c3f42..90043c4 100644
+--- a/onnxvoice/systems/__init__.py
++++ b/onnxvoice/systems/__init__.py
+@@ -4,6 +4,7 @@ from ..errors import UnsupportedSystemError
+ from .base import SystemAdapter
+ from .kitten import KittenAdapter
+ from .kokoro import KokoroAdapter
++from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
+ from .kokoro_split import SplitKokoroRuntime
+ from .piper import PiperAdapter
+ from .pocket import PocketAdapter
+@@ -41,6 +42,8 @@ __all__ = [
+     "SupertonicAdapter",
+     "KittenAdapter",
+     "SplitKokoroRuntime",
++    "KokoroCloningRuntime",
++    "KokoroReferenceState",
+     "register_adapter",
+     "get_adapter",
+     "registered_systems",
+diff --git a/onnxvoice/systems/kokoro.py b/onnxvoice/systems/kokoro.py
+index 04a8010..1b7fe08 100644
+--- a/onnxvoice/systems/kokoro.py
++++ b/onnxvoice/systems/kokoro.py
+@@ -9,6 +9,7 @@ from ..errors import CapabilityError, RuntimeContractError
+ from ..runtime import OnnxSession
+ from ..types import InferenceResult, TensorSpec
+ from .base import SystemAdapter
++from .kokoro_cloning import CLONING_LAYOUT, KokoroCloningRuntime, KokoroReferenceState
+ from .kokoro_split import SplitKokoroRuntime
+
+
+@@ -18,12 +19,17 @@ class KokoroAdapter(SystemAdapter):
+     def __init__(self, *args: Any, session_factory: Any | None = None, **kwargs: Any) -> None:
+         super().__init__(*args, **kwargs)
+         self._split_runtime: SplitKokoroRuntime | None = None
++        self._cloning_runtime: KokoroCloningRuntime | None = None
+         self._split_session_factory = session_factory
+
+     def _uses_split_runtime(self) -> bool:
+         runtime = self.installation.metadata.get("runtime") or {}
+         return runtime.get("layout") in {"split", "multi", "split-onnx-v1"}
+
++    def _uses_cloning_runtime(self) -> bool:
++        runtime = self.installation.metadata.get("runtime") or {}
++        return runtime.get("layout") == CLONING_LAYOUT
++
+     def _split(self) -> SplitKokoroRuntime:
+         if self._split_runtime is None:
+             self._split_runtime = SplitKokoroRuntime(
+@@ -35,6 +41,30 @@ class KokoroAdapter(SystemAdapter):
+             )
+         return self._split_runtime
+
++    def _cloning(self) -> KokoroCloningRuntime:
++        if self._cloning_runtime is None:
++            self._cloning_runtime = KokoroCloningRuntime(
++                self.installation,
++                session_factory=self._split_session_factory,
++                providers=self.providers,
++                provider_options=self.provider_options,
++                session_options=self.session_options,
++            )
++        return self._cloning_runtime
++
++    def prepare_reference(
++        self,
++        reference_token_ids: Sequence[int],
++        *,
++        audio_24k: np.ndarray,
++        audio_16k: np.ndarray,
++    ) -> KokoroReferenceState:
++        if not self._uses_cloning_runtime():
++            raise CapabilityError("Reference enrollment requires the Kokoro cloning-onnx-v1 layout")
++        return self._cloning().prepare_reference(
++            reference_token_ids, audio_24k=audio_24k, audio_16k=audio_16k
++        )
++
+     @property
+     def session(self) -> OnnxSession:
+         if self._session is None:
+@@ -42,9 +72,12 @@ class KokoroAdapter(SystemAdapter):
+                 artifact for artifact in self.installation.artifacts if artifact.role == "model"
+             ]
+             runtime = self.installation.metadata.get("runtime") or {}
+-            if len(models) != 1 or runtime.get("layout") in {"split", "multi", "split-onnx-v1"}:
++            if (
++                len(models) != 1
++                or runtime.get("layout") in {"split", "multi", "split-onnx-v1", CLONING_LAYOUT}
++            ):
+                 raise CapabilityError(
+-                    "Split or multi-component Kokoro layouts do not expose a single session"
++                    "Split, cloning, or multi-component Kokoro layouts do not expose a single session"
+                 )
+             self._session = OnnxSession(
+                 models[0].path,
+@@ -54,15 +87,25 @@ class KokoroAdapter(SystemAdapter):
+             )
+         return self._session
+
++
+     def infer(
+         self,
+         token_ids: Sequence[int],
+         *,
+         style: np.ndarray | Sequence[float] | None = None,
++        reference: KokoroReferenceState | None = None,
+         speed: float = 1.0,
+         seed: int = 1234,
+         **_: Any,
+     ) -> InferenceResult:
++        if self._uses_cloning_runtime():
++            if style is not None:
++                raise CapabilityError("Static style input is not supported by the Kokoro cloning layout")
++            if reference is None:
++                raise RuntimeContractError("A Kokoro reference state must be provided for cloning inference")
++            return self._cloning().infer(token_ids, reference=reference, speed=speed, seed=seed)
++        if reference is not None:
++            raise CapabilityError("Kokoro reference state requires the cloning-onnx-v1 layout")
+         if self._uses_split_runtime():
+             if style is None:
+                 raise RuntimeContractError("A model-ready Kokoro style must be provided")
+@@ -120,11 +163,16 @@ class KokoroAdapter(SystemAdapter):
+         if self._split_runtime is not None:
+             self._split_runtime.close()
+             self._split_runtime = None
++        if self._cloning_runtime is not None:
++            self._cloning_runtime.close()
++            self._cloning_runtime = None
+         super().close()
+
+     def diagnostics(self) -> Any:
+         if self._split_runtime is not None:
+             return self._split_runtime.diagnostics()
++        if self._cloning_runtime is not None:
++            return self._cloning_runtime.diagnostics()
+         return super().diagnostics()
+
+     def _input_spec(self, name: str) -> TensorSpec | None:
+diff --git a/onnxvoice/systems/kokoro_cloning.py b/onnxvoice/systems/kokoro_cloning.py
+new file mode 100644
+index 0000000..0c35e97
+--- /dev/null
++++ b/onnxvoice/systems/kokoro_cloning.py
+@@ -0,0 +1,521 @@
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++from collections.abc import Callable, Mapping, Sequence
++from dataclasses import dataclass, field
++from pathlib import Path
++from types import MappingProxyType
++from typing import Any
++
++import numpy as np
++
++from ..errors import CapabilityError, RuntimeContractError
++from ..types import InferenceResult, Installation
++from .base import SystemAdapter
++from .kokoro_split import SplitKokoroRuntime
++
++CLONING_LAYOUT = "cloning-onnx-v1"
++CLONING_MODEL_COMPONENTS = (
++    "reference_wavlm",
++    "reference_encoders",
++    "reference_mapper",
++    "prosody",
++    "curves",
++    "decoder",
++)
++FINGERPRINT_COMPONENTS = (*CLONING_MODEL_COMPONENTS, "source_params")
++_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
++
++N_MELS = 80
++N_FFT = 2048
++WIN_LENGTH = 1200
++HOP_LENGTH = 300
++MEL_EPSILON = 1.0e-5
++MEL_MEAN = -4.0
++MEL_STD = 4.0
++MEL_SAMPLE_RATE = 16000
++REFERENCE_PAD_SAMPLES = 5000
++REFERENCE_MIN_SECONDS = 3.0
++REFERENCE_MAX_SECONDS = 30.0
++REFERENCE_SPEECH_RMS_MINIMUM = 1.0e-4
++REFERENCE_CLIPPING_THRESHOLD = 0.999
++REFERENCE_CLIPPING_FRACTION_MAXIMUM = 0.001
++AUDIO_DURATION_TOLERANCE_SECONDS = 0.02
++
++
++def _mel_filterbank() -> np.ndarray:
++    frequencies = np.linspace(0.0, MEL_SAMPLE_RATE / 2, N_FFT // 2 + 1, dtype=np.float32)
++    mel_min = 2595.0 * np.log10(1.0 + 0.0 / 700.0)
++    mel_max = 2595.0 * np.log10(1.0 + (MEL_SAMPLE_RATE / 2) / 700.0)
++    mel_points = np.linspace(mel_min, mel_max, N_MELS + 2, dtype=np.float32)
++    hz_points = (700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)).astype(np.float32)
++    differences = hz_points[1:] - hz_points[:-1]
++    slopes = hz_points[:, None] - frequencies[None, :]
++    lower = -slopes[:-2] / differences[:-1, None]
++    upper = slopes[2:] / differences[1:, None]
++    return np.maximum(0.0, np.minimum(lower, upper)).T.astype(np.float32)
++
++
++_MEL_FILTERBANK = _mel_filterbank()
++_MEL_WINDOW = (
++    0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(WIN_LENGTH, dtype=np.float64) / WIN_LENGTH)
++).astype(np.float32)
++_MEL_WINDOW = np.pad(_MEL_WINDOW, (N_FFT // 2 - WIN_LENGTH // 2, N_FFT // 2 - WIN_LENGTH // 2))
++
++
++def _reference_mel(wave: np.ndarray) -> np.ndarray:
++    values = np.asarray(wave, dtype=np.float32)
++    centered = np.pad(values, (N_FFT // 2, N_FFT // 2), mode="reflect")
++    frames = np.lib.stride_tricks.sliding_window_view(centered, N_FFT)[::HOP_LENGTH]
++    spectrum = np.fft.rfft(frames * _MEL_WINDOW[None, :], axis=1)
++    power = np.square(np.abs(spectrum)).astype(np.float32)
++    mel = power @ _MEL_FILTERBANK
++    normalized = (np.log(MEL_EPSILON + mel.T[None]) - MEL_MEAN) / MEL_STD
++    return np.ascontiguousarray(normalized, dtype=np.float32)
++
++
++def reference_mels(audio_24k: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
++    """Return the mapper mel and padded/even encoder mel used by AkinVox."""
++    wave = np.asarray(audio_24k, dtype=np.float32)
++    mapper_mel = _reference_mel(wave)
++    padded = np.pad(wave, (REFERENCE_PAD_SAMPLES, REFERENCE_PAD_SAMPLES))
++    encoder_mel = _reference_mel(padded)
++    even_frames = encoder_mel.shape[-1] - encoder_mel.shape[-1] % 2
++    encoder_mel = np.ascontiguousarray(encoder_mel[:, :, :even_frames][:, None])
++    return mapper_mel, encoder_mel
++
++
++@dataclass(frozen=True, slots=True)
++class KokoroReferenceState:
++    """Validated, reusable AkinVox reference tensors for one exact model build."""
++
++    style: np.ndarray
++    memory: np.ndarray
++    memory_mask: np.ndarray
++    model_fingerprint: str
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        style = np.array(self.style, dtype=np.float32, order="C", copy=True)
++        memory = np.array(self.memory, dtype=np.float32, order="C", copy=True)
++        memory_mask = np.array(self.memory_mask, dtype=np.bool_, order="C", copy=True)
++
++        if style.shape != (1, 256):
++            raise RuntimeContractError("Kokoro reference style must have shape [1, 256]")
++        if memory.ndim != 3 or memory.shape[0] != 1 or memory.shape[1] == 0 or memory.shape[2] != 192:
++            raise RuntimeContractError("Kokoro reference memory must have shape [1, M, 192] with M > 0")
++        if memory_mask.shape != memory.shape[:2]:
++            raise RuntimeContractError("Kokoro reference memory mask must have shape [1, M]")
++        if not np.all(np.isfinite(style)) or not np.all(np.isfinite(memory)):
++            raise RuntimeContractError("Kokoro reference state tensors must contain only finite values")
++        if not isinstance(self.model_fingerprint, str) or not self.model_fingerprint.strip():
++            raise RuntimeContractError("Kokoro reference state requires a non-empty model fingerprint")
++        if not isinstance(self.metadata, Mapping):
++            raise RuntimeContractError("Kokoro reference state metadata must be a mapping")
++
++        style.setflags(write=False)
++        memory.setflags(write=False)
++        memory_mask.setflags(write=False)
++        object.__setattr__(self, "style", style)
++        object.__setattr__(self, "memory", memory)
++        object.__setattr__(self, "memory_mask", memory_mask)
++        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
++
++
++def kokoro_model_fingerprint(installation: Installation) -> str:
++    """Hash the exact six graph artifacts and source parameters, without using paths."""
++    artifact_hashes = [
++        [
++            component,
++            _artifact_sha256(
++                installation,
++                "metadata" if component == "source_params" else "model",
++                component,
++            ),
++        ]
++        for component in FINGERPRINT_COMPONENTS
++    ]
++    canonical = json.dumps(artifact_hashes, separators=(",", ":"), ensure_ascii=True)
++    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
++
++
++def _artifact_sha256(installation: Installation, role: str, component: str) -> str:
++    try:
++        artifact = installation.require_artifact(role, component=component)
++    except KeyError as exc:
++        raise RuntimeContractError(
++            f"Kokoro cloning installation is missing role={role!r}, component={component!r}"
++        ) from exc
++    digest = artifact.sha256
++    if not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None:
++        raise RuntimeContractError(
++            f"Kokoro cloning artifact {component!r} must have a lowercase SHA-256 digest"
++        )
++    return digest
++
++
++class KokoroCloningRuntime(SplitKokoroRuntime):
++    """ONNX enrollment and reference-conditioned synthesis for Kokoro cloning."""
++
++    COMPONENTS = CLONING_MODEL_COMPONENTS
++
++    def __init__(
++        self,
++        installation: Installation,
++        *,
++        session_factory: Callable[[Path, str], Any] | None = None,
++        **kwargs: Any,
++    ) -> None:
++        super().__init__(installation, session_factory=session_factory, **kwargs)
++        self.model_fingerprint = kokoro_model_fingerprint(installation)
++
++
++
++    def _artifact(self, role: str, *, component: str | None = None) -> Path:
++        try:
++            return self.installation.artifact(role, component=component).path
++        except KeyError as exc:
++            detail = f"role={role!r}"
++            if component is not None:
++                detail += f", component={component!r}"
++            raise CapabilityError(f"Kokoro cloning runtime is missing {detail}") from exc
++
++
++    def _component_path(self, component: str) -> Path:
++        return self._artifact("model", component=component)
++    def _load_supporting_assets(self) -> None:
++        for role in ("config", "bundle", "manifest"):
++            try:
++                config_path = self._artifact(role)
++                break
++            except CapabilityError:
++                continue
++        else:
++            raise CapabilityError("Kokoro cloning runtime is missing its config/bundle/manifest")
++        try:
++            manifest = json.loads(config_path.read_text(encoding="utf-8"))
++        except (OSError, json.JSONDecodeError) as exc:
++            raise RuntimeContractError(
++                f"Could not read Kokoro cloning manifest {config_path}: {exc}"
++            ) from exc
++        if not isinstance(manifest, dict):
++            raise RuntimeContractError("Kokoro cloning manifest must contain an object")
++
++        runtime = self.installation.metadata.get("runtime") or {}
++        max_tokens = runtime.get("max_tokens", manifest.get("max_tokens"))
++        if isinstance(max_tokens, int) and max_tokens > 0:
++            self.max_tokens = max_tokens
++
++        source_path = self._source_parameters_path()
++        try:
++            with np.load(source_path, allow_pickle=False) as source:
++                self._source_weight = self._array_from_npz(source, ("weight", "source_weight"))
++                self._source_bias = self._array_from_npz(source, ("bias", "source_bias"))
++                self._window = self._array_from_npz(source, ("window",))
++        except (OSError, ValueError, KeyError) as exc:
++            raise RuntimeContractError(
++                f"Invalid Kokoro cloning source parameters {source_path}: {exc}"
++            ) from exc
++        if self._source_weight.ndim != 2 or self._source_bias.ndim != 1:
++            raise RuntimeContractError("Kokoro cloning source parameters have invalid shapes")
++        if self._source_weight.shape[0] != self._source_bias.shape[0]:
++            raise RuntimeContractError("Kokoro cloning source weight and bias shapes do not match")
++        if self._window.ndim != 1 or self._window.size != 20:
++            raise RuntimeContractError("Kokoro cloning source window must contain 20 values")
++
++    def _source_parameters_path(self) -> Path:
++        for role in ("metadata", "source_params"):
++            matches = self.installation.artifacts_for(role=role, component="source_params")
++            if matches:
++                return matches[0].path
++        for artifact in self.installation.artifacts:
++            if "source_params" in artifact.filename.lower() or "source-params" in artifact.filename.lower():
++                return artifact.path
++        raise CapabilityError("Kokoro cloning runtime is missing source parameters")
++
++    def diagnostics(self) -> Any:
++        return SystemAdapter.diagnostics(self)
++
++    def prepare_reference(
++        self,
++        reference_token_ids: Sequence[int],
++        *,
++        audio_24k: np.ndarray,
++        audio_16k: np.ndarray,
++    ) -> KokoroReferenceState:
++        tokens = self._validate_reference_tokens(reference_token_ids)
++        wave24, wave16 = self._validate_reference_audio(audio_24k, audio_16k)
++        mapper_mel, encoder_mel = reference_mels(wave24)
++        reference_ids = np.asarray([[0, *tokens, 0]], dtype=np.int64)
++        reference_lengths = np.asarray([len(tokens) + 2], dtype=np.int64)
++
++        encoders = self._get_session("reference_encoders")
++        self._require_inputs(encoders, {"mel"}, "reference_encoders")
++        encoder_values = self._run(encoders, {"mel": encoder_mel})
++        encoder_named = self._named_outputs(encoders, encoder_values)
++        raw_sdec = self._output(encoder_named, ("raw_sdec",), 0)
++        raw_spred = self._output(encoder_named, ("raw_spred",), 1)
++        self._validate_observation(raw_sdec, (1, 128), "raw_sdec")
++        self._validate_observation(raw_spred, (1, 128), "raw_spred")
++
++        wavlm_session = self._get_session("reference_wavlm")
++        self._require_inputs(wavlm_session, {"input_values"}, "reference_wavlm")
++        wavlm_values = self._run(
++            wavlm_session, {"input_values": np.ascontiguousarray(wave16[None, :])}
++        )
++        wavlm_named = self._named_outputs(wavlm_session, wavlm_values)
++        wavlm = self._output(wavlm_named, ("wavlm", "embeddings"), 0)
++        self._validate_observation(wavlm, (1, 512), "wavlm")
++        wavlm_norm = np.linalg.norm(wavlm, axis=-1, keepdims=True)
++        wavlm = np.asarray(wavlm / np.maximum(wavlm_norm, 1.0e-8), dtype=np.float32)
++
++        mapper = self._get_session("reference_mapper")
++        self._require_inputs(
++            mapper,
++            {
++                "mel",
++                "mel_lengths",
++                "reference_ids",
++                "reference_lengths",
++                "wavlm",
++                "raw_sdec",
++                "raw_spred",
++            },
++            "reference_mapper",
++        )
++        mapper_inputs = {
++            "mel": mapper_mel,
++            "mel_lengths": np.asarray([mapper_mel.shape[-1]], dtype=np.int64),
++            "reference_ids": reference_ids,
++            "reference_lengths": reference_lengths,
++            "wavlm": wavlm,
++            "raw_sdec": np.asarray(raw_sdec, dtype=np.float32),
++            "raw_spred": np.asarray(raw_spred, dtype=np.float32),
++        }
++        mapper_values = self._run(mapper, mapper_inputs)
++        mapper_named = self._named_outputs(mapper, mapper_values)
++        style = self._output(mapper_named, ("style",), 0)
++        memory = self._output(mapper_named, ("reference_memory", "memory"), 1)
++        memory_mask = self._output(mapper_named, ("reference_mask", "memory_mask"), 2)
++        return KokoroReferenceState(
++            style=style,
++            memory=memory,
++            memory_mask=memory_mask,
++            model_fingerprint=self.model_fingerprint,
++            metadata={
++                "format": "akinvox-cloning-reference-v1",
++                "sample_rate": 24000,
++                "reference_seconds": len(wave24) / 24000.0,
++            },
++        )
++
++
++    def infer(
++        self,
++        token_ids: Sequence[int],
++        *,
++        reference: KokoroReferenceState | None = None,
++        speed: float = 1.0,
++        seed: int = 1234,
++    ) -> InferenceResult:
++        if speed != 1.0:
++            raise CapabilityError("Kokoro cloning-onnx-v1 does not support speed control")
++        if not isinstance(reference, KokoroReferenceState):
++            raise RuntimeContractError("Kokoro cloning inference requires a KokoroReferenceState")
++        if reference.model_fingerprint != self.model_fingerprint:
++            raise RuntimeContractError(
++                "Kokoro reference state belongs to a different model build"
++            )
++        tokens = self._validate_text_tokens(token_ids)
++        if reference.style.shape != (1, 256):
++            raise RuntimeContractError("Kokoro reference style must have shape [1, 256]")
++        style_acou = np.ascontiguousarray(reference.style[:, :128])
++        style_dur = np.ascontiguousarray(reference.style[:, 128:])
++        if style_acou.shape != (1, 128) or style_dur.shape != (1, 128):
++            raise RuntimeContractError("Kokoro cloning style split must be 128 acoustic and 128 duration values")
++
++        input_ids = np.asarray([[0, *tokens, 0]], dtype=np.int64)
++        prosody = self._get_session("prosody")
++        self._require_inputs(
++            prosody,
++            {"input_ids", "style_dur", "reference_memory", "reference_mask"},
++            "prosody",
++        )
++        prosody_values = self._run(
++            prosody,
++            {
++                "input_ids": input_ids,
++                "style_dur": style_dur,
++                "reference_memory": reference.memory,
++                "reference_mask": reference.memory_mask,
++            },
++        )
++        prosody_named = self._named_outputs(prosody, prosody_values)
++        pred_dur = self._output(prosody_named, ("pred_dur", "duration"), 0)
++        try:
++            duration_values = np.asarray(pred_dur, dtype=np.float64).reshape(-1)
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError("Kokoro cloning durations must be numeric") from exc
++        if duration_values.size != input_ids.shape[1] or not np.all(np.isfinite(duration_values)):
++            raise RuntimeContractError("Kokoro cloning durations must be finite and match the input phones")
++        if np.any(duration_values < 1) or np.any(duration_values != np.floor(duration_values)):
++            raise RuntimeContractError("Kokoro cloning durations must be integers of at least one frame")
++        if np.any(duration_values > 4000) or int(np.sum(duration_values)) > 4000:
++            raise RuntimeContractError("Kokoro cloning duration expansion exceeds 4000 frames")
++        durations = duration_values.astype(np.int64)
++        expanded_frames = int(np.sum(durations))
++        if expanded_frames <= 0:
++            raise RuntimeContractError("Kokoro cloning duration expansion must not be empty")
++
++        d = np.asarray(self._output(prosody_named, ("d", "duration_embedding"), 1))
++        t_en = np.asarray(self._output(prosody_named, ("t_en", "asr"), 2))
++        if d.ndim != 3 or d.shape[0] != 1 or not np.all(np.isfinite(d)):
++            raise RuntimeContractError("Kokoro cloning duration embeddings have incompatible values")
++        if d.shape[1] == durations.size:
++            duration_context = d.transpose(0, 2, 1)
++        elif d.shape[2] == durations.size:
++            duration_context = d
++        else:
++            raise RuntimeContractError("Kokoro cloning durations and embeddings do not match")
++        if (
++            t_en.ndim != 3
++            or t_en.shape[0] != 1
++            or t_en.shape[1] != 512
++            or t_en.shape[2] != durations.size
++            or not np.all(np.isfinite(t_en))
++        ):
++            raise RuntimeContractError("Kokoro cloning text embeddings have incompatible shapes")
++        index = np.repeat(np.arange(durations.size, dtype=np.int64), durations)
++        en = np.ascontiguousarray(duration_context[:, :, index])
++        asr = np.ascontiguousarray(t_en[:, :, index])
++
++        curves = self._get_session("curves")
++        self._require_inputs(curves, {"en", "style_dur"}, "curves")
++        curve_values = self._run(curves, {"en": en, "style_dur": style_dur})
++        curve_named = self._named_outputs(curves, curve_values)
++        f0_curve = self._output(curve_named, ("f0_curve", "f0"), 0)
++        n_curve = self._output(curve_named, ("n_curve", "noise"), 1)
++        if not np.all(np.isfinite(f0_curve)) or not np.all(np.isfinite(n_curve)):
++            raise RuntimeContractError("Kokoro cloning curves must contain only finite values")
++        har = self._harmonic_source(f0_curve, seed)
++
++        decoder = self._get_session("decoder")
++        self._require_inputs(
++            decoder, {"asr", "f0_curve", "n_curve", "style_acou", "har"}, "decoder"
++        )
++        decoder_values = self._run(
++            decoder,
++            {
++                "asr": asr,
++                "f0_curve": f0_curve,
++                "n_curve": n_curve,
++                "style_acou": style_acou,
++                "har": har,
++            },
++        )
++        decoder_named = self._named_outputs(decoder, decoder_values)
++        audio = self._canonical_audio(self._output(decoder_named, ("audio", "output"), 0))
++        outputs = {
++            "pred_dur": durations,
++            "f0_curve": np.asarray(f0_curve),
++            "n_curve": np.asarray(n_curve),
++        }
++        return InferenceResult(
++            audio=audio,
++            sample_rate=int(
++                self.installation.sample_rate or self._runtime_value("sample_rate", 24000)
++            ),
++            timings=durations,
++            outputs=outputs,
++            metadata={
++                "system": "kokoro",
++                "layout": CLONING_LAYOUT,
++                "seed": int(seed),
++                "reference_fingerprint": self._reference_fingerprint(reference),
++                "speed": 1.0,
++            },
++        )
++
++    def _validate_text_tokens(self, token_ids: Sequence[int]) -> list[int]:
++        tokens = list(token_ids)
++        if not tokens:
++            raise RuntimeContractError("Kokoro cloning inference requires at least one token")
++        if len(tokens) + 2 > self.max_tokens:
++            raise RuntimeContractError(
++                f"Kokoro cloning token sequence exceeds the {self.max_tokens}-token limit"
++            )
++        if any(isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens):
++            raise RuntimeContractError("Kokoro cloning token ids must be integers")
++        return [int(token) for token in tokens]
++
++    @staticmethod
++    def _reference_fingerprint(reference: KokoroReferenceState) -> str:
++        digest = hashlib.sha256(reference.model_fingerprint.encode("ascii"))
++        for value in (reference.style, reference.memory, reference.memory_mask):
++            array = np.ascontiguousarray(value)
++            digest.update(array.dtype.str.encode("ascii"))
++            digest.update(json.dumps(array.shape, separators=(",", ":")).encode("ascii"))
++            digest.update(array.tobytes())
++        return digest.hexdigest()
++
++    def _validate_reference_tokens(self, token_ids: Sequence[int]) -> list[int]:
++        tokens = list(token_ids)
++        if not tokens:
++            raise RuntimeContractError("Kokoro reference enrollment requires at least one token")
++        if len(tokens) + 2 > self.max_tokens:
++            raise RuntimeContractError(
++                f"Kokoro reference token sequence exceeds the {self.max_tokens}-token limit"
++            )
++        if any(isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens):
++            raise RuntimeContractError("Kokoro reference token ids must be integers")
++        return [int(token) for token in tokens]
++
++    @staticmethod
++    def _validate_reference_audio(
++        audio_24k: np.ndarray, audio_16k: np.ndarray
++    ) -> tuple[np.ndarray, np.ndarray]:
++        wave24 = KokoroCloningRuntime._mono_float_audio(audio_24k, "audio_24k")
++        wave16 = KokoroCloningRuntime._mono_float_audio(audio_16k, "audio_16k")
++        seconds24 = len(wave24) / 24000.0
++        seconds16 = len(wave16) / 16000.0
++        if not REFERENCE_MIN_SECONDS <= seconds24 <= REFERENCE_MAX_SECONDS:
++            raise RuntimeContractError("Kokoro reference audio must be 3–30 seconds")
++        if abs(seconds24 - seconds16) > AUDIO_DURATION_TOLERANCE_SECONDS:
++            raise RuntimeContractError("Kokoro reference audio sample-rate durations do not agree")
++        for wave, name in ((wave24, "audio_24k"), (wave16, "audio_16k")):
++            rms = np.sqrt(np.mean(np.square(wave, dtype=np.float64)))
++            if rms < REFERENCE_SPEECH_RMS_MINIMUM:
++                raise RuntimeContractError(f"Kokoro reference {name} is silent or too quiet")
++            clipped = np.mean(np.abs(wave) >= REFERENCE_CLIPPING_THRESHOLD)
++            if clipped > REFERENCE_CLIPPING_FRACTION_MAXIMUM:
++                raise RuntimeContractError(f"Kokoro reference {name} is severely clipped")
++        return wave24, wave16
++
++    @staticmethod
++    def _mono_float_audio(value: np.ndarray, name: str) -> np.ndarray:
++        audio = np.asarray(value)
++        if audio.ndim != 1 or not np.issubdtype(audio.dtype, np.floating):
++            raise RuntimeContractError(f"{name} must be a mono one-dimensional float array")
++        if not np.all(np.isfinite(audio)):
++            raise RuntimeContractError(f"{name} must contain only finite samples")
++        return np.ascontiguousarray(audio, dtype=np.float32)
++
++    @staticmethod
++    def _validate_observation(
++        value: np.ndarray, shape: tuple[int, ...], name: str
++    ) -> np.ndarray:
++        observation = np.asarray(value, dtype=np.float32)
++        if observation.shape != shape or not np.all(np.isfinite(observation)):
++            raise RuntimeContractError(f"Kokoro {name} output must be finite with shape {shape}")
++        return observation
++
++    @staticmethod
++    def _require_inputs(session: Any, required: set[str], component: str) -> None:
++        names = SplitKokoroRuntime._session_names(session)
++        if names and not required <= names:
++            raise RuntimeContractError(
++                f"Kokoro {component} graph is missing inputs: "
++                + ", ".join(sorted(required - names))
++            )
+diff --git a/tests/fixtures/kokoro_cloning_reference_mel.npz b/tests/fixtures/kokoro_cloning_reference_mel.npz
+new file mode 100644
+index 0000000..4fa46f2
+Binary files /dev/null and b/tests/fixtures/kokoro_cloning_reference_mel.npz differ
+diff --git a/tests/test_catalog.py b/tests/test_catalog.py
+index 39e0167..327528f 100644
+--- a/tests/test_catalog.py
++++ b/tests/test_catalog.py
+@@ -338,3 +338,100 @@ def test_kokoro_conflicting_timing_declarations_fail(tmp_path):
+ def test_catalog_item_timing_output_tolerates_malformed_metadata(metadata):
+     item = CatalogItem("kokoro", "v1.0", "model", (), metadata=metadata)
+     assert item.timing_output is None
++
++
++
++def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path):
++    components = (
++        "reference_wavlm",
++        "reference_encoders",
++        "reference_mapper",
++        "prosody",
++        "curves",
++        "decoder",
++    )
++    artifacts = [
++        {
++            "role": "model",
++            "component": component,
++            "quality": quality,
++            "local_name": f"{component}-{quality}.onnx",
++            "url": "https://example.invalid/model.onnx",
++            "sha256": "a" * 64,
++        }
++        for quality in ("fp32", "int8")
++        for component in components
++    ]
++    artifacts.extend(
++        [
++            {
++                "role": "metadata",
++                "component": "source_params",
++                "local_name": "source_params.npz",
++                "url": "https://example.invalid/source_params.npz",
++                "sha256": "b" * 64,
++            },
++            {
++                "role": "config",
++                "local_name": "config.json",
++                "url": "https://example.invalid/config.json",
++                "sha256": "c" * 64,
++            },
++        ]
++    )
++    raw = {
++        "models": {
++            "clone": {
++                "sample_rate": 24000,
++                "runtime": {
++                    "layout": "cloning-onnx-v1",
++                    "voice_mode": "reference",
++                    "speed_supported": False,
++                    "style_dimensions": {"acoustic": 128, "duration": 128},
++                    "reference": {
++                        "format": "akinvox-cloning-reference-v1",
++                        "sample_rate": 24000,
++                        "identity_sample_rate": 16000,
++                        "min_seconds": 3.0,
++                        "max_seconds": 30.0,
++                        "style_width": 256,
++                        "memory_width": 192,
++                    },
++                },
++                "distributions": [{"id": "release", "artifacts": artifacts}],
++            }
++        }
++    }
++    source = tmp_path / "kokoro-clone.json"
++    source.write_text(json.dumps(raw), encoding="utf-8")
++    item = CatalogClient(
++        cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}
++    ).resolve("kokoro:clone", quality="int8")
++
++    assert item.voices == ()
++    assert item.default_voice is None
++    assert item.metadata["runtime"]["layout"] == "cloning-onnx-v1"
++    assert item.metadata["runtime"]["reference"]["identity_sample_rate"] == 16000
++    model_artifacts = [artifact for artifact in item.artifacts if artifact.role == "model"]
++    assert {artifact.component for artifact in model_artifacts} == set(components)
++    assert len(model_artifacts) == len(components)
++    assert {artifact.quality for artifact in model_artifacts} == {"int8"}
++    assert any(
++        artifact.role == "metadata" and artifact.component == "source_params"
++        for artifact in item.artifacts
++    )
++
++
++    incomplete = json.loads(json.dumps(raw))
++    incomplete["models"]["clone"]["distributions"][0]["artifacts"] = [
++        artifact
++        for artifact in incomplete["models"]["clone"]["distributions"][0]["artifacts"]
++        if artifact.get("component") != "curves"
++    ]
++    incomplete_source = tmp_path / "kokoro-clone-incomplete.json"
++    incomplete_source.write_text(json.dumps(incomplete), encoding="utf-8")
++    incomplete_client = CatalogClient(
++        cache_dir=tmp_path / "incomplete-cache", sources={"kokoro": str(incomplete_source)}
++    )
++    with pytest.raises(CatalogError, match="missing model components: curves"):
++        incomplete_client.resolve("kokoro:clone")
+diff --git a/tests/test_kokoro_cloning.py b/tests/test_kokoro_cloning.py
+new file mode 100644
+index 0000000..106c211
+--- /dev/null
++++ b/tests/test_kokoro_cloning.py
+@@ -0,0 +1,497 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from onnxvoice.errors import CapabilityError, RuntimeContractError
++from onnxvoice.manager import OnnxVoice
++from onnxvoice.systems.kokoro import KokoroAdapter
++from onnxvoice.systems.kokoro_cloning import (
++    CLONING_MODEL_COMPONENTS,
++    KokoroCloningRuntime,
++    KokoroReferenceState,
++    kokoro_model_fingerprint,
++    reference_mels,
++)
++from onnxvoice.types import Installation, InstalledArtifact, SessionDiagnostic
++
++
++def _installation(tmp_path, *, layout="cloning-onnx-v1", digest_offset=0):
++    tmp_path.mkdir(parents=True, exist_ok=True)
++    artifacts = []
++    for index, component in enumerate(CLONING_MODEL_COMPONENTS):
++        path = tmp_path / f"{component}.onnx"
++        path.write_bytes(f"model-{component}".encode())
++        artifacts.append(
++            InstalledArtifact(
++                "model",
++                path.name,
++                path,
++                f"{index + digest_offset + 1:064x}",
++                path.stat().st_size,
++                component=component,
++            )
++        )
++
++    source_path = tmp_path / "source_params.npz"
++    np.savez(
++        source_path,
++        weight=np.ones((1, 9), dtype=np.float32),
++        bias=np.zeros(1, dtype=np.float32),
++        window=np.ones(20, dtype=np.float32),
++    )
++    artifacts.append(
++        InstalledArtifact(
++            "metadata",
++            source_path.name,
++            source_path,
++            f"{len(CLONING_MODEL_COMPONENTS) + digest_offset + 1:064x}",
++            source_path.stat().st_size,
++            component="source_params",
++        )
++    )
++    config_path = tmp_path / "config.json"
++    config_path.write_text(json.dumps({"max_tokens": 510}), encoding="utf-8")
++    artifacts.append(
++        InstalledArtifact(
++            "config", config_path.name, config_path, "f" * 64, config_path.stat().st_size
++        )
++    )
++    return Installation(
++        "kokoro",
++        "clone",
++        "model",
++        tmp_path,
++        tuple(artifacts),
++        sample_rate=24000,
++        metadata={"runtime": {"layout": layout}},
++    )
++
++
++def _state(*, fingerprint="a" * 64):
++    return KokoroReferenceState(
++        style=np.zeros((1, 256), dtype=np.float64),
++        memory=np.ones((1, 3, 192), dtype=np.float64),
++        memory_mask=np.array([[1, 0, 1]], dtype=np.int8),
++        model_fingerprint=fingerprint,
++        metadata={"reference_seconds": 3.0},
++    )
++
++
++class EnrollmentSession:
++    def __init__(self, component, order):
++        self.component = component
++        self.order = order
++        self.inputs = None
++        self.closed = False
++        self.input_names = {
++            "reference_encoders": ("mel",),
++            "reference_wavlm": ("input_values",),
++            "reference_mapper": (
++                "mel",
++                "mel_lengths",
++                "reference_ids",
++                "reference_lengths",
++                "wavlm",
++                "raw_sdec",
++                "raw_spred",
++            ),
++        }[component]
++        self.output_names = {
++            "reference_encoders": ("raw_sdec", "raw_spred"),
++            "reference_wavlm": ("wavlm",),
++            "reference_mapper": ("style", "reference_memory", "reference_mask"),
++        }[component]
++
++    def run(self, inputs):
++        self.order.append(self.component)
++        self.inputs = inputs
++        if self.component == "reference_encoders":
++            return [np.full((1, 128), 0.25, np.float32), np.full((1, 128), 0.5, np.float32)]
++        if self.component == "reference_wavlm":
++            return [np.ones((1, 512), np.float32)]
++        return [
++            np.arange(256, dtype=np.float32)[None],
++            np.ones((1, 3, 192), np.float32),
++            np.array([[False, False, True]]),
++        ]
++
++    def close(self):
++        self.closed = True
++
++
++def _audio_pair():
++    time24 = np.arange(72000, dtype=np.float32) / 24000.0
++    time16 = np.arange(48000, dtype=np.float32) / 16000.0
++    audio24 = 0.1 * np.sin(2 * np.pi * 220 * time24)
++    audio16 = 0.1 * np.sin(2 * np.pi * 220 * time16)
++    return audio24.astype(np.float32), audio16.astype(np.float32)
++
++
++class SynthesisSession:
++    def __init__(self, component, run_order, durations=None):
++        self.component = component
++        self.run_order = run_order
++        self.durations = np.asarray(durations if durations is not None else [1, 2, 1, 1])
++        self.inputs = None
++        self.closed = False
++        self.input_names = {
++            "prosody": ("input_ids", "style_dur", "reference_memory", "reference_mask"),
++            "curves": ("en", "style_dur"),
++            "decoder": ("asr", "f0_curve", "n_curve", "style_acou", "har"),
++        }[component]
++        self.output_names = {
++            "prosody": ("pred_dur", "d", "t_en"),
++            "curves": ("f0_curve", "n_curve"),
++            "decoder": ("audio",),
++        }[component]
++
++    def run(self, inputs):
++        self.run_order.append(self.component)
++        self.inputs = inputs
++        if self.component == "prosody":
++            count = len(self.durations)
++            return [
++                self.durations,
++                np.arange(count * 512, dtype=np.float32).reshape(1, count, 512),
++                np.arange(512 * count, dtype=np.float32).reshape(1, 512, count),
++            ]
++        if self.component == "curves":
++            frames = inputs["en"].shape[-1]
++            return [np.zeros((1, frames), np.float32), np.ones((1, frames), np.float32)]
++        return [np.array([[0.1, 0.2, 0.3]], dtype=np.float32)]
++
++    def diagnostics(self):
++        return SessionDiagnostic(
++            component=self.component,
++            model_path=Path(f"{self.component}.onnx"),
++            providers_requested=("CPUExecutionProvider",),
++            providers_active=("CPUExecutionProvider",),
++            inputs=self.input_names,
++            outputs=self.output_names,
++        )
++
++    def close(self):
++        self.closed = True
++
++
++def test_reference_state_owns_canonical_read_only_arrays():
++    style = np.zeros((1, 256), dtype=np.float64)
++    memory = np.ones((1, 3, 192), dtype=np.float64)
++    mask = np.array([[1, 0, 1]], dtype=np.int8)
++    state = KokoroReferenceState(style, memory, mask, "a" * 64)
++
++    assert state.style.dtype == np.float32
++    assert state.memory.dtype == np.float32
++    assert state.memory_mask.dtype == np.bool_
++    assert state.style.flags.c_contiguous and not state.style.flags.writeable
++    assert state.memory.flags.c_contiguous and not state.memory.flags.writeable
++    assert state.memory_mask.flags.c_contiguous and not state.memory_mask.flags.writeable
++    assert not np.shares_memory(state.style, style)
++    assert not np.shares_memory(state.memory, memory)
++    assert not np.shares_memory(state.memory_mask, mask)
++
++
++def test_reference_state_validates_shapes_finiteness_and_fingerprint():
++    with pytest.raises(RuntimeContractError, match="style must have shape"):
++        KokoroReferenceState(np.zeros(256), np.zeros((1, 1, 192)), np.ones((1, 1)), "f")
++    with pytest.raises(RuntimeContractError, match="memory must have shape"):
++        KokoroReferenceState(np.zeros((1, 256)), np.zeros((1, 0, 192)), np.ones((1, 0)), "f")
++    with pytest.raises(RuntimeContractError, match="mask must have shape"):
++        KokoroReferenceState(np.zeros((1, 256)), np.zeros((1, 1, 192)), np.ones((1, 2)), "f")
++    with pytest.raises(RuntimeContractError, match="finite"):
++        KokoroReferenceState(
++            np.full((1, 256), np.nan), np.zeros((1, 1, 192)), np.ones((1, 1)), "f"
++        )
++    with pytest.raises(RuntimeContractError, match="non-empty model fingerprint"):
++        KokoroReferenceState(np.zeros((1, 256)), np.zeros((1, 1, 192)), np.ones((1, 1)), " ")
++
++
++def test_model_fingerprint_uses_artifact_hashes_not_local_paths(tmp_path):
++    first = kokoro_model_fingerprint(_installation(tmp_path / "one"))
++    second = kokoro_model_fingerprint(_installation(tmp_path / "two"))
++    changed = kokoro_model_fingerprint(_installation(tmp_path / "three", digest_offset=10))
++
++    assert first == second
++    assert first != changed
++    assert len(first) == 64
++
++
++def test_adapter_routes_cloning_layout_without_exposing_single_session(tmp_path):
++    adapter = KokoroAdapter(_installation(tmp_path))
++
++    assert adapter._uses_cloning_runtime()
++    with pytest.raises(CapabilityError, match="do not expose a single session"):
++        _ = adapter.session
++    with pytest.raises(RuntimeContractError, match="reference state must be provided"):
++        adapter.infer([1, 2])
++    with pytest.raises(CapabilityError, match="Static style input"):
++        adapter.infer([1, 2], style=np.zeros(256))
++
++
++def test_reference_state_arguments_are_clone_only(tmp_path):
++    adapter = KokoroAdapter(_installation(tmp_path, layout="single-onnx-v1"))
++    state = _state()
++
++    with pytest.raises(CapabilityError, match="requires the cloning-onnx-v1 layout"):
++        adapter.infer([1, 2], reference=state)
++    with pytest.raises(CapabilityError, match="Reference enrollment requires"):
++        adapter.prepare_reference([1], audio_24k=np.zeros(72000), audio_16k=np.zeros(48000))
++
++
++
++def test_reference_mels_match_upstream_torchaudio_fixture():
++    """Fixture uses AkinVox's published reference_mel.py preprocessing."""
++    fixture_path = Path(__file__).parent / "fixtures" / "kokoro_cloning_reference_mel.npz"
++    with np.load(fixture_path, allow_pickle=False) as fixture:
++        mapper_mel, encoder_mel = reference_mels(fixture["wave"])
++        assert mapper_mel.shape[-1] == fixture["mapper_frames"]
++        assert encoder_mel.shape[-1] == fixture["encoder_frames"]
++        np.testing.assert_allclose(mapper_mel, fixture["mapper_mel"], rtol=1.0e-5, atol=2.0e-4)
++        np.testing.assert_allclose(
++            encoder_mel, fixture["padded_encoder_mel"], rtol=1.0e-5, atol=2.0e-4
++        )
++
++
++def test_reference_enrollment_runs_only_enrollment_components(tmp_path):
++    order = []
++    sessions = {}
++
++    def factory(_path, component):
++        session = EnrollmentSession(component, order)
++        sessions[component] = session
++        return session
++
++    runtime = KokoroCloningRuntime(_installation(tmp_path), session_factory=factory)
++    audio24, audio16 = _audio_pair()
++    state = runtime.prepare_reference([12, 24], audio_24k=audio24, audio_16k=audio16)
++
++    assert order == ["reference_encoders", "reference_wavlm", "reference_mapper"]
++    assert set(sessions) == set(order)
++    assert sessions["reference_encoders"].inputs["mel"].shape == (1, 1, 80, 274)
++    assert sessions["reference_wavlm"].inputs["input_values"].shape == (1, 48000)
++    np.testing.assert_array_equal(sessions["reference_wavlm"].inputs["input_values"][0], audio16)
++    mapper_inputs = sessions["reference_mapper"].inputs
++    assert mapper_inputs["mel"].shape == (1, 80, 241)
++    np.testing.assert_array_equal(mapper_inputs["mel_lengths"], np.array([241], np.int64))
++    np.testing.assert_array_equal(mapper_inputs["reference_ids"], np.array([[0, 12, 24, 0]]))
++    np.testing.assert_array_equal(mapper_inputs["reference_lengths"], np.array([4], np.int64))
++    np.testing.assert_array_equal(mapper_inputs["raw_sdec"], np.full((1, 128), 0.25, np.float32))
++    np.testing.assert_array_equal(mapper_inputs["raw_spred"], np.full((1, 128), 0.5, np.float32))
++    np.testing.assert_allclose(np.linalg.norm(mapper_inputs["wavlm"], axis=-1), [1.0])
++    np.testing.assert_array_equal(state.style, np.arange(256, dtype=np.float32)[None])
++    assert state.memory.shape == (1, 3, 192)
++    assert state.memory_mask.dtype == np.bool_
++    assert state.model_fingerprint == runtime.model_fingerprint
++    assert state.metadata["format"] == "akinvox-cloning-reference-v1"
++    assert not any("audio" in key for key in state.metadata)
++    assert not hasattr(state, "audio_24k")
++
++
++def test_reference_validation_precedes_session_creation(tmp_path):
++    sessions = []
++
++    def factory(_path, component):
++        sessions.append(component)
++        return EnrollmentSession(component, [])
++
++    runtime = KokoroCloningRuntime(_installation(tmp_path), session_factory=factory)
++    audio24, audio16 = _audio_pair()
++    invalid_inputs = [
++        ([], audio24, audio16),
++        ([1] * 509, audio24, audio16),
++        ([1], audio24[: 2 * 24000], audio16[: 2 * 16000]),
++        ([1], audio24, audio16[:-1000]),
++        ([1], np.zeros_like(audio24), audio16),
++        ([1], np.ones_like(audio24), audio16),
++        ([1], np.where(np.arange(len(audio24)) == 0, np.nan, audio24), audio16),
++        ([1], audio24.astype(np.int16), audio16),
++        ([1], audio24, np.zeros_like(audio16)),
++        ([1], audio24, np.ones_like(audio16)),
++        ([1], audio24, np.where(np.arange(len(audio16)) == 0, np.nan, audio16)),
++    ]
++
++    for tokens, wave24, wave16 in invalid_inputs:
++        with pytest.raises(RuntimeContractError):
++            runtime.prepare_reference(tokens, audio_24k=wave24, audio_16k=wave16)
++        assert not sessions
++        assert not runtime._sessions
++
++
++
++def _run_synthesis(tmp_path, *, durations=None):
++    run_order = []
++    sessions = {}
++
++    def factory(_path, component):
++        session = SynthesisSession(component, run_order, durations)
++        sessions[component] = session
++        return session
++
++    adapter = KokoroAdapter(_installation(tmp_path), session_factory=factory)
++    state = KokoroReferenceState(
++        style=np.arange(256, dtype=np.float32)[None],
++        memory=np.ones((1, 3, 192), dtype=np.float32),
++        memory_mask=np.array([[False, False, True]]),
++        model_fingerprint=kokoro_model_fingerprint(adapter.installation),
++    )
++    return adapter, state, sessions, run_order
++
++
++def test_cloning_synthesis_expands_duration_and_routes_style_slices(tmp_path):
++    adapter, state, sessions, run_order = _run_synthesis(tmp_path)
++
++    result = adapter.infer([7, 8], reference=state, seed=17)
++
++    assert run_order == ["prosody", "curves", "decoder"]
++    assert set(sessions) == {"prosody", "curves", "decoder"}
++    prosody_inputs = sessions["prosody"].inputs
++    np.testing.assert_array_equal(prosody_inputs["input_ids"], [[0, 7, 8, 0]])
++    np.testing.assert_array_equal(prosody_inputs["style_dur"], np.arange(128, 256)[None])
++    np.testing.assert_array_equal(prosody_inputs["reference_memory"], state.memory)
++    np.testing.assert_array_equal(prosody_inputs["reference_mask"], state.memory_mask)
++    curve_inputs = sessions["curves"].inputs
++    np.testing.assert_array_equal(curve_inputs["style_dur"], np.arange(128, 256)[None])
++    assert curve_inputs["en"].shape == (1, 512, 5)
++    expansion_index = np.array([0, 1, 1, 2, 3])
++    duration_embedding = np.arange(4 * 512, dtype=np.float32).reshape(1, 4, 512)
++    np.testing.assert_array_equal(
++        curve_inputs["en"], duration_embedding.transpose(0, 2, 1)[:, :, expansion_index]
++    )
++    decoder_inputs = sessions["decoder"].inputs
++    np.testing.assert_array_equal(decoder_inputs["style_acou"], np.arange(128)[None])
++    assert decoder_inputs["asr"].shape == (1, 512, 5)
++    np.testing.assert_array_equal(result.timings, [1, 2, 1, 1])
++    assert result.audio.dtype == np.float32
++    assert result.sample_rate == 24000
++    assert result.metadata["layout"] == "cloning-onnx-v1"
++    assert result.metadata["seed"] == 17
++    assert result.metadata["speed"] == 1.0
++    assert len(result.metadata["reference_fingerprint"]) == 64
++
++
++def test_precomputed_state_skips_enrollment_sessions_and_tracks_lifecycle(tmp_path):
++    adapter, state, sessions, run_order = _run_synthesis(tmp_path)
++
++    first = adapter.infer([7, 8], reference=state, seed=17)
++    first_har = sessions["decoder"].inputs["har"].copy()
++    second = adapter.infer([7, 8], reference=state, seed=17)
++    second_har = sessions["decoder"].inputs["har"].copy()
++    adapter.infer([7, 8], reference=state, seed=18)
++    third_har = sessions["decoder"].inputs["har"].copy()
++
++    assert first.metadata["reference_fingerprint"] == second.metadata["reference_fingerprint"]
++    np.testing.assert_array_equal(first.audio, second.audio)
++    np.testing.assert_array_equal(first_har, second_har)
++    assert not np.array_equal(first_har, third_har)
++    assert not any(component.startswith("reference_") for component in sessions)
++    diagnostics = adapter.diagnostics()
++    assert {session.component for session in diagnostics.sessions} == {"prosody", "curves", "decoder"}
++    assert all(session.providers_active == ("CPUExecutionProvider",) for session in diagnostics.sessions)
++    assert run_order == ["prosody", "curves", "decoder"] * 3
++
++    adapter.close()
++    adapter.close()
++    assert all(session.closed for session in sessions.values())
++
++
++@pytest.mark.parametrize(
++    "durations, message",
++    [
++        ([1, 0, 1, 1], "at least one frame"),
++        ([1, np.nan, 1, 1], "finite"),
++        ([1, 1.5, 1, 1], "integers"),
++        ([1001, 1001, 1001, 1001], "exceeds 4000 frames"),
++    ],
++)
++def test_cloning_duration_safety_limits(tmp_path, durations, message):
++    adapter, state, sessions, _ = _run_synthesis(tmp_path, durations=durations)
++
++    with pytest.raises(RuntimeContractError, match=message):
++        adapter.infer([7, 8], reference=state)
++    assert set(sessions) == {"prosody"}
++
++
++@pytest.mark.parametrize(
++    "speed, fingerprint, error, message",
++    [
++        (1.25, None, CapabilityError, "does not support speed"),
++        (1.0, "b" * 64, RuntimeContractError, "different model build"),
++    ],
++)
++def test_cloning_rejects_unsupported_speed_and_model_state(tmp_path, speed, fingerprint, error, message):
++    adapter, state, sessions, _ = _run_synthesis(tmp_path)
++    if fingerprint is not None:
++        state = KokoroReferenceState(
++            state.style, state.memory, state.memory_mask, fingerprint
++        )
++
++    with pytest.raises(error, match=message):
++        adapter.infer([7, 8], reference=state, speed=speed)
++    assert not sessions
++
++
++
++def test_local_component_mapping_runs_fake_enrollment_and_synthesis(tmp_path):
++    components = (
++        "reference_wavlm",
++        "reference_encoders",
++        "reference_mapper",
++        "prosody",
++        "curves",
++        "decoder",
++    )
++    artifacts = {}
++    for component in components:
++        path = tmp_path / f"{component}.onnx"
++        path.write_bytes(b"model")
++        artifacts[f"model:{component}"] = path
++    source_path = tmp_path / "source_params.npz"
++    np.savez(
++        source_path,
++        weight=np.ones((1, 9), np.float32),
++        bias=np.zeros(1, np.float32),
++        window=np.ones(20, np.float32),
++    )
++    artifacts["metadata:source_params"] = source_path
++    config_path = tmp_path / "config.json"
++    config_path.write_text(json.dumps({"max_tokens": 510}), encoding="utf-8")
++    artifacts["config"] = config_path
++    adapter = OnnxVoice.open_local(
++        system="kokoro",
++        artifacts=artifacts,
++        runtime={"layout": "cloning-onnx-v1", "voice_mode": "reference"},
++        sample_rate=24000,
++    )
++    order = []
++    sessions = {}
++
++    def factory(_path, component):
++        if component in {"reference_encoders", "reference_wavlm", "reference_mapper"}:
++            session = EnrollmentSession(component, order)
++        else:
++            session = SynthesisSession(component, order)
++        sessions[component] = session
++        return session
++
++    adapter._split_session_factory = factory
++    audio24, audio16 = _audio_pair()
++    state = adapter.prepare_reference([5, 6], audio_24k=audio24, audio_16k=audio16)
++    result = adapter.infer([7, 8], reference=state, seed=9)
++
++    assert order == [
++        "reference_encoders",
++        "reference_wavlm",
++        "reference_mapper",
++        "prosody",
++        "curves",
++        "decoder",
++    ]
++    assert adapter.installation.voices == ()
++    assert adapter.installation.default_voice is None
++    assert result.metadata["layout"] == "cloning-onnx-v1"
++    adapter.close()
++    assert all(session.closed for session in sessions.values())
+diff --git a/tests/test_local_runtime.py b/tests/test_local_runtime.py
+index c10a031..44830ba 100644
+--- a/tests/test_local_runtime.py
++++ b/tests/test_local_runtime.py
+@@ -29,3 +29,40 @@ def test_module_local_runtime_does_not_create_default_cache(tmp_path, monkeypatc
+
+     assert adapter.installation.artifact("model").path == model
+     assert not cache.exists()
++
++
++
++def test_local_kokoro_cloning_accepts_generic_role_component_artifacts(tmp_path):
++    components = (
++        "reference_wavlm",
++        "reference_encoders",
++        "reference_mapper",
++        "prosody",
++        "curves",
++        "decoder",
++    )
++    artifacts = {}
++    for component in components:
++        path = tmp_path / f"{component}.onnx"
++        path.write_bytes(b"model")
++        artifacts[f"model:{component}"] = path
++    source_params = tmp_path / "source_params.npz"
++    source_params.write_bytes(b"parameters")
++    artifacts["metadata:source_params"] = source_params
++    config = tmp_path / "config.json"
++    config.write_text("{}", encoding="utf-8")
++    artifacts["config"] = config
++
++    adapter = OnnxVoice.open_local(
++        system="kokoro",
++        artifacts=artifacts,
++        runtime={"layout": "cloning-onnx-v1", "voice_mode": "reference"},
++        sample_rate=24000,
++    )
++
++    model_artifacts = adapter.installation.artifacts_for(role="model")
++    assert {artifact.component for artifact in model_artifacts} == set(components)
++    assert adapter.installation.artifact("metadata", component="source_params").path == source_params
++    assert adapter.installation.voices == ()
++    assert adapter.installation.default_voice is None
++    assert adapter._uses_cloning_runtime()

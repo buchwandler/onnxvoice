@@ -1,0 +1,63 @@
+{
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "additions": 1327,
+      "deletions": 16,
+      "patch_file": "37bb0b8.patch",
+      "patch_sha256": "e324485cf003a5decf6b4b8d8444f1f9aaef0257ac1ae87072b44d5855101daa",
+      "paths": [
+        "docs/systems/kokoro.md",
+        "onnxvoice/__init__.py",
+        "onnxvoice/catalog.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/systems/__init__.py",
+        "onnxvoice/systems/kokoro.py",
+        "onnxvoice/systems/kokoro_cloning.py",
+        "tests/fixtures/kokoro_cloning_reference_mel.npz",
+        "tests/test_catalog.py",
+        "tests/test_kokoro_cloning.py",
+        "tests/test_local_runtime.py"
+      ],
+      "sha": "37bb0b89a4e86c423baed90baf64f420a1b731d5",
+      "short_sha": "37bb0b8",
+      "source_ref": "git:37bb0b89a4e86c423baed90baf64f420a1b731d5"
+    },
+    {
+      "additions": 2409,
+      "deletions": 62,
+      "patch_file": "ae2684c.patch",
+      "patch_sha256": "94c2e880d60389995418e8e9414da079675c882f659f91e71e3af055c3b0e447",
+      "paths": [
+        "docs/systems/kokoro.md",
+        "onnxvoice/__init__.py",
+        "onnxvoice/catalog.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/systems/__init__.py",
+        "onnxvoice/systems/kokoro.py",
+        "onnxvoice/systems/kokoro_cloning.py",
+        "onnxvoice/systems/kokoro_inno.py",
+        "pyproject.toml",
+        "tests/fixtures/inno_fbank.npz",
+        "tests/fixtures/inno_prosody.json",
+        "tests/test_catalog.py",
+        "tests/test_kokoro_cloning.py",
+        "tests/test_kokoro_inno.py",
+        "tests/test_kokoro_inno_export.py",
+        "tests/test_local_runtime.py",
+        "tools/export_kokoro_inno.py"
+      ],
+      "sha": "ae2684c5382921e48a11833b666c99284709f2e8",
+      "short_sha": "ae2684c",
+      "source_ref": "git:ae2684c5382921e48a11833b666c99284709f2e8"
+    }
+  ],
+  "git_base_ref": "305208a98e62b201291dec71b7d4e2b04e8567b4",
+  "git_base_sha": "305208a98e62b201291dec71b7d4e2b04e8567b4",
+  "git_head_ref": "ae2684c5382921e48a11833b666c99284709f2e8",
+  "git_head_sha": "ae2684c5382921e48a11833b666c99284709f2e8",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.1",
+  "schema_version": 1
+}

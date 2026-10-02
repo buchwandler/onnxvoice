@@ -1,0 +1,2904 @@
+ docs/systems/kokoro.md              |   43 +-
+ onnxvoice/__init__.py               |    2 +
+ onnxvoice/catalog.py                |  137 ++++-
+ onnxvoice/manager.py                |   12 +-
+ onnxvoice/systems/__init__.py       |    2 +
+ onnxvoice/systems/kokoro.py         |  100 +++-
+ onnxvoice/systems/kokoro_cloning.py |   61 ++-
+ onnxvoice/systems/kokoro_inno.py    | 1013 +++++++++++++++++++++++++++++++++++
+ pyproject.toml                      |    2 +
+ tests/fixtures/inno_fbank.npz       |  Bin 0 -> 1047201 bytes
+ tests/fixtures/inno_prosody.json    |   69 +++
+ tests/test_catalog.py               |  121 ++++-
+ tests/test_kokoro_cloning.py        |   25 +-
+ tests/test_kokoro_inno.py           |  532 ++++++++++++++++++
+ tests/test_kokoro_inno_export.py    |  130 +++++
+ tests/test_local_runtime.py         |   69 ++-
+ tools/export_kokoro_inno.py         |  153 ++++++
+ 17 files changed, 2409 insertions(+), 62 deletions(-)
+
+diff --git a/docs/systems/kokoro.md b/docs/systems/kokoro.md
+index 5592e10..497c20f 100644
+--- a/docs/systems/kokoro.md
++++ b/docs/systems/kokoro.md
+@@ -1,10 +1,49 @@
+ # Kokoro
+
+-Kokoro supports a single ONNX model, the `split-onnx-v1` multi-component layout, and the reference-conditioned `cloning-onnx-v1` layout. Single and split inference accept caller-prepared model-ready style tensors. Cloning has a separate enrollment boundary and uses a reusable `KokoroReferenceState` instead of stock voices.
++Kokoro supports a single ONNX model, the `split-onnx-v1` multi-component layout, and the reference-conditioned `cloning-onnx-v1` layout. Single and split inference accept caller-prepared model-ready style tensors. Ordinary single and split installations may also advertise optional Inno voice enrollment through `runtime.voice_enrollers`; Inno adds components without changing the Kokoro layout. Cloning remains separate and uses a reusable `KokoroReferenceState` instead of stock voices.
+
+ ## Quality and distribution
+
+-A quality selection chooses a model variant within a distribution. It does not install every quality variant. Non-model runtime artifacts required by the selected distribution are installed with it. Explicit quality and distribution selections can have separate installation identities. A cloning distribution includes its enrollment graphs, synthesis graphs, source parameters, and config together for each supported quality.
++A quality selection chooses a base Kokoro model variant within a distribution. It does not install every quality variant. Required runtime artifacts are installed with the selected model. An Inno distribution keeps its shared `model:inno_voicepack` and `metadata:inno_tuner` artifacts when selecting a base-model quality. Explicit quality and distribution selections can have separate installation identities. A cloning distribution includes its enrollment graphs, synthesis graphs, source parameters, and config together for each supported quality.
++
++## Optional Inno voice enrollment
++
++Inno v0.2 adds reference-audio enrollment as an optional capability on ordinary single or split Kokoro installations. The base Kokoro inference graph remains separate. Enrollment uses an ONNX Runtime graph plus host-side preprocessing, and does not import PyTorch, Torchaudio, Transformers, or upstream Inno. Install the optional preprocessing dependencies with `pip install 'onnxvoice[inno]'`. The ONNX Runtime provider remains an independent installation choice.
++
++Catalog runtime metadata advertises the capability and names its artifacts as `model:inno_voicepack` and `metadata:inno_tuner`. Catalog parsing verifies that both are present and shared across base-model qualities. A local installation can use the same artifact roles and components:
++
++```python
++from onnxvoice import OnnxVoice
++
++# Copy the inno-v0.2 entry from catalog runtime.voice_enrollers.
++runtime = OnnxVoice.open_local(
++    system="kokoro",
++    artifacts={
++        "model": "model.onnx",
++        "voices": "voices.npz",
++        "model:inno_voicepack": "inno-voicepack.onnx",
++        "metadata:inno_tuner": "inno-tuner.npz",
++    },
++    runtime={
++        "layout": "single-onnx-v1",
++        "voice_enrollers": [inno_capability_metadata],
++    },
++    sample_rate=24000,
++)
++```
++
++`inno_capability_metadata` must declare id `inno-v0.2`, kind `kokoro-voicepack-tuner`, reference-audio input, no transcript requirement, duration limits of 3/5/30 seconds, output format `kokoro-voicepack-v1` with shape `[510, 1, 256]` and dtype `float32`, and the two component names above. Split installations use their usual `model:prosody`, `model:curves`, and `model:decoder` artifacts alongside the same Inno artifacts.
++
++Enrollment accepts a floating-point waveform and its sample rate. SciPy and Praat/Parselmouth are optional dependencies supplied by the `inno` extra. Inno's ONNX session is loaded only when enrollment is requested; the returned pack can then be used with the ordinary Kokoro inference API without loading the tuner again:
++
++```python
++pack = runtime.enroll_voice(reference_audio, sample_rate=24000)
++result = runtime.infer(token_ids, style=pack.style_for(len(token_ids)))
++```
++
++The `KokoroVoicePack` contains the stock-compatible `[510, 1, 256]` style table and artifact-bound provenance. `style_for` selects the row matching the token count and returns a model-ready style tensor. Enrollment does not replace or alter stock voice styles.
++
++The offline exporter targets `remsky/inno-kokoro` v0.2.0 at commit `892ef184bc932aa3ff9d72c1509d5b81ff6941e6`. Install its exporter-only dependencies with `pip install 'onnxvoice[inno-export]'`, then supply a local checkpoint: `python tools/export_kokoro_inno.py --weights model.safetensors --output inno_voicepack.onnx --metadata-output inno_tuner.npz`. It checks the checkpoint version and records the pinned source revision and checkpoint SHA-256 in the generated metadata and ONNX graph. It does not download weights, and model files are not bundled with onnxvoice.
+
+ ## Single-model runtime
+
+diff --git a/onnxvoice/__init__.py b/onnxvoice/__init__.py
+index 464fc33..fce4347 100644
+--- a/onnxvoice/__init__.py
++++ b/onnxvoice/__init__.py
+@@ -27,6 +27,7 @@ from .store import AssetStore
+ from .systems import (
+     KokoroCloningRuntime,
+     KokoroReferenceState,
++    KokoroVoicePack,
+     SplitKokoroRuntime,
+     register_adapter,
+     registered_systems,
+@@ -148,6 +149,7 @@ __all__ = [
+     "registered_systems",
+     "SplitKokoroRuntime",
+     "KokoroReferenceState",
++    "KokoroVoicePack",
+     "KokoroCloningRuntime",
+     "verify_installation",
+     "validate_onnx",
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index 4c7a558..f3d1253 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -231,7 +231,12 @@ class CatalogClient:
+         if item.system == "pocket":
+             return _select_pocket_profile(item, quality)
+         selected_quality = quality
+-        model_artifacts = [a for a in item.artifacts if a.role == "model"]
++        model_artifacts = [
++            artifact
++            for artifact in item.artifacts
++            if artifact.role == "model"
++            and not (item.system == "kokoro" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT)
++        ]
+         if selected_quality is None and len(model_artifacts) > 1:
+             selected_quality = (
+                 "fp32"
+@@ -243,9 +248,17 @@ class CatalogClient:
+         artifacts = tuple(
+             artifact
+             for artifact in item.artifacts
+-            if artifact.role != "model" or artifact.quality in {None, selected_quality}
++            if (
++                artifact.role != "model"
++                or (item.system == "kokoro" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT)
++                or artifact.quality in {None, selected_quality}
++            )
+         )
+-        if not any(a.role == "model" for a in artifacts):
++        if not any(
++            artifact.role == "model"
++            and not (item.system == "kokoro" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT)
++            for artifact in artifacts
++        ):
+             raise AssetNotFoundError(
+                 f"{ref} has no model artifact with quality={selected_quality!r}"
+             )
+@@ -360,6 +373,123 @@ def _normalize_kokoro_runtime(
+     return runtime, onnx_contract
+
+
++_KOKORO_INNO_ID = "inno-v0.2"
++_KOKORO_INNO_GRAPH_COMPONENT = "inno_voicepack"
++_KOKORO_INNO_METADATA_COMPONENT = "inno_tuner"
++_KOKORO_SPLIT_MODEL_COMPONENTS = frozenset({"prosody", "curves", "decoder"})
++_KOKORO_INNO_LAYOUTS = frozenset({"single", "single-onnx-v1", "split", "multi", "split-onnx-v1"})
++
++
++def _validate_kokoro_voice_enrollers(
++    runtime: Mapping[str, Any], artifacts: Sequence[Artifact]
++) -> None:
++    capabilities = runtime.get("voice_enrollers")
++    if capabilities is None:
++        return
++    if not isinstance(capabilities, (list, tuple)):
++        raise CatalogError("Kokoro runtime voice_enrollers must be a list")
++    seen_ids: set[str] = set()
++    for capability in capabilities:
++        if not isinstance(capability, Mapping):
++            raise CatalogError("Kokoro voice enroller declarations must be objects")
++        enroller_id = capability.get("id")
++        if not isinstance(enroller_id, str) or not enroller_id:
++            raise CatalogError("Kokoro voice enroller declaration is missing its id")
++        if enroller_id in seen_ids:
++            raise CatalogError(f"Kokoro voice enroller id {enroller_id!r} is duplicated")
++        seen_ids.add(enroller_id)
++        if not isinstance(capability.get("kind"), str) or not capability["kind"]:
++            raise CatalogError(f"Kokoro voice enroller {enroller_id!r} is missing its kind")
++        if enroller_id != _KOKORO_INNO_ID:
++            continue
++
++        expected = {
++            "kind": "kokoro-voicepack-tuner",
++            "input": "reference-audio",
++            "model_component": _KOKORO_INNO_GRAPH_COMPONENT,
++            "metadata_component": _KOKORO_INNO_METADATA_COMPONENT,
++        }
++        for key, value in expected.items():
++            if capability.get(key) != value:
++                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
++        if capability.get("transcript_required") is not False:
++            raise CatalogError("Kokoro Inno capability must declare transcript_required=false")
++        for key, value in (
++            ("min_seconds", 3.0),
++            ("recommended_seconds", 5.0),
++            ("max_seconds", 30.0),
++        ):
++            actual = capability.get(key)
++            if isinstance(actual, bool) or not isinstance(actual, (int, float)):
++                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
++            try:
++                actual_value = float(actual)
++            except (OverflowError, ValueError):
++                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}") from None
++            if not math.isfinite(actual_value) or actual_value != value:
++                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
++        output = capability.get("output")
++        shape = output.get("shape") if isinstance(output, Mapping) else None
++        if (
++            not isinstance(output, Mapping)
++            or output.get("format") != "kokoro-voicepack-v1"
++            or not isinstance(shape, (list, tuple))
++            or tuple(shape) != (510, 1, 256)
++            or output.get("dtype") != "float32"
++        ):
++            raise CatalogError("Kokoro Inno capability has an invalid output contract")
++
++        layout = runtime.get("layout", "single")
++        if not isinstance(layout, str) or layout not in _KOKORO_INNO_LAYOUTS:
++            raise CatalogError(f"Kokoro Inno capability does not support layout {layout!r}")
++        base_models = [
++            artifact
++            for artifact in artifacts
++            if artifact.role == "model" and artifact.component != _KOKORO_INNO_GRAPH_COMPONENT
++        ]
++        if not base_models:
++            raise CatalogError("Kokoro Inno distribution is missing its base model artifacts")
++        for quality in {artifact.quality for artifact in base_models}:
++            selected_models = [
++                artifact for artifact in base_models if artifact.quality in {None, quality}
++            ]
++            components = {artifact.component for artifact in selected_models}
++            if layout in {"single", "single-onnx-v1"}:
++                if None not in components:
++                    raise CatalogError(
++                        f"Kokoro Inno quality {quality!r} is missing its single base model"
++                    )
++            elif not components >= _KOKORO_SPLIT_MODEL_COMPONENTS:
++                missing = _KOKORO_SPLIT_MODEL_COMPONENTS - components
++                raise CatalogError(
++                    f"Kokoro Inno quality {quality!r} is missing base model components: "
++                    + ", ".join(sorted(missing))
++                )
++
++        graph_artifacts = [
++            artifact
++            for artifact in artifacts
++            if artifact.role == "model" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT
++        ]
++        metadata_artifacts = [
++            artifact
++            for artifact in artifacts
++            if artifact.role == "metadata" and artifact.component == _KOKORO_INNO_METADATA_COMPONENT
++        ]
++        if len(graph_artifacts) != 1 or len(metadata_artifacts) != 1:
++            raise CatalogError(
++                "Kokoro Inno distribution requires one model:inno_voicepack and "
++                "one metadata:inno_tuner artifact"
++            )
++        graph, metadata = graph_artifacts[0], metadata_artifacts[0]
++        if graph.quality is not None or metadata.quality is not None:
++            raise CatalogError("Kokoro Inno artifacts must be shared across base model qualities")
++        if graph.format not in {None, "onnx"}:
++            raise CatalogError("Kokoro Inno model:inno_voicepack must use ONNX format")
++        if metadata.format not in {None, "npz", "numpy-npz", "json"}:
++            raise CatalogError("Kokoro Inno metadata:inno_tuner must use NPZ or JSON format")
++
++
+ def _parse_kokoro_entry(
+     model_id: str,
+     entry: Mapping[str, Any],
+@@ -410,6 +540,7 @@ def _parse_kokoro_entry(
+             )
+         )
+     runtime, onnx_contract = _normalize_kokoro_runtime(entry)
++    _validate_kokoro_voice_enrollers(runtime, artifacts)
+     if runtime.get("layout") == "cloning-onnx-v1":
+         model_artifacts = [artifact for artifact in artifacts if artifact.role == "model"]
+         model_components = {artifact.component for artifact in model_artifacts}
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 932fb0c..90268d9 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -322,8 +322,18 @@ class OnnxVoice:
+                 )
+             )
+         model_artifact = next(
+-            (artifact for artifact in local_artifacts if artifact.role == "model"), None
++            (
++                artifact
++                for artifact in local_artifacts
++                if artifact.role == "model"
++                and not (system == "kokoro" and artifact.component == "inno_voicepack")
++            ),
++            None,
+         )
++        if model_artifact is None:
++            model_artifact = next(
++                (artifact for artifact in local_artifacts if artifact.role == "model"), None
++            )
+         if model_artifact is None:
+             model_artifact = local_artifacts[0]
+         merged_metadata: dict[str, Any] = {
+diff --git a/onnxvoice/systems/__init__.py b/onnxvoice/systems/__init__.py
+index 90043c4..d627a19 100644
+--- a/onnxvoice/systems/__init__.py
++++ b/onnxvoice/systems/__init__.py
+@@ -5,6 +5,7 @@ from .base import SystemAdapter
+ from .kitten import KittenAdapter
+ from .kokoro import KokoroAdapter
+ from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
++from .kokoro_inno import KokoroVoicePack
+ from .kokoro_split import SplitKokoroRuntime
+ from .piper import PiperAdapter
+ from .pocket import PocketAdapter
+@@ -44,6 +45,7 @@ __all__ = [
+     "SplitKokoroRuntime",
+     "KokoroCloningRuntime",
+     "KokoroReferenceState",
++    "KokoroVoicePack",
+     "register_adapter",
+     "get_adapter",
+     "registered_systems",
+diff --git a/onnxvoice/systems/kokoro.py b/onnxvoice/systems/kokoro.py
+index 1b7fe08..b3516e0 100644
+--- a/onnxvoice/systems/kokoro.py
++++ b/onnxvoice/systems/kokoro.py
+@@ -1,15 +1,22 @@
+ from __future__ import annotations
+
+-from collections.abc import Sequence
++from collections.abc import Mapping, Sequence
+ from typing import Any
+
+ import numpy as np
+
+ from ..errors import CapabilityError, RuntimeContractError
+ from ..runtime import OnnxSession
+-from ..types import InferenceResult, TensorSpec
++from ..types import InferenceResult, RuntimeDiagnostic, TensorSpec
+ from .base import SystemAdapter
+ from .kokoro_cloning import CLONING_LAYOUT, KokoroCloningRuntime, KokoroReferenceState
++from .kokoro_inno import (
++    INNO_ENROLLER_ID,
++    INNO_SUPPORTED_LAYOUTS,
++    InnoVoiceTuner,
++    KokoroVoicePack,
++    validate_inno_installation,
++)
+ from .kokoro_split import SplitKokoroRuntime
+
+
+@@ -20,7 +27,16 @@ class KokoroAdapter(SystemAdapter):
+         super().__init__(*args, **kwargs)
+         self._split_runtime: SplitKokoroRuntime | None = None
+         self._cloning_runtime: KokoroCloningRuntime | None = None
++        self._inno_runtime: InnoVoiceTuner | None = None
+         self._split_session_factory = session_factory
++        runtime = self.installation.metadata.get("runtime") or {}
++        if isinstance(runtime, Mapping):
++            capabilities = runtime.get("voice_enrollers")
++            if isinstance(capabilities, (list, tuple)) and any(
++                isinstance(capability, Mapping) and capability.get("id") == INNO_ENROLLER_ID
++                for capability in capabilities
++            ):
++                validate_inno_installation(self.installation)
+
+     def _uses_split_runtime(self) -> bool:
+         runtime = self.installation.metadata.get("runtime") or {}
+@@ -52,6 +68,40 @@ class KokoroAdapter(SystemAdapter):
+             )
+         return self._cloning_runtime
+
++    def _inno(self) -> InnoVoiceTuner:
++        if self._inno_runtime is None:
++            self._inno_runtime = InnoVoiceTuner(
++                self.installation,
++                session_factory=self._split_session_factory,
++                providers=self.providers,
++                provider_options=self.provider_options,
++                session_options=self.session_options,
++            )
++        return self._inno_runtime
++
++    def enroll_voice(
++        self,
++        audio: np.ndarray,
++        *,
++        sample_rate: int,
++        enroller: str = INNO_ENROLLER_ID,
++        options: Mapping[str, Any] | None = None,
++    ) -> KokoroVoicePack:
++        """Enroll a reference with an advertised Kokoro voice-pack tuner."""
++        if enroller != INNO_ENROLLER_ID:
++            raise CapabilityError(f"Unsupported Kokoro voice enroller {enroller!r}")
++        if self._uses_cloning_runtime():
++            raise CapabilityError(
++                "Inno voice enrollment is available only on ordinary Kokoro layouts"
++            )
++        runtime_metadata = self.installation.metadata.get("runtime") or {}
++        layout = runtime_metadata.get("layout", "single")
++        if layout not in INNO_SUPPORTED_LAYOUTS:
++            raise CapabilityError(
++                f"Inno voice enrollment does not support Kokoro layout {layout!r}"
++            )
++        return self._inno().enroll(audio, sample_rate=sample_rate, options=options)
++
+     def prepare_reference(
+         self,
+         reference_token_ids: Sequence[int],
+@@ -69,13 +119,17 @@ class KokoroAdapter(SystemAdapter):
+     def session(self) -> OnnxSession:
+         if self._session is None:
+             models = [
+-                artifact for artifact in self.installation.artifacts if artifact.role == "model"
++                artifact
++                for artifact in self.installation.artifacts
++                if artifact.role == "model" and artifact.component != "inno_voicepack"
+             ]
+             runtime = self.installation.metadata.get("runtime") or {}
+-            if (
+-                len(models) != 1
+-                or runtime.get("layout") in {"split", "multi", "split-onnx-v1", CLONING_LAYOUT}
+-            ):
++            if len(models) != 1 or runtime.get("layout") in {
++                "split",
++                "multi",
++                "split-onnx-v1",
++                CLONING_LAYOUT,
++            }:
+                 raise CapabilityError(
+                     "Split, cloning, or multi-component Kokoro layouts do not expose a single session"
+                 )
+@@ -87,7 +141,6 @@ class KokoroAdapter(SystemAdapter):
+             )
+         return self._session
+
+-
+     def infer(
+         self,
+         token_ids: Sequence[int],
+@@ -100,9 +153,13 @@ class KokoroAdapter(SystemAdapter):
+     ) -> InferenceResult:
+         if self._uses_cloning_runtime():
+             if style is not None:
+-                raise CapabilityError("Static style input is not supported by the Kokoro cloning layout")
++                raise CapabilityError(
++                    "Static style input is not supported by the Kokoro cloning layout"
++                )
+             if reference is None:
+-                raise RuntimeContractError("A Kokoro reference state must be provided for cloning inference")
++                raise RuntimeContractError(
++                    "A Kokoro reference state must be provided for cloning inference"
++                )
+             return self._cloning().infer(token_ids, reference=reference, speed=speed, seed=seed)
+         if reference is not None:
+             raise CapabilityError("Kokoro reference state requires the cloning-onnx-v1 layout")
+@@ -166,14 +223,27 @@ class KokoroAdapter(SystemAdapter):
+         if self._cloning_runtime is not None:
+             self._cloning_runtime.close()
+             self._cloning_runtime = None
++        if self._inno_runtime is not None:
++            self._inno_runtime.close()
++            self._inno_runtime = None
+         super().close()
+
+-    def diagnostics(self) -> Any:
++    def diagnostics(self) -> RuntimeDiagnostic:
+         if self._split_runtime is not None:
+-            return self._split_runtime.diagnostics()
+-        if self._cloning_runtime is not None:
+-            return self._cloning_runtime.diagnostics()
+-        return super().diagnostics()
++            base = self._split_runtime.diagnostics()
++        elif self._cloning_runtime is not None:
++            base = self._cloning_runtime.diagnostics()
++        else:
++            base = super().diagnostics()
++        if self._inno_runtime is None:
++            return base
++        inno = self._inno_runtime.diagnostics()
++        return RuntimeDiagnostic(
++            system=base.system,
++            ref=base.ref,
++            layout=base.layout,
++            sessions=(*base.sessions, *inno.sessions),
++        )
+
+     def _input_spec(self, name: str) -> TensorSpec | None:
+         for spec in getattr(self.session, "input_specs", ()):
+diff --git a/onnxvoice/systems/kokoro_cloning.py b/onnxvoice/systems/kokoro_cloning.py
+index 0c35e97..6e92922 100644
+--- a/onnxvoice/systems/kokoro_cloning.py
++++ b/onnxvoice/systems/kokoro_cloning.py
+@@ -104,14 +104,25 @@ class KokoroReferenceState:
+
+         if style.shape != (1, 256):
+             raise RuntimeContractError("Kokoro reference style must have shape [1, 256]")
+-        if memory.ndim != 3 or memory.shape[0] != 1 or memory.shape[1] == 0 or memory.shape[2] != 192:
+-            raise RuntimeContractError("Kokoro reference memory must have shape [1, M, 192] with M > 0")
++        if (
++            memory.ndim != 3
++            or memory.shape[0] != 1
++            or memory.shape[1] == 0
++            or memory.shape[2] != 192
++        ):
++            raise RuntimeContractError(
++                "Kokoro reference memory must have shape [1, M, 192] with M > 0"
++            )
+         if memory_mask.shape != memory.shape[:2]:
+             raise RuntimeContractError("Kokoro reference memory mask must have shape [1, M]")
+         if not np.all(np.isfinite(style)) or not np.all(np.isfinite(memory)):
+-            raise RuntimeContractError("Kokoro reference state tensors must contain only finite values")
++            raise RuntimeContractError(
++                "Kokoro reference state tensors must contain only finite values"
++            )
+         if not isinstance(self.model_fingerprint, str) or not self.model_fingerprint.strip():
+-            raise RuntimeContractError("Kokoro reference state requires a non-empty model fingerprint")
++            raise RuntimeContractError(
++                "Kokoro reference state requires a non-empty model fingerprint"
++            )
+         if not isinstance(self.metadata, Mapping):
+             raise RuntimeContractError("Kokoro reference state metadata must be a mapping")
+
+@@ -171,8 +182,6 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+         super().__init__(installation, session_factory=session_factory, **kwargs)
+         self.model_fingerprint = kokoro_model_fingerprint(installation)
+
+-
+-
+     def _artifact(self, role: str, *, component: str | None = None) -> Path:
+         try:
+             return self.installation.artifact(role, component=component).path
+@@ -182,9 +191,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+                 detail += f", component={component!r}"
+             raise CapabilityError(f"Kokoro cloning runtime is missing {detail}") from exc
+
+-
+     def _component_path(self, component: str) -> Path:
+         return self._artifact("model", component=component)
++
+     def _load_supporting_assets(self) -> None:
+         for role in ("config", "bundle", "manifest"):
+             try:
+@@ -231,7 +240,10 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+             if matches:
+                 return matches[0].path
+         for artifact in self.installation.artifacts:
+-            if "source_params" in artifact.filename.lower() or "source-params" in artifact.filename.lower():
++            if (
++                "source_params" in artifact.filename.lower()
++                or "source-params" in artifact.filename.lower()
++            ):
+                 return artifact.path
+         raise CapabilityError("Kokoro cloning runtime is missing source parameters")
+
+@@ -311,7 +323,6 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+             },
+         )
+
+-
+     def infer(
+         self,
+         token_ids: Sequence[int],
+@@ -325,16 +336,16 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+         if not isinstance(reference, KokoroReferenceState):
+             raise RuntimeContractError("Kokoro cloning inference requires a KokoroReferenceState")
+         if reference.model_fingerprint != self.model_fingerprint:
+-            raise RuntimeContractError(
+-                "Kokoro reference state belongs to a different model build"
+-            )
++            raise RuntimeContractError("Kokoro reference state belongs to a different model build")
+         tokens = self._validate_text_tokens(token_ids)
+         if reference.style.shape != (1, 256):
+             raise RuntimeContractError("Kokoro reference style must have shape [1, 256]")
+         style_acou = np.ascontiguousarray(reference.style[:, :128])
+         style_dur = np.ascontiguousarray(reference.style[:, 128:])
+         if style_acou.shape != (1, 128) or style_dur.shape != (1, 128):
+-            raise RuntimeContractError("Kokoro cloning style split must be 128 acoustic and 128 duration values")
++            raise RuntimeContractError(
++                "Kokoro cloning style split must be 128 acoustic and 128 duration values"
++            )
+
+         input_ids = np.asarray([[0, *tokens, 0]], dtype=np.int64)
+         prosody = self._get_session("prosody")
+@@ -359,9 +370,13 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+         except (TypeError, ValueError) as exc:
+             raise RuntimeContractError("Kokoro cloning durations must be numeric") from exc
+         if duration_values.size != input_ids.shape[1] or not np.all(np.isfinite(duration_values)):
+-            raise RuntimeContractError("Kokoro cloning durations must be finite and match the input phones")
++            raise RuntimeContractError(
++                "Kokoro cloning durations must be finite and match the input phones"
++            )
+         if np.any(duration_values < 1) or np.any(duration_values != np.floor(duration_values)):
+-            raise RuntimeContractError("Kokoro cloning durations must be integers of at least one frame")
++            raise RuntimeContractError(
++                "Kokoro cloning durations must be integers of at least one frame"
++            )
+         if np.any(duration_values > 4000) or int(np.sum(duration_values)) > 4000:
+             raise RuntimeContractError("Kokoro cloning duration expansion exceeds 4000 frames")
+         durations = duration_values.astype(np.int64)
+@@ -372,7 +387,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+         d = np.asarray(self._output(prosody_named, ("d", "duration_embedding"), 1))
+         t_en = np.asarray(self._output(prosody_named, ("t_en", "asr"), 2))
+         if d.ndim != 3 or d.shape[0] != 1 or not np.all(np.isfinite(d)):
+-            raise RuntimeContractError("Kokoro cloning duration embeddings have incompatible values")
++            raise RuntimeContractError(
++                "Kokoro cloning duration embeddings have incompatible values"
++            )
+         if d.shape[1] == durations.size:
+             duration_context = d.transpose(0, 2, 1)
+         elif d.shape[2] == durations.size:
+@@ -446,7 +463,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+             raise RuntimeContractError(
+                 f"Kokoro cloning token sequence exceeds the {self.max_tokens}-token limit"
+             )
+-        if any(isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens):
++        if any(
++            isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens
++        ):
+             raise RuntimeContractError("Kokoro cloning token ids must be integers")
+         return [int(token) for token in tokens]
+
+@@ -468,7 +487,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+             raise RuntimeContractError(
+                 f"Kokoro reference token sequence exceeds the {self.max_tokens}-token limit"
+             )
+-        if any(isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens):
++        if any(
++            isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens
++        ):
+             raise RuntimeContractError("Kokoro reference token ids must be integers")
+         return [int(token) for token in tokens]
+
+@@ -503,9 +524,7 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
+         return np.ascontiguousarray(audio, dtype=np.float32)
+
+     @staticmethod
+-    def _validate_observation(
+-        value: np.ndarray, shape: tuple[int, ...], name: str
+-    ) -> np.ndarray:
++    def _validate_observation(value: np.ndarray, shape: tuple[int, ...], name: str) -> np.ndarray:
+         observation = np.asarray(value, dtype=np.float32)
+         if observation.shape != shape or not np.all(np.isfinite(observation)):
+             raise RuntimeContractError(f"Kokoro {name} output must be finite with shape {shape}")
+diff --git a/onnxvoice/systems/kokoro_inno.py b/onnxvoice/systems/kokoro_inno.py
+new file mode 100644
+index 0000000..8e99b5a
+--- /dev/null
++++ b/onnxvoice/systems/kokoro_inno.py
+@@ -0,0 +1,1013 @@
++from __future__ import annotations
++
++import hashlib
++import json
++import math
++import warnings
++from collections.abc import Callable, Mapping
++from dataclasses import dataclass, field
++from functools import lru_cache
++from pathlib import Path
++from types import MappingProxyType
++from typing import Any
++
++import numpy as np
++
++from ..errors import CapabilityError, OptionalDependencyError, RuntimeContractError
++from ..runtime import OnnxSession
++from ..types import Installation, RuntimeDiagnostic
++
++INNO_UPSTREAM_VERSION = "0.2.0"
++INNO_UPSTREAM_COMMIT = "892ef184bc932aa3ff9d72c1509d5b81ff6941e6"
++INNO_ENCODER_SAMPLE_RATE = 16000
++INNO_TILT_SAMPLE_RATE = 24000
++INNO_FBANK_FRAME_LENGTH = 400
++INNO_FBANK_FRAME_HOP = 160
++INNO_FBANK_FFT_SIZE = 512
++INNO_FBANK_MEL_BINS = 80
++
++
++def _freeze_json(value: Any) -> Any:
++    if isinstance(value, dict):
++        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
++    if isinstance(value, list):
++        return tuple(_freeze_json(item) for item in value)
++    return value
++
++
++@dataclass(frozen=True, slots=True)
++class KokoroVoicePack:
++    """Immutable, stock-compatible Kokoro style table with enrollment provenance."""
++
++    data: np.ndarray
++    enroller: str
++    model_fingerprint: str
++    fingerprint: str = ""
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++    enroller_fingerprint: str = ""
++
++    def __post_init__(self) -> None:
++        try:
++            data = np.array(self.data, dtype=np.float32, order="C", copy=True)
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError("Kokoro voice-pack data must be numeric") from exc
++        if data.shape != (510, 1, 256):
++            raise RuntimeContractError(
++                f"Kokoro voice-pack data must have shape [510, 1, 256], got {data.shape}"
++            )
++        if not np.isfinite(data).all():
++            raise RuntimeContractError("Kokoro voice-pack data must be finite")
++        if not isinstance(self.enroller, str) or not self.enroller:
++            raise RuntimeContractError("Kokoro voice-pack enroller provenance must be non-empty")
++        if (
++            not isinstance(self.model_fingerprint, str)
++            or len(self.model_fingerprint) != 64
++            or any(character not in "0123456789abcdef" for character in self.model_fingerprint)
++        ):
++            raise RuntimeContractError(
++                "Kokoro voice-pack model fingerprint must be a lowercase SHA-256 digest"
++            )
++        enroller_fingerprint = (
++            self.enroller_fingerprint
++            or hashlib.sha256(f"{self.enroller}:{self.model_fingerprint}".encode()).hexdigest()
++        )
++        if (
++            not isinstance(enroller_fingerprint, str)
++            or len(enroller_fingerprint) != 64
++            or any(character not in "0123456789abcdef" for character in enroller_fingerprint)
++        ):
++            raise RuntimeContractError(
++                "Kokoro voice-pack enroller fingerprint must be a lowercase SHA-256 digest"
++            )
++        if not isinstance(self.metadata, Mapping):
++            raise RuntimeContractError("Kokoro voice-pack metadata must be a mapping")
++        try:
++            metadata = dict(self.metadata)
++            encoded = json.dumps(
++                {
++                    "enroller": self.enroller,
++                    "model_fingerprint": self.model_fingerprint,
++                    "enroller_fingerprint": enroller_fingerprint,
++                    "metadata": metadata,
++                },
++                sort_keys=True,
++                separators=(",", ":"),
++                allow_nan=False,
++            ).encode("utf-8")
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError(
++                "Kokoro voice-pack metadata must be finite JSON data"
++            ) from exc
++        digest = hashlib.sha256(data.tobytes(order="C") + encoded).hexdigest()
++        frozen_metadata = _freeze_json(json.loads(encoded)["metadata"])
++        if self.fingerprint and self.fingerprint != digest:
++            raise RuntimeContractError("Kokoro voice-pack fingerprint does not match its data")
++        data.setflags(write=False)
++        object.__setattr__(self, "data", data)
++        object.__setattr__(self, "metadata", frozen_metadata)
++        object.__setattr__(self, "enroller_fingerprint", enroller_fingerprint)
++        object.__setattr__(self, "fingerprint", digest)
++
++    def style_for(self, token_count: int) -> np.ndarray:
++        """Select the stock style row used by the existing Kokoro inference API."""
++        if isinstance(token_count, bool) or not isinstance(token_count, (int, np.integer)):
++            raise RuntimeContractError("Kokoro style token count must be a non-negative integer")
++        if token_count < 0:
++            raise RuntimeContractError("Kokoro style token count must be a non-negative integer")
++        return np.array(self.data[min(int(token_count), 509)], copy=True).reshape(1, 256)
++
++
++def _mono_float32(audio: np.ndarray) -> np.ndarray:
++    values = np.asarray(audio)
++    if values.ndim != 1:
++        raise RuntimeContractError("Inno preprocessing expects a mono one-dimensional waveform")
++    if not np.issubdtype(values.dtype, np.floating):
++        raise RuntimeContractError("Inno preprocessing expects floating-point audio")
++    waveform = np.asarray(values, dtype=np.float32)
++    if not waveform.size or not np.isfinite(waveform).all():
++        raise RuntimeContractError("Inno audio must be non-empty and finite")
++    return np.ascontiguousarray(waveform)
++
++
++@lru_cache(maxsize=1)
++def _mel_filterbank() -> np.ndarray:
++    """Return Inno v0.2.0's [80, 257] Kaldi-style mel filters."""
++    mel_min = 1127.0 * np.log1p(20.0 / 700.0)
++    mel_max = 1127.0 * np.log1p(8000.0 / 700.0)
++    spacing = (mel_max - mel_min) / 81
++    left = mel_min + np.arange(INNO_FBANK_MEL_BINS, dtype=np.float64)[:, None] * spacing
++    frequencies = np.arange(INNO_FBANK_FFT_SIZE // 2, dtype=np.float64) * (
++        INNO_ENCODER_SAMPLE_RATE / INNO_FBANK_FFT_SIZE
++    )
++    mel_frequencies = 1127.0 * np.log1p(frequencies / 700.0)
++    banks = np.minimum(
++        (mel_frequencies - left) / spacing,
++        (left + 2 * spacing - mel_frequencies) / spacing,
++    )
++    banks = np.maximum(banks, 0.0).astype(np.float32)
++    filters = np.pad(banks, ((0, 0), (0, 1)))
++    filters.setflags(write=False)
++    return filters
++
++
++def speaker_fbank(audio_16k: np.ndarray) -> np.ndarray:
++    """Compute Inno v0.2.0's Kaldi-style fbank as float32 ``[1, F, 80]``."""
++    waveform = _mono_float32(audio_16k)
++    frame_length = INNO_FBANK_FRAME_LENGTH
++    if waveform.size < frame_length:
++        raise RuntimeContractError("Inno fbank needs at least 400 samples at 16 kHz")
++
++    scaled = waveform * np.float32(32768.0)
++    frames = np.lib.stride_tricks.sliding_window_view(scaled, frame_length)[
++        ::INNO_FBANK_FRAME_HOP
++    ].copy()
++    frames -= frames.mean(axis=-1, keepdims=True, dtype=np.float32)
++    previous = np.concatenate((frames[:, :1], frames[:, :-1]), axis=-1)
++    frames -= np.float32(0.97) * previous
++
++    window = np.hamming(frame_length).astype(np.float32)
++    spectrum = np.fft.rfft(frames * window, n=INNO_FBANK_FFT_SIZE, axis=-1)
++    magnitude = np.abs(spectrum).astype(np.float32)
++    power = np.square(magnitude, dtype=np.float32)
++    energy = power @ _mel_filterbank().T
++    features = np.log(np.maximum(energy, np.finfo(np.float32).eps))
++    features -= features.mean(axis=0, keepdims=True, dtype=np.float32)
++    return np.ascontiguousarray(features[None], dtype=np.float32)
++
++
++def resample_audio(audio: np.ndarray, sample_rate: int, target_rate: int) -> np.ndarray:
++    """Resample a mono float waveform with the polyphase filter used by Inno v0.2.0."""
++    waveform = _mono_float32(audio)
++    if not isinstance(sample_rate, int) or sample_rate <= 0:
++        raise RuntimeContractError("Inno source sample_rate must be a positive integer")
++    if not isinstance(target_rate, int) or target_rate <= 0:
++        raise RuntimeContractError("Inno target sample_rate must be a positive integer")
++    if sample_rate == target_rate:
++        return waveform.copy()
++    try:
++        from scipy.signal import resample_poly
++    except ImportError as exc:
++        raise OptionalDependencyError(
++            "Inno audio resampling requires SciPy. Install onnxvoice[inno]."
++        ) from exc
++
++    divisor = math.gcd(sample_rate, target_rate)
++    return np.ascontiguousarray(
++        resample_poly(waveform, target_rate // divisor, sample_rate // divisor), dtype=np.float32
++    )
++
++
++F0_MIN = 60.0
++F0_MAX = 400.0
++PITCH_HOP_SAMPLES = 320
++PITCH_FRAME_SAMPLES = 2 * PITCH_HOP_SAMPLES
++PITCH_MEDIAN_FRAMES = 30
++PITCH_LAG_TOLERANCE = 0.9
++SEMITONE_REFERENCE_HZ = 100.0
++CEPSTRUM_FRAME_SAMPLES = 4096
++CEPSTRUM_MIN_PEAK = 0.01
++CEPSTRUM_CEILING_FACTOR = 1.6
++CEPSTRUM_TOLERANCE = 0.25
++TILT_WINDOW_SAMPLES = 1024
++TILT_HOP_SAMPLES = 256
++MIN_BLEND_PACKS = 3
++
++
++def _frame_rms(waveform: np.ndarray, hop: int) -> np.ndarray:
++    frame_count = waveform.size // hop
++    frames = waveform[: frame_count * hop].reshape(frame_count, hop)
++    return np.sqrt(np.mean(np.square(frames, dtype=np.float32), axis=1, dtype=np.float32))
++
++
++def _fundamental(rows: np.ndarray, offset: int, tolerance: float) -> np.ndarray:
++    best = np.argmax(rows, axis=1)
++    peak = np.take_along_axis(rows, best[:, None], axis=1)[:, 0]
++    index = best.copy()
++    neighbor_offsets = np.array([-1, 0, 1])
++    for divisor in (2, 3, 4):
++        candidate = np.rint((best + offset) / divisor).astype(np.int64) - offset
++        neighbors = np.clip(candidate[:, None] + neighbor_offsets, 0, rows.shape[1] - 1)
++        values = np.take_along_axis(rows, neighbors, axis=1)
++        argmax = np.argmax(values, axis=1)
++        candidate_values = np.take_along_axis(values, argmax[:, None], axis=1)[:, 0]
++        candidate_indices = np.take_along_axis(neighbors, argmax[:, None], axis=1)[:, 0]
++        use_candidate = (candidate >= 0) & (peak > 0) & (candidate_values >= tolerance * peak)
++        index = np.where(use_candidate, candidate_indices, index)
++    return index
++
++
++def _track_f0(
++    waveform: np.ndarray, lower_hz: float, upper_hz: float
++) -> tuple[np.ndarray, np.ndarray]:
++    first_lag = int(INNO_ENCODER_SAMPLE_RATE / upper_hz)
++    last_lag = int(INNO_ENCODER_SAMPLE_RATE / lower_hz)
++    lags = np.arange(first_lag, last_lag + 1, dtype=np.int64)
++    frame_length = PITCH_FRAME_SAMPLES + int(lags[-1])
++    padded = np.pad(waveform, (0, frame_length))
++    frames = np.lib.stride_tricks.sliding_window_view(padded, frame_length)[::PITCH_HOP_SAMPLES]
++    x = frames[:, :PITCH_FRAME_SAMPLES]
++    x_energy = np.sum(np.square(x, dtype=np.float32), axis=1, dtype=np.float32)
++    correlations = np.empty((frames.shape[0], lags.size), dtype=np.float32)
++    for column, lag in enumerate(lags):
++        y = frames[:, lag : lag + PITCH_FRAME_SAMPLES]
++        y_energy = np.sum(np.square(y, dtype=np.float32), axis=1, dtype=np.float32)
++        numerator = np.sum(x * y, axis=1, dtype=np.float32)
++        denominator = np.sqrt(x_energy * y_energy, dtype=np.float32)
++        correlations[:, column] = numerator / np.maximum(denominator, np.float32(1.0e-8))
++
++    best_lag = (first_lag + _fundamental(correlations, first_lag, PITCH_LAG_TOLERANCE))[
++        : waveform.size // PITCH_HOP_SAMPLES
++    ].astype(np.float32)
++    left = PITCH_MEDIAN_FRAMES // 2
++    right = PITCH_MEDIAN_FRAMES - 1 - left
++    padded_lags = np.pad(best_lag, (left, right), mode="edge")
++    lag_windows = np.lib.stride_tricks.sliding_window_view(padded_lags, PITCH_MEDIAN_FRAMES)
++    best_lag = np.partition(lag_windows, PITCH_MEDIAN_FRAMES // 2 - 1, axis=1)[
++        :, PITCH_MEDIAN_FRAMES // 2 - 1
++    ]
++    f0 = np.float32(INNO_ENCODER_SAMPLE_RATE) / best_lag
++    return f0, _frame_rms(waveform, PITCH_HOP_SAMPLES)
++
++
++def _cepstral_f0(waveform: np.ndarray) -> tuple[float, float]:
++    frame_count = waveform.size // CEPSTRUM_FRAME_SAMPLES
++    frames = waveform[: frame_count * CEPSTRUM_FRAME_SAMPLES].reshape(
++        frame_count, CEPSTRUM_FRAME_SAMPLES
++    )
++    if frame_count:
++        energy = np.mean(np.square(frames, dtype=np.float32), axis=1, dtype=np.float32)
++        frames = frames[energy > np.quantile(energy, 0.7)]
++    if not frames.shape[0]:
++        return 0.0, 0.0
++
++    index = np.arange(CEPSTRUM_FRAME_SAMPLES, dtype=np.float32)
++    window = np.float32(0.5) - np.float32(0.5) * np.cos(
++        np.float32(2.0 * np.pi) * index / np.float32(CEPSTRUM_FRAME_SAMPLES)
++    )
++    spectrum = np.fft.rfft(frames * window, axis=1)
++    magnitude = np.abs(spectrum).astype(np.float32)
++    log_magnitude = np.log(magnitude + np.float32(1.0e-8))
++    log_magnitude -= log_magnitude.mean(axis=1, keepdims=True, dtype=np.float32)
++    cepstrum = np.fft.irfft(log_magnitude, n=CEPSTRUM_FRAME_SAMPLES, axis=1).astype(np.float32)
++    cepstrum = cepstrum.mean(axis=0, dtype=np.float32)
++    quefrency = np.arange(cepstrum.size, dtype=np.float32) / np.float32(INNO_ENCODER_SAMPLE_RATE)
++    band_mask = (quefrency > 1.0 / 300.0) & (quefrency < 1.0 / F0_MIN)
++    band = cepstrum[band_mask]
++    start = int(np.flatnonzero(band_mask)[0])
++    index = int(_fundamental(band[None], start, CEPSTRUM_TOLERANCE)[0])
++    return INNO_ENCODER_SAMPLE_RATE / (start + index), float(band[index])
++
++
++def ceiling(audio: np.ndarray, sample_rate: int, fmax: float | None = None) -> float:
++    """Return the upstream cepstral pitch ceiling, or the explicit override."""
++    if fmax is not None:
++        return float(fmax)
++    waveform = resample_audio(audio, sample_rate, INNO_ENCODER_SAMPLE_RATE)
++    fundamental, peak = _cepstral_f0(waveform)
++    return (
++        min(F0_MAX, CEPSTRUM_CEILING_FACTOR * fundamental) if peak > CEPSTRUM_MIN_PEAK else F0_MAX
++    )
++
++
++def stats(
++    audio: np.ndarray, sample_rate: int, fmax: float | None = None
++) -> tuple[float, float, float]:
++    """Return upstream log-F0 mean/std in semitones and voiced fraction."""
++    waveform = _mono_float32(audio)
++    effective_fmax = ceiling(waveform, sample_rate, fmax)
++    encoder_waveform = resample_audio(waveform, sample_rate, INNO_ENCODER_SAMPLE_RATE)
++    lower_hz = F0_MIN
++    for _ in range(2):
++        f0, energy = _track_f0(encoder_waveform, lower_hz, effective_fmax)
++        voiced = (energy > np.float32(0.1) * energy.max()) & (f0 > lower_hz) & (f0 < effective_fmax)
++        voiced_st = np.float32(12.0) * np.log2(f0[voiced] / np.float32(SEMITONE_REFERENCE_HZ))
++        if not voiced_st.size:
++            return 0.0, 0.0, 0.0
++        upper_quartile = np.quantile(voiced_st, 0.75)
++        lower_hz = min(
++            0.65 * SEMITONE_REFERENCE_HZ * 2 ** (upper_quartile / 12.0),
++            180.0,
++        )
++
++    return (
++        float(voiced_st.mean(dtype=np.float32)),
++        float(voiced_st.std(dtype=np.float32, ddof=1)),
++        float(voiced.mean(dtype=np.float32)),
++    )
++
++
++def rate(audio: np.ndarray, sample_rate: int, limit: int = 60) -> float:
++    """Return Inno's smoothed energy-peak syllable-rate proxy."""
++    waveform = _mono_float32(audio)
++    hop = sample_rate // 100
++    energy = _frame_rms(waveform[: limit * sample_rate], hop)
++    if not energy.size:
++        return 0.0
++    padded = np.pad(energy, (1, 1), mode="constant")
++    energy = (padded[:-2] + padded[1:-1] + padded[2:]) / np.float32(3.0)
++    speech = energy > np.float32(0.05) * energy.max()
++    peaks = np.flatnonzero(
++        (energy[1:-1] > energy[:-2]) & (energy[1:-1] >= energy[2:]) & speech[1:-1]
++    )
++    if not peaks.size:
++        return 0.0
++    syllables = 1 + np.count_nonzero(np.diff(peaks) >= 8)
++    speech_seconds = float(speech.mean(dtype=np.float32)) * energy.size / 100.0
++    return float(syllables / (speech_seconds + 1.0e-9))
++
++
++def tilt(audio: np.ndarray, sample_rate: int) -> float:
++    """Return the Inno long-term spectral slope in dB per octave."""
++    waveform = resample_audio(audio, sample_rate, INNO_TILT_SAMPLE_RATE)
++    fft_size = TILT_WINDOW_SAMPLES
++    if waveform.size <= fft_size // 2:
++        raise RuntimeContractError("Inno spectral tilt needs more than 512 samples at 24 kHz")
++    padded = np.pad(waveform, (fft_size // 2, fft_size // 2), mode="reflect")
++    frames = np.lib.stride_tricks.sliding_window_view(padded, fft_size)[::TILT_HOP_SAMPLES]
++    index = np.arange(fft_size, dtype=np.float32)
++    window = np.float32(0.5) - np.float32(0.5) * np.cos(
++        np.float32(2.0 * np.pi) * index / np.float32(fft_size)
++    )
++    spectrum = np.fft.rfft(frames * window, axis=1)
++    magnitude = np.abs(spectrum).astype(np.float32)
++    power = np.square(magnitude, dtype=np.float32).mean(axis=0, dtype=np.float32)
++    frequencies = np.linspace(0.0, INNO_TILT_SAMPLE_RATE / 2, power.size, dtype=np.float32)
++    band = (frequencies > 300.0) & (frequencies < 4000.0)
++    x = np.log2(frequencies[band])
++    y = np.float32(10.0) * np.log10(power[band] + np.float32(1.0e-12))
++    centered_x = x - x.mean(dtype=np.float32)
++    centered_y = y - y.mean(dtype=np.float32)
++    return float(
++        np.sum(centered_x * centered_y, dtype=np.float32)
++        / np.sum(centered_x * centered_x, dtype=np.float32)
++    )
++
++
++def head_stats(
++    audio: np.ndarray,
++    sample_rate: int,
++    fmin: float = F0_MIN,
++    fmax: float = F0_MAX,
++) -> tuple[float, float]:
++    """Return upstream Praat-based, six-second chunked prosody-head statistics."""
++    try:
++        import parselmouth
++    except ImportError as exc:
++        raise OptionalDependencyError(
++            "Inno prosody-head analysis requires praat-parselmouth. Install onnxvoice[inno]."
++        ) from exc
++
++    waveform = _mono_float32(audio).astype(np.float64)
++    chunk_samples = int(6.0 * sample_rate)
++    hop_seconds = 0.01
++    chunk_results: list[tuple[float, float, int]] = []
++    for offset in range(0, waveform.size, chunk_samples):
++        chunk = waveform[offset : offset + chunk_samples]
++        if chunk.size < 1.5 * sample_rate:
++            continue
++        pitch = parselmouth.Sound(chunk, sampling_frequency=sample_rate).to_pitch_ac(
++            time_step=hop_seconds, pitch_floor=fmin, pitch_ceiling=fmax
++        )
++        frequencies = pitch.selected_array["frequency"]
++        rms_hop = int(sample_rate * hop_seconds)
++        frame_count = chunk.size // rms_hop
++        rms_frames = chunk[: frame_count * rms_hop].reshape(frame_count, rms_hop)
++        energy = np.sqrt(np.mean(np.square(rms_frames), axis=1))
++        energy_indices = np.clip((pitch.xs() / hop_seconds).astype(int), 0, energy.size - 1)
++        frame_energy = energy[energy_indices]
++        voiced = frequencies[(frequencies > 0) & (frame_energy > 0.1 * frame_energy.max())]
++        if voiced.size:
++            semitones = 12.0 * np.log2(voiced / SEMITONE_REFERENCE_HZ)
++            chunk_results.append((float(semitones.mean()), float(semitones.std()), int(chunk.size)))
++    if not chunk_results:
++        return 0.0, 0.0
++    total_samples = sum(result[2] for result in chunk_results)
++    return tuple(
++        float(sum(result[index] * result[2] for result in chunk_results) / total_samples)
++        for index in (0, 1)
++    )
++
++
++def blend_weights(tuner: Any, z: np.ndarray) -> dict[str, float]:
++    """Match upstream pitch-gated SciPy NNLS stock-pack blending."""
++    stats_table = np.asarray(tuner.stats)
++    target = np.asarray(z)
++    names = np.asarray(tuner.names)
++    grades = np.asarray(tuner.grades)
++    scales = np.asarray(tuner.scale)
++    pitch_distance = np.abs(stats_table[:, 0] - target[0])
++    selected = pitch_distance <= tuner.gate
++    if selected.sum() < MIN_BLEND_PACKS:
++        selected = pitch_distance <= np.sort(pitch_distance)[MIN_BLEND_PACKS - 1]
++
++    penalties = tuner.grade_pen * np.maximum(0.0, 2.0 - grades[selected])
++    matrix = np.vstack(
++        [
++            stats_table[selected].T / scales[:, None],
++            10.0 * np.ones((1, selected.sum())),
++            np.diag(penalties),
++        ]
++    )
++    vector = np.concatenate([target / scales, [10.0], np.zeros(selected.sum(), dtype=np.float64)])
++    try:
++        from scipy.optimize import nnls
++    except ImportError as exc:
++        raise OptionalDependencyError(
++            "Inno voice blending requires SciPy. Install onnxvoice[inno]."
++        ) from exc
++
++    weights, _ = nnls(matrix, vector)
++    weights /= weights.sum()
++    return {
++        str(name): float(weight)
++        for name, weight in zip(names[selected], weights, strict=True)
++        if weight > 1.0e-3
++    }
++
++
++def dense_blend_weights(
++    names: tuple[str, ...] | list[str], weights: dict[str, float]
++) -> np.ndarray:
++    """Expand upstream's sparse blend map to the ONNX graph's ``[1, V]`` input."""
++    return np.asarray([[weights.get(name, 0.0) for name in names]], dtype=np.float32)
++
++
++INNO_ENROLLER_ID = "inno-v0.2"
++INNO_GRAPH_COMPONENT = "inno_voicepack"
++INNO_METADATA_COMPONENT = "inno_tuner"
++INNO_GRAPH_INPUTS = frozenset({"fbank", "tilt", "head_stats", "blend_weights", "head_enabled"})
++
++
++INNO_SUPPORTED_LAYOUTS = frozenset({"single", "single-onnx-v1", "split", "multi", "split-onnx-v1"})
++
++
++def _inno_capability(installation: Installation) -> Mapping[str, Any]:
++    runtime = installation.metadata.get("runtime")
++    if not isinstance(runtime, Mapping):
++        raise CapabilityError("Kokoro installation does not advertise Inno voice enrollment")
++    capabilities = runtime.get("voice_enrollers")
++    if not isinstance(capabilities, (list, tuple)):
++        raise CapabilityError("Kokoro installation does not advertise Inno voice enrollment")
++    capability = next(
++        (
++            value
++            for value in capabilities
++            if isinstance(value, Mapping) and value.get("id") == INNO_ENROLLER_ID
++        ),
++        None,
++    )
++    if capability is None:
++        raise CapabilityError(f"Kokoro installation does not advertise {INNO_ENROLLER_ID}")
++
++    expected_values = {
++        "kind": "kokoro-voicepack-tuner",
++        "input": "reference-audio",
++        "model_component": INNO_GRAPH_COMPONENT,
++        "metadata_component": INNO_METADATA_COMPONENT,
++    }
++    for key, expected in expected_values.items():
++        if capability.get(key) != expected:
++            raise CapabilityError(f"Inno voice enroller metadata has invalid {key!r}")
++    if capability.get("transcript_required") is not False:
++        raise CapabilityError("Inno voice enroller must declare transcript_required=false")
++    for key, expected in (
++        ("min_seconds", 3.0),
++        ("recommended_seconds", 5.0),
++        ("max_seconds", 30.0),
++    ):
++        value = capability.get(key)
++        if (
++            isinstance(value, (bool, np.bool_))
++            or not isinstance(value, (int, float, np.integer, np.floating))
++            or not math.isfinite(float(value))
++            or float(value) != expected
++        ):
++            raise CapabilityError(f"Inno voice enroller metadata has invalid {key!r}")
++    output = capability.get("output")
++    shape = output.get("shape") if isinstance(output, Mapping) else None
++    if (
++        not isinstance(output, Mapping)
++        or output.get("format") != "kokoro-voicepack-v1"
++        or not isinstance(shape, (list, tuple))
++        or tuple(shape) != (510, 1, 256)
++        or output.get("dtype") != "float32"
++    ):
++        raise CapabilityError("Inno voice enroller metadata has an invalid output contract")
++    return capability
++
++
++def validate_inno_installation(installation: Installation) -> None:
++    """Validate declared Inno components without creating an ONNX Runtime session."""
++    _inno_capability(installation)
++    runtime = installation.metadata.get("runtime")
++    layout = runtime.get("layout", "single") if isinstance(runtime, Mapping) else "single"
++    if not isinstance(layout, str) or layout not in INNO_SUPPORTED_LAYOUTS:
++        raise CapabilityError(f"Inno voice enrollment does not support Kokoro layout {layout!r}")
++    models = [
++        artifact
++        for artifact in installation.artifacts
++        if artifact.role == "model" and artifact.component != INNO_GRAPH_COMPONENT
++    ]
++    if not models:
++        raise CapabilityError("Inno enrollment requires a base Kokoro model artifact")
++    if layout in {"single", "single-onnx-v1"}:
++        if not any(artifact.component is None for artifact in models):
++            raise CapabilityError("Inno enrollment requires the single Kokoro model component")
++    elif not {"prosody", "curves", "decoder"} <= {artifact.component for artifact in models}:
++        raise CapabilityError("Inno enrollment requires the split Kokoro components")
++    try:
++        installation.require_artifact("model", component=INNO_GRAPH_COMPONENT)
++        installation.require_artifact("metadata", component=INNO_METADATA_COMPONENT)
++    except KeyError as exc:
++        raise CapabilityError(f"Inno enrollment is missing a required artifact: {exc}") from exc
++
++
++def inno_model_fingerprint(installation: Installation) -> str:
++    """Fingerprint base Kokoro and Inno artifacts without including local paths."""
++    validate_inno_installation(installation)
++    capability = _inno_capability(installation)
++    base_artifacts = [
++        artifact
++        for artifact in installation.artifacts
++        if artifact.role == "model" and artifact.component != INNO_GRAPH_COMPONENT
++    ]
++    inno_artifacts = [
++        artifact
++        for artifact in installation.artifacts
++        if (artifact.role, artifact.component)
++        in {
++            ("model", INNO_GRAPH_COMPONENT),
++            ("metadata", INNO_METADATA_COMPONENT),
++        }
++    ]
++    if not base_artifacts:
++        raise CapabilityError("Inno enrollment requires a base Kokoro model artifact")
++    if len(inno_artifacts) != 2:
++        raise CapabilityError(
++            "Inno enrollment requires its ONNX graph and tuner metadata artifacts"
++        )
++
++    artifacts = [*base_artifacts, *inno_artifacts]
++    records = []
++    for artifact in artifacts:
++        digest = artifact.sha256
++        if (
++            not isinstance(digest, str)
++            or len(digest) != 64
++            or any(character not in "0123456789abcdef" for character in digest)
++        ):
++            raise RuntimeContractError(
++                f"Inno fingerprint artifact {artifact.component or artifact.role!r} "
++                "must have a lowercase SHA-256 digest"
++            )
++        records.append(
++            {
++                "role": artifact.role,
++                "component": artifact.component,
++                "quality": artifact.quality,
++                "sha256": digest,
++            }
++        )
++    records.sort(
++        key=lambda record: (record["role"], record["component"] or "", record["quality"] or "")
++    )
++    fingerprint_data = {
++        "system": installation.system,
++        "model": installation.id,
++        "distribution": installation.selected_distribution,
++        "quality": installation.selected_quality,
++        "enroller": capability["id"],
++        "upstream_version": INNO_UPSTREAM_VERSION,
++        "upstream_commit": INNO_UPSTREAM_COMMIT,
++        "artifacts": records,
++    }
++    encoded = json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":")).encode("utf-8")
++    return hashlib.sha256(encoded).hexdigest()
++
++
++def _metadata_scalar(metadata: Mapping[str, Any], key: str) -> Any:
++    if key not in metadata:
++        raise RuntimeContractError(f"Inno tuner metadata is missing {key!r}")
++    value = np.asarray(metadata[key])
++    if value.size != 1:
++        raise RuntimeContractError(f"Inno tuner metadata {key!r} must be scalar")
++    return value.reshape(()).item()
++
++
++def _read_inno_metadata(path: Path) -> dict[str, Any]:
++    try:
++        if path.suffix.lower() == ".npz":
++            with np.load(path, allow_pickle=False) as archive:
++                metadata = {key: np.array(archive[key], copy=True) for key in archive.files}
++        else:
++            metadata = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError, json.JSONDecodeError) as exc:
++        raise RuntimeContractError(f"Could not read Inno tuner metadata {path}: {exc}") from exc
++    if not isinstance(metadata, dict):
++        raise RuntimeContractError("Inno tuner metadata must contain a mapping")
++    return metadata
++
++
++class InnoVoiceTuner:
++    """Lazy ONNX voice-pack graph and validated host-side Inno metadata."""
++
++    def __init__(
++        self,
++        installation: Installation,
++        *,
++        session_factory: Callable[[Path, str], Any] | None = None,
++        providers: Any | None = None,
++        provider_options: Any | None = None,
++        session_options: Any | None = None,
++    ) -> None:
++        self.installation = installation
++        validate_inno_installation(installation)
++        self.capability = _inno_capability(installation)
++        try:
++            model_artifact = installation.require_artifact("model", component=INNO_GRAPH_COMPONENT)
++            metadata_artifact = installation.require_artifact(
++                "metadata", component=INNO_METADATA_COMPONENT
++            )
++        except KeyError as exc:
++            raise CapabilityError(f"Inno enrollment is missing a required artifact: {exc}") from exc
++        self.model_path = model_artifact.path
++        self.graph_sha256 = model_artifact.sha256
++        self.metadata_path = metadata_artifact.path
++        self.metadata_sha256 = metadata_artifact.sha256
++        self.model_fingerprint = inno_model_fingerprint(installation)
++        self.session_factory = session_factory
++        self.providers = providers
++        self.provider_options = provider_options
++        self.session_options = session_options
++        self._session: Any | None = None
++        self._load_metadata()
++        enroller_provenance = json.dumps(
++            {
++                "id": INNO_ENROLLER_ID,
++                "version": self.version,
++                "commit": self.upstream_commit,
++                "checkpoint_sha256": self.checkpoint_sha256,
++                "graph_sha256": self.graph_sha256,
++                "metadata_sha256": self.metadata_sha256,
++            },
++            sort_keys=True,
++            separators=(",", ":"),
++        ).encode("utf-8")
++        self.enroller_fingerprint = hashlib.sha256(enroller_provenance).hexdigest()
++
++    def _load_metadata(self) -> None:
++        metadata = _read_inno_metadata(self.metadata_path)
++        names = np.asarray(metadata.get("blend_names", ())).reshape(-1)
++        stats_table = np.asarray(metadata.get("blend_stats", ()), dtype=np.float32)
++        grades = np.asarray(metadata.get("blend_grades", ()), dtype=np.float32)
++        scales = np.asarray(metadata.get("blend_scale", ()), dtype=np.float64)
++        if names.size < MIN_BLEND_PACKS or stats_table.shape != (names.size, 3):
++            raise RuntimeContractError("Inno blend names and statistics have incompatible shapes")
++        if grades.shape != (names.size,) or scales.shape != (3,):
++            raise RuntimeContractError("Inno blend grades or scales have incompatible shapes")
++        if not np.isfinite(stats_table).all() or not np.isfinite(grades).all():
++            raise RuntimeContractError("Inno blend statistics and grades must be finite")
++        if not np.isfinite(scales).all() or np.any(scales <= 0):
++            raise RuntimeContractError("Inno blend scales must be positive and finite")
++        name_values = tuple(str(name) for name in names.tolist())
++        if any(not name for name in name_values) or len(set(name_values)) != len(name_values):
++            raise RuntimeContractError("Inno blend names must be non-empty and unique")
++
++        self.version = str(_metadata_scalar(metadata, "version"))
++        if self.version != INNO_UPSTREAM_VERSION:
++            raise RuntimeContractError(
++                f"Expected Inno tuner metadata v{INNO_UPSTREAM_VERSION}, found v{self.version}"
++            )
++        self.upstream_commit = str(_metadata_scalar(metadata, "upstream_commit"))
++        if self.upstream_commit != INNO_UPSTREAM_COMMIT:
++            raise RuntimeContractError("Inno tuner metadata has an unpinned upstream commit")
++        self.checkpoint_sha256 = str(_metadata_scalar(metadata, "checkpoint_sha256"))
++        if len(self.checkpoint_sha256) != 64 or any(
++            character not in "0123456789abcdef" for character in self.checkpoint_sha256
++        ):
++            raise RuntimeContractError(
++                "Inno checkpoint provenance must be a lowercase SHA-256 digest"
++            )
++        self.names = name_values
++        self.stats = np.ascontiguousarray(stats_table)
++        self.grades = np.ascontiguousarray(grades)
++        self.scale = np.ascontiguousarray(scales)
++        self.gate = float(_metadata_scalar(metadata, "blend_gate"))
++        self.grade_pen = float(_metadata_scalar(metadata, "grade_pen"))
++        self.tilt_mean = float(_metadata_scalar(metadata, "tilt_mean"))
++        self.tilt_sd = float(_metadata_scalar(metadata, "tilt_sd"))
++        scalar_values = np.asarray(
++            [self.gate, self.grade_pen, self.tilt_mean, self.tilt_sd], dtype=np.float64
++        )
++        if not np.isfinite(scalar_values).all() or self.gate < 0 or self.grade_pen < 0:
++            raise RuntimeContractError("Inno tuner scalar metadata must be finite and non-negative")
++        if self.tilt_sd <= 0:
++            raise RuntimeContractError("Inno tilt standard deviation must be positive")
++
++    def _verify_graph_provenance(self, session: Any) -> None:
++        runtime_session = getattr(session, "session", None)
++        get_modelmeta = getattr(runtime_session, "get_modelmeta", None)
++        if get_modelmeta is None:
++            return
++        custom_metadata = get_modelmeta().custom_metadata_map
++        expected = {
++            "inno_upstream_version": self.version,
++            "inno_upstream_commit": self.upstream_commit,
++            "inno_checkpoint_sha256": self.checkpoint_sha256,
++            "inno_metadata_sha256": self.metadata_sha256,
++            "inno_blend_names": ",".join(self.names),
++        }
++        mismatches = [key for key, value in expected.items() if custom_metadata.get(key) != value]
++        if mismatches:
++            raise RuntimeContractError(
++                "Inno ONNX graph provenance does not match its tuner metadata: "
++                + ", ".join(mismatches)
++            )
++
++    def _get_session(self) -> Any:
++        if self._session is None:
++            if self.session_factory is not None:
++                session = self.session_factory(self.model_path, INNO_GRAPH_COMPONENT)
++            else:
++                session = OnnxSession(
++                    self.model_path,
++                    component=INNO_GRAPH_COMPONENT,
++                    providers=self.providers,
++                    provider_options=self.provider_options,
++                    session_options=self.session_options,
++                )
++            self._verify_graph_provenance(session)
++            self._session = session
++        return self._session
++
++    @staticmethod
++    def _input_array(value: np.ndarray, name: str, shape: tuple[int | None, ...]) -> np.ndarray:
++        try:
++            array = np.asarray(value, dtype=np.float32)
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError(f"Inno graph input {name!r} must be numeric") from exc
++        if array.ndim != len(shape) or any(
++            expected is not None and actual != expected
++            for actual, expected in zip(array.shape, shape, strict=True)
++        ):
++            raise RuntimeContractError(
++                f"Inno graph input {name!r} has incompatible shape {array.shape}"
++            )
++        if not np.isfinite(array).all():
++            raise RuntimeContractError(f"Inno graph input {name!r} must be finite")
++        return np.ascontiguousarray(array)
++
++    def infer_graph(
++        self,
++        fbank: np.ndarray,
++        tilt_value: np.ndarray | float,
++        head_stats_value: np.ndarray,
++        weights: np.ndarray,
++        *,
++        head: bool = True,
++    ) -> np.ndarray:
++        """Run the learned voice-pack graph after validating all host-side tensors."""
++        fbank_array = self._input_array(fbank, "fbank", (1, None, 80))
++        if fbank_array.shape[1] < 1:
++            raise RuntimeContractError("Inno fbank must contain at least one frame")
++        tilt_array = self._input_array(np.asarray(tilt_value).reshape(-1), "tilt", (1,))
++        head_array = self._input_array(head_stats_value, "head_stats", (1, 2))
++        weight_array = self._input_array(weights, "blend_weights", (1, len(self.names)))
++        enabled_array = np.asarray([1.0 if head else 0.0], dtype=np.float32)
++        inputs = {
++            "fbank": fbank_array,
++            "tilt": tilt_array,
++            "head_stats": head_array,
++            "blend_weights": weight_array,
++            "head_enabled": enabled_array,
++        }
++
++        session = self._get_session()
++        input_names = set(getattr(session, "input_names", ()))
++        missing = INNO_GRAPH_INPUTS - input_names
++        unexpected = input_names - INNO_GRAPH_INPUTS
++        if missing or unexpected:
++            details = []
++            if missing:
++                details.append("missing inputs: " + ", ".join(sorted(missing)))
++            if unexpected:
++                details.append("unexpected inputs: " + ", ".join(sorted(unexpected)))
++            raise RuntimeContractError("Inno voicepack graph has " + "; ".join(details))
++        outputs = session.run(inputs)
++        output_names = tuple(getattr(session, "output_names", ()))
++        if output_names and "voicepack" not in output_names:
++            raise RuntimeContractError("Inno voicepack graph output name must include 'voicepack'")
++        if isinstance(outputs, Mapping):
++            output = outputs.get("voicepack")
++        elif len(outputs) == 1 and (not output_names or output_names == ("voicepack",)):
++            output = outputs[0]
++        elif len(outputs) == len(output_names) and "voicepack" in output_names:
++            output = outputs[output_names.index("voicepack")]
++        else:
++            output = None
++        if output is None:
++            raise RuntimeContractError("Inno voicepack graph returned no voicepack output")
++        output_array = np.asarray(output, dtype=np.float32)
++        if output_array.shape != (510, 1, 256):
++            raise RuntimeContractError(
++                f"Inno voicepack graph output must have shape [510, 1, 256], got {output_array.shape}"
++            )
++        if not np.isfinite(output_array).all():
++            raise RuntimeContractError("Inno voicepack graph output must be finite")
++        return np.ascontiguousarray(output_array)
++
++    def enroll(
++        self,
++        audio: np.ndarray,
++        *,
++        sample_rate: int,
++        options: Mapping[str, Any] | None = None,
++    ) -> KokoroVoicePack:
++        """Measure a reference and return a reusable stock Kokoro voice pack."""
++        if (
++            isinstance(sample_rate, bool)
++            or not isinstance(sample_rate, (int, np.integer))
++            or sample_rate <= 0
++        ):
++            raise RuntimeContractError("Inno reference sample_rate must be a positive integer")
++        if options is None:
++            enrollment_options: Mapping[str, Any] = {}
++        elif isinstance(options, Mapping):
++            enrollment_options = options
++        else:
++            raise RuntimeContractError("Inno enrollment options must be a mapping")
++        unknown_options = set(enrollment_options) - {"fmax", "head"}
++        if unknown_options:
++            raise RuntimeContractError(
++                "Unsupported Inno enrollment options: "
++                + ", ".join(sorted(map(str, unknown_options)))
++            )
++        head = enrollment_options.get("head", True)
++        if not isinstance(head, (bool, np.bool_)):
++            raise RuntimeContractError("Inno enrollment option 'head' must be boolean")
++
++        source = np.asarray(audio)
++        if not np.issubdtype(source.dtype, np.floating):
++            raise RuntimeContractError("Inno reference audio must be floating-point")
++        if source.ndim == 1:
++            mono = np.asarray(source, dtype=np.float32)
++        elif source.ndim == 2 and source.shape[0] > 8 and source.shape[1] <= 8:
++            mono = np.asarray(source, dtype=np.float32).mean(axis=1, dtype=np.float32)
++        elif source.ndim == 2 and source.shape[0] <= 8 and source.shape[1] > 8:
++            mono = np.asarray(source, dtype=np.float32).mean(axis=0, dtype=np.float32)
++        else:
++            raise RuntimeContractError(
++                "Inno reference audio must be mono or a downmixable 2D waveform"
++            )
++        if mono.size == 0 or not np.isfinite(mono).all():
++            raise RuntimeContractError("Inno reference audio must be non-empty and finite")
++
++        analysis_audio = np.ascontiguousarray(mono[: 30 * int(sample_rate)], dtype=np.float32)
++        if analysis_audio.size < 3 * int(sample_rate):
++            raise RuntimeContractError("Inno reference audio must contain at least 3 seconds")
++        duration_seconds = analysis_audio.size / int(sample_rate)
++        if duration_seconds < 5.0:
++            warnings.warn(
++                "Inno recommends at least 5 seconds of reference audio",
++                UserWarning,
++                stacklevel=2,
++            )
++        rms = float(np.sqrt(np.mean(np.square(analysis_audio, dtype=np.float64))))
++        if rms <= 1.0e-5:
++            raise RuntimeContractError("Inno reference audio must have non-silent RMS")
++        clipped_fraction = float(np.mean(np.abs(analysis_audio) >= 0.999))
++        if clipped_fraction > 0.05:
++            raise RuntimeContractError("Inno reference audio is grossly clipped")
++
++        audio_16k = resample_audio(analysis_audio, int(sample_rate), INNO_ENCODER_SAMPLE_RATE)
++        audio_24k = resample_audio(analysis_audio, int(sample_rate), INNO_TILT_SAMPLE_RATE)
++        fmax = enrollment_options.get("fmax")
++        if fmax is None:
++            selected_fmax = ceiling(analysis_audio, int(sample_rate))
++        else:
++            if isinstance(fmax, (bool, np.bool_)):
++                raise RuntimeContractError(
++                    "Inno enrollment option 'fmax' must be positive and finite"
++                )
++            try:
++                selected_fmax = float(fmax)
++            except (TypeError, ValueError) as exc:
++                raise RuntimeContractError(
++                    "Inno enrollment option 'fmax' must be positive and finite"
++                ) from exc
++            if not math.isfinite(selected_fmax) or selected_fmax <= 0:
++                raise RuntimeContractError(
++                    "Inno enrollment option 'fmax' must be positive and finite"
++                )
++
++        f0_mean, f0_sd, voiced_fraction = stats(
++            analysis_audio, int(sample_rate), fmax=selected_fmax
++        )
++        syllables_per_second = rate(analysis_audio, int(sample_rate))
++        target = np.asarray([f0_mean, f0_sd, syllables_per_second], dtype=np.float64)
++        sparse_weights = blend_weights(self, target)
++        dense_weights = dense_blend_weights(self.names, sparse_weights)
++        spectral_tilt = tilt(audio_24k, INNO_TILT_SAMPLE_RATE)
++        normalized_tilt = (spectral_tilt - self.tilt_mean) / self.tilt_sd
++        head_values = (
++            np.asarray(
++                [head_stats(analysis_audio, int(sample_rate), fmax=selected_fmax)],
++                dtype=np.float32,
++            )
++            if head
++            else np.zeros((1, 2), dtype=np.float32)
++        )
++        data = self.infer_graph(
++            speaker_fbank(audio_16k),
++            normalized_tilt,
++            head_values,
++            dense_weights,
++            head=bool(head),
++        )
++        metadata = {
++            "sample_rate": int(sample_rate),
++            "encoder_sample_rate": INNO_ENCODER_SAMPLE_RATE,
++            "tilt_sample_rate": INNO_TILT_SAMPLE_RATE,
++            "prosody_sample_rate": int(sample_rate),
++            "duration_seconds": float(duration_seconds),
++            "truncated": bool(mono.size > analysis_audio.size),
++            "f0_mean": float(f0_mean),
++            "f0_sd": float(f0_sd),
++            "voiced_fraction": float(voiced_fraction),
++            "syllables_per_second": float(syllables_per_second),
++            "spectral_tilt": float(spectral_tilt),
++            "fmax": float(selected_fmax),
++            "head_stats": [float(value) for value in head_values.reshape(-1)] if head else None,
++            "blend_weights": sparse_weights,
++            "upstream_version": self.version,
++            "upstream_commit": self.upstream_commit,
++        }
++        return KokoroVoicePack(
++            data=data,
++            enroller=INNO_ENROLLER_ID,
++            model_fingerprint=self.model_fingerprint,
++            enroller_fingerprint=self.enroller_fingerprint,
++            metadata=metadata,
++        )
++
++    def diagnostics(self) -> RuntimeDiagnostic:
++        sessions = () if self._session is None else (self._session.diagnostics(),)
++        runtime = self.installation.metadata.get("runtime")
++        layout = (
++            runtime.get("layout", "single-onnx-v1")
++            if isinstance(runtime, Mapping)
++            else "single-onnx-v1"
++        )
++        return RuntimeDiagnostic(
++            system="kokoro",
++            ref=self.installation.ref,
++            layout=str(layout),
++            sessions=sessions,
++        )
++
++    def close(self) -> None:
++        session = self._session
++        self._session = None
++        close = getattr(session, "close", None)
++        if close is not None:
++            close()
+diff --git a/pyproject.toml b/pyproject.toml
+index ff0dede..40ae6ef 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -67,6 +67,8 @@ nnapi = []  # Supplied by a compatible mobile ONNX Runtime build.
+ xnnpack = []  # Supplied by a compatible ONNX Runtime build.
+ mobile = []  # Convenience marker for platform-managed mobile providers.
+ pocket = ["huggingface_hub>=0.24,<2", "safetensors>=0.4,<1"]
++inno = ["scipy>=1.10", "praat-parselmouth>=0.4.7"]
++inno-export = ["onnx>=1.16", "safetensors>=0.4", "torch>=2.0"]
+ dev = [
+   "pytest>=8",
+   "pytest-cov>=5",
+diff --git a/tests/fixtures/inno_fbank.npz b/tests/fixtures/inno_fbank.npz
+new file mode 100644
+index 0000000..22ad134
+Binary files /dev/null and b/tests/fixtures/inno_fbank.npz differ
+diff --git a/tests/fixtures/inno_prosody.json b/tests/fixtures/inno_prosody.json
+new file mode 100644
+index 0000000..687c230
+--- /dev/null
++++ b/tests/fixtures/inno_prosody.json
+@@ -0,0 +1,69 @@
++{
++  "source": {
++    "repository": "https://github.com/remsky/inno-kokoro",
++    "version": "0.2.0",
++    "commit": "892ef184bc932aa3ff9d72c1509d5b81ff6941e6",
++    "module": "inno_kokoro.prosody and inno_kokoro.enroll.blend_weights",
++    "waveform_sha256": "2d59382ed0a68ade2f782fbf40453cf10a5347dc8996fea6015289d67bc3114e",
++    "sample_rate": 16000,
++    "sample_count": 212000
++  },
++  "prosody": {
++    "ceiling_default": 350.68493150684935,
++    "ceiling_override": 190.0,
++    "stats_default": [9.78445816040039, 3.550626516342163, 1.0],
++    "stats_override": [3.65754771232605, 2.1163346767425537, 1.0],
++    "rate": 4.905660376988252,
++    "tilt": -21.559858322143555,
++    "head_stats_default": [9.096092992560319, 9.996495556623686e-5],
++    "head_stats_override": [3.0960968692928823, 0.00010151973099480759]
++  },
++  "blend": {
++    "names": ["af_a", "af_b", "af_c", "am_a", "am_b", "bf_a", "bf_b"],
++    "stats": [
++      [8.0, 3.200000047683716, 3.5],
++      [9.699999809265137, 2.0999999046325684, 4.800000190734863],
++      [11.100000381469727, 4.0, 5.199999809265137],
++      [12.800000190734863, 1.2999999523162842, 4.0],
++      [15.0, 3.799999952316284, 5.800000190734863],
++      [19.0, 2.0, 3.200000047683716],
++      [23.0, 4.5, 5.0]
++    ],
++    "stats_dtype": "float32",
++    "grades": [
++      4.0, 3.200000047683716, 2.0, 3.799999952316284, 1.5, 3.0999999046325684,
++      2.4000000953674316
++    ],
++    "grades_dtype": "float32",
++    "gate": 4.0,
++    "scale": [1.0, 0.8, 1.2],
++    "scale_dtype": "float64",
++    "grade_pen": 0.75,
++    "cases": [
++      {
++        "name": "inside_gate",
++        "target": [10.5, 2.7, 4.6],
++        "weights": {
++          "af_a": 0.13513711897762223,
++          "af_b": 0.35878973023871963,
++          "af_c": 0.3171139727906789,
++          "am_a": 0.1889591779929793
++        }
++      },
++      {
++        "name": "below_stock_range",
++        "target": [1.0, 1.4, 3.0],
++        "weights": {
++          "af_a": 1.0
++        }
++      },
++      {
++        "name": "above_stock_range",
++        "target": [35.0, 4.0, 6.0],
++        "weights": {
++          "bf_b": 1.0
++        }
++      }
++    ]
++  }
++}
+diff --git a/tests/test_catalog.py b/tests/test_catalog.py
+index 327528f..dcb732d 100644
+--- a/tests/test_catalog.py
++++ b/tests/test_catalog.py
+@@ -5,10 +5,83 @@ import json
+ import pytest
+
+ from onnxvoice.catalog import CatalogClient
+-from onnxvoice.errors import CatalogError
++from onnxvoice.errors import AssetNotFoundError, CatalogError
+ from onnxvoice.types import CatalogItem
+
+
++def _kokoro_inno_catalog():
++    return {
++        "models": {
++            "v1.0": {
++                "sample_rate": 24000,
++                "runtime": {
++                    "layout": "single",
++                    "default_voice": "af_heart",
++                    "voices": ["af_heart"],
++                    "voice_enrollers": [
++                        {
++                            "id": "inno-v0.2",
++                            "kind": "kokoro-voicepack-tuner",
++                            "input": "reference-audio",
++                            "transcript_required": False,
++                            "min_seconds": 3.0,
++                            "recommended_seconds": 5.0,
++                            "max_seconds": 30.0,
++                            "output": {
++                                "format": "kokoro-voicepack-v1",
++                                "shape": [510, 1, 256],
++                                "dtype": "float32",
++                            },
++                            "model_component": "inno_voicepack",
++                            "metadata_component": "inno_tuner",
++                        }
++                    ],
++                },
++                "distributions": [
++                    {
++                        "id": "cpu",
++                        "runtime_ready": True,
++                        "artifacts": [
++                            {
++                                "id": "model-fp32",
++                                "role": "model",
++                                "local_name": "model-fp32.onnx",
++                                "url": "https://example.invalid/model-fp32.onnx",
++                                "quality": "fp32",
++                                "format": "onnx",
++                            },
++                            {
++                                "id": "model-fp16",
++                                "role": "model",
++                                "local_name": "model-fp16.onnx",
++                                "url": "https://example.invalid/model-fp16.onnx",
++                                "quality": "fp16",
++                                "format": "onnx",
++                            },
++                            {
++                                "id": "inno-graph",
++                                "role": "model",
++                                "component": "inno_voicepack",
++                                "local_name": "inno-voicepack.onnx",
++                                "url": "https://example.invalid/inno-voicepack.onnx",
++                                "format": "onnx",
++                            },
++                            {
++                                "id": "inno-metadata",
++                                "role": "metadata",
++                                "component": "inno_tuner",
++                                "local_name": "inno-tuner.npz",
++                                "url": "https://example.invalid/inno-tuner.npz",
++                                "format": "numpy-npz",
++                            },
++                        ],
++                    }
++                ],
++            }
++        }
++    }
++
++
+ def test_piper_catalog_is_normalized(tmp_path):
+     raw = {
+         "source": {
+@@ -102,6 +175,44 @@ def test_kokoro_default_selects_one_model_quality(tmp_path):
+     assert [a.quality for a in fp16.artifacts if a.role == "model"] == ["fp16"]
+
+
++def test_kokoro_inno_artifacts_survive_base_quality_selection(tmp_path):
++    source = tmp_path / "kokoro-inno.json"
++    source.write_text(json.dumps(_kokoro_inno_catalog()), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
++
++    for quality in (None, "fp16"):
++        item = client.resolve("kokoro:v1.0", quality=quality)
++        expected_quality = quality or "fp32"
++        base_models = [
++            artifact
++            for artifact in item.artifacts
++            if artifact.role == "model" and artifact.component != "inno_voicepack"
++        ]
++        assert [artifact.quality for artifact in base_models] == [expected_quality]
++        assert any(
++            artifact.role == "model" and artifact.component == "inno_voicepack"
++            for artifact in item.artifacts
++        )
++        assert any(
++            artifact.role == "metadata" and artifact.component == "inno_tuner"
++            for artifact in item.artifacts
++        )
++
++    with pytest.raises(AssetNotFoundError, match="quality='int8'"):
++        client.resolve("kokoro:v1.0", quality="int8")
++
++
++def test_kokoro_inno_catalog_requires_both_capability_artifacts(tmp_path):
++    raw = _kokoro_inno_catalog()
++    raw["models"]["v1.0"]["distributions"][0]["artifacts"].pop()
++    source = tmp_path / "kokoro-inno.json"
++    source.write_text(json.dumps(raw), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
++
++    with pytest.raises(CatalogError, match="model:inno_voicepack.*metadata:inno_tuner"):
++        client.resolve("kokoro:v1.0")
++
++
+ def test_kokoro_distribution_selection_is_explicit(tmp_path):
+     raw = {
+         "models": {
+@@ -340,7 +451,6 @@ def test_catalog_item_timing_output_tolerates_malformed_metadata(metadata):
+     assert item.timing_output is None
+
+
+-
+ def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path):
+     components = (
+         "reference_wavlm",
+@@ -404,9 +514,9 @@ def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path
+     }
+     source = tmp_path / "kokoro-clone.json"
+     source.write_text(json.dumps(raw), encoding="utf-8")
+-    item = CatalogClient(
+-        cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}
+-    ).resolve("kokoro:clone", quality="int8")
++    item = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}).resolve(
++        "kokoro:clone", quality="int8"
++    )
+
+     assert item.voices == ()
+     assert item.default_voice is None
+@@ -421,7 +531,6 @@ def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path
+         for artifact in item.artifacts
+     )
+
+-
+     incomplete = json.loads(json.dumps(raw))
+     incomplete["models"]["clone"]["distributions"][0]["artifacts"] = [
+         artifact
+diff --git a/tests/test_kokoro_cloning.py b/tests/test_kokoro_cloning.py
+index 106c211..33a4623 100644
+--- a/tests/test_kokoro_cloning.py
++++ b/tests/test_kokoro_cloning.py
+@@ -203,9 +203,7 @@ def test_reference_state_validates_shapes_finiteness_and_fingerprint():
+     with pytest.raises(RuntimeContractError, match="mask must have shape"):
+         KokoroReferenceState(np.zeros((1, 256)), np.zeros((1, 1, 192)), np.ones((1, 2)), "f")
+     with pytest.raises(RuntimeContractError, match="finite"):
+-        KokoroReferenceState(
+-            np.full((1, 256), np.nan), np.zeros((1, 1, 192)), np.ones((1, 1)), "f"
+-        )
++        KokoroReferenceState(np.full((1, 256), np.nan), np.zeros((1, 1, 192)), np.ones((1, 1)), "f")
+     with pytest.raises(RuntimeContractError, match="non-empty model fingerprint"):
+         KokoroReferenceState(np.zeros((1, 256)), np.zeros((1, 1, 192)), np.ones((1, 1)), " ")
+
+@@ -242,7 +240,6 @@ def test_reference_state_arguments_are_clone_only(tmp_path):
+         adapter.prepare_reference([1], audio_24k=np.zeros(72000), audio_16k=np.zeros(48000))
+
+
+-
+ def test_reference_mels_match_upstream_torchaudio_fixture():
+     """Fixture uses AkinVox's published reference_mel.py preprocessing."""
+     fixture_path = Path(__file__).parent / "fixtures" / "kokoro_cloning_reference_mel.npz"
+@@ -321,7 +318,6 @@ def test_reference_validation_precedes_session_creation(tmp_path):
+         assert not runtime._sessions
+
+
+-
+ def _run_synthesis(tmp_path, *, durations=None):
+     run_order = []
+     sessions = {}
+@@ -389,8 +385,14 @@ def test_precomputed_state_skips_enrollment_sessions_and_tracks_lifecycle(tmp_pa
+     assert not np.array_equal(first_har, third_har)
+     assert not any(component.startswith("reference_") for component in sessions)
+     diagnostics = adapter.diagnostics()
+-    assert {session.component for session in diagnostics.sessions} == {"prosody", "curves", "decoder"}
+-    assert all(session.providers_active == ("CPUExecutionProvider",) for session in diagnostics.sessions)
++    assert {session.component for session in diagnostics.sessions} == {
++        "prosody",
++        "curves",
++        "decoder",
++    }
++    assert all(
++        session.providers_active == ("CPUExecutionProvider",) for session in diagnostics.sessions
++    )
+     assert run_order == ["prosody", "curves", "decoder"] * 3
+
+     adapter.close()
+@@ -422,19 +424,18 @@ def test_cloning_duration_safety_limits(tmp_path, durations, message):
+         (1.0, "b" * 64, RuntimeContractError, "different model build"),
+     ],
+ )
+-def test_cloning_rejects_unsupported_speed_and_model_state(tmp_path, speed, fingerprint, error, message):
++def test_cloning_rejects_unsupported_speed_and_model_state(
++    tmp_path, speed, fingerprint, error, message
++):
+     adapter, state, sessions, _ = _run_synthesis(tmp_path)
+     if fingerprint is not None:
+-        state = KokoroReferenceState(
+-            state.style, state.memory, state.memory_mask, fingerprint
+-        )
++        state = KokoroReferenceState(state.style, state.memory, state.memory_mask, fingerprint)
+
+     with pytest.raises(error, match=message):
+         adapter.infer([7, 8], reference=state, speed=speed)
+     assert not sessions
+
+
+-
+ def test_local_component_mapping_runs_fake_enrollment_and_synthesis(tmp_path):
+     components = (
+         "reference_wavlm",
+diff --git a/tests/test_kokoro_inno.py b/tests/test_kokoro_inno.py
+new file mode 100644
+index 0000000..04d542b
+--- /dev/null
++++ b/tests/test_kokoro_inno.py
+@@ -0,0 +1,532 @@
++from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++from types import SimpleNamespace
++
++import numpy as np
++import pytest
++
++from onnxvoice.errors import CapabilityError, RuntimeContractError
++from onnxvoice.systems import kokoro_inno as inno_module
++from onnxvoice.systems.kokoro import KokoroAdapter
++from onnxvoice.systems.kokoro_inno import (
++    InnoVoiceTuner,
++    KokoroVoicePack,
++    blend_weights,
++    ceiling,
++    dense_blend_weights,
++    head_stats,
++    inno_model_fingerprint,
++    rate,
++    resample_audio,
++    speaker_fbank,
++    stats,
++    tilt,
++)
++from onnxvoice.types import Installation, InstalledArtifact, SessionDiagnostic
++
++
++def test_inno_fbank_matches_pinned_upstream_fixture():
++    fixture_path = Path(__file__).parent / "fixtures" / "inno_fbank.npz"
++    with np.load(fixture_path, allow_pickle=False) as fixture:
++        actual = speaker_fbank(fixture["waveform"])
++        expected = fixture["expected_fbank"]
++        assert fixture["upstream_version"].item() == "0.2.0"
++        assert fixture["upstream_commit"].item() == "892ef184bc932aa3ff9d72c1509d5b81ff6941e6"
++        assert fixture["generator"].item().endswith("_ResNet34.fbank")
++
++    assert actual.shape == (1, 300, 80)
++    assert actual.dtype == np.float32
++    assert actual.flags.c_contiguous
++    np.testing.assert_allclose(actual, expected, rtol=2.0e-6, atol=1.0e-4)
++
++
++def test_inno_fbank_uses_snip_edges_frame_count_and_rejects_invalid_audio():
++    waveform = np.zeros(400 + 160 * 3, dtype=np.float32)
++    assert speaker_fbank(waveform).shape == (1, 4, 80)
++
++    with pytest.raises(RuntimeContractError, match="one-dimensional"):
++        speaker_fbank(np.zeros((2, 400), dtype=np.float32))
++    with pytest.raises(RuntimeContractError, match="floating-point"):
++        speaker_fbank(np.zeros(400, dtype=np.int16))
++    with pytest.raises(RuntimeContractError, match="finite"):
++        speaker_fbank(np.full(400, np.nan, dtype=np.float32))
++    with pytest.raises(RuntimeContractError, match="400 samples"):
++        speaker_fbank(np.zeros(399, dtype=np.float32))
++
++
++@pytest.mark.parametrize(
++    ("source_rate", "target_rate"), [(48000, 16000), (22050, 24000), (16000, 24000)]
++)
++def test_inno_resampling_matches_upstream_polyphase_contract(source_rate, target_rate):
++    signal = pytest.importorskip("scipy.signal")
++    waveform = np.random.default_rng(1024).normal(0, 0.1, source_rate // 2).astype(np.float32)
++    divisor = np.gcd(source_rate, target_rate)
++
++    actual = resample_audio(waveform, source_rate, target_rate)
++    expected = signal.resample_poly(
++        waveform, target_rate // divisor, source_rate // divisor
++    ).astype(np.float32)
++
++    assert actual.dtype == np.float32
++    assert actual.flags.c_contiguous
++    np.testing.assert_array_equal(actual, expected)
++
++
++def test_inno_resampling_identity_owns_an_output_copy():
++    waveform = np.linspace(-0.5, 0.5, 100, dtype=np.float32)
++    actual = resample_audio(waveform, 16000, 16000)
++
++    np.testing.assert_array_equal(actual, waveform)
++    assert not np.shares_memory(actual, waveform)
++
++
++@pytest.mark.parametrize(("source_rate", "target_rate"), [(0, 16000), (16000, 0)])
++def test_inno_resampling_rejects_nonpositive_rates(source_rate, target_rate):
++    with pytest.raises(RuntimeContractError, match="positive integer"):
++        resample_audio(np.ones(16, dtype=np.float32), source_rate, target_rate)
++
++
++def _inno_prosody_fixture():
++    fixture_dir = Path(__file__).parent / "fixtures"
++    metadata = json.loads((fixture_dir / "inno_prosody.json").read_text(encoding="utf-8"))
++    with np.load(fixture_dir / "inno_fbank.npz", allow_pickle=False) as fixture:
++        waveform = fixture["prosody_waveform"]
++        sample_rate = int(fixture["sample_rate"])
++    digest = hashlib.sha256(waveform.tobytes()).hexdigest()
++    assert metadata["source"]["version"] == "0.2.0"
++    assert metadata["source"]["commit"] == "892ef184bc932aa3ff9d72c1509d5b81ff6941e6"
++    assert metadata["source"]["waveform_sha256"] == digest
++    return waveform, sample_rate, metadata
++
++
++def test_inno_prosody_matches_pinned_upstream_fixture():
++    pytest.importorskip("scipy")
++    waveform, sample_rate, fixture = _inno_prosody_fixture()
++    expected = fixture["prosody"]
++
++    assert ceiling(waveform, sample_rate) == expected["ceiling_default"]
++    assert ceiling(waveform, sample_rate, fmax=190.0) == expected["ceiling_override"]
++    np.testing.assert_allclose(stats(waveform, sample_rate), expected["stats_default"], atol=1.0e-6)
++    np.testing.assert_allclose(
++        stats(waveform, sample_rate, fmax=190.0), expected["stats_override"], atol=1.0e-6
++    )
++    assert rate(waveform, sample_rate) == pytest.approx(expected["rate"], abs=1.0e-7)
++    assert tilt(waveform, sample_rate) == pytest.approx(expected["tilt"], abs=1.0e-5)
++
++
++def test_inno_praat_head_stats_match_multichunk_upstream_fixture():
++    pytest.importorskip("parselmouth")
++    waveform, sample_rate, fixture = _inno_prosody_fixture()
++    expected = fixture["prosody"]
++
++    np.testing.assert_allclose(
++        head_stats(waveform, sample_rate), expected["head_stats_default"], atol=1.0e-10
++    )
++    np.testing.assert_allclose(
++        head_stats(waveform, sample_rate, fmax=190.0),
++        expected["head_stats_override"],
++        atol=1.0e-10,
++    )
++
++
++def test_inno_blend_weights_match_upstream_nnls_cases():
++    pytest.importorskip("scipy.optimize")
++    fixture = _inno_prosody_fixture()[2]["blend"]
++    tuner = SimpleNamespace(
++        names=fixture["names"],
++        stats=np.asarray(fixture["stats"], dtype=fixture["stats_dtype"]),
++        grades=np.asarray(fixture["grades"], dtype=fixture["grades_dtype"]),
++        gate=fixture["gate"],
++        scale=np.asarray(fixture["scale"], dtype=fixture["scale_dtype"]),
++        grade_pen=fixture["grade_pen"],
++    )
++
++    for case in fixture["cases"]:
++        actual = blend_weights(tuner, np.asarray(case["target"], dtype=np.float64))
++        expected = case["weights"]
++        assert actual.keys() == expected.keys()
++        np.testing.assert_allclose(
++            list(actual.values()), list(expected.values()), rtol=1.0e-10, atol=1.0e-12
++        )
++        dense = dense_blend_weights(fixture["names"], actual)
++        assert dense.shape == (1, len(fixture["names"]))
++        np.testing.assert_allclose(
++            dense,
++            [[expected.get(name, 0.0) for name in fixture["names"]]],
++            rtol=1.0e-7,
++            atol=1.0e-8,
++        )
++
++
++def test_inno_silence_has_no_pitch_or_syllable_rate():
++    silence = np.zeros(3 * 16000, dtype=np.float32)
++    assert ceiling(silence, 16000) == 400.0
++    assert stats(silence, 16000) == (0.0, 0.0, 0.0)
++    assert rate(silence, 16000) == 0.0
++
++
++def _fake_inno_installation(tmp_path: Path, *, version: str = "0.2.0") -> Installation:
++    base_path = tmp_path / "base.onnx"
++    graph_path = tmp_path / "inno_voicepack.onnx"
++    metadata_path = tmp_path / "inno_tuner.npz"
++    base_path.write_bytes(b"kokoro base graph")
++    graph_path.write_bytes(b"fake Inno graph")
++    np.savez(
++        metadata_path,
++        blend_names=np.asarray(["af_one", "af_two", "am_one"]),
++        blend_stats=np.zeros((3, 3), dtype=np.float32),
++        blend_grades=np.ones(3, dtype=np.float32),
++        blend_scale=np.ones(3, dtype=np.float32),
++        blend_gate=np.asarray(4.0),
++        grade_pen=np.asarray(1.0),
++        tilt_mean=np.asarray(-7.8),
++        tilt_sd=np.asarray(1.8),
++        version=np.asarray(version),
++        upstream_commit=np.asarray("892ef184bc932aa3ff9d72c1509d5b81ff6941e6"),
++        checkpoint_sha256=np.asarray("a" * 64),
++    )
++
++    def installed(role: str, path: Path, component: str | None = None) -> InstalledArtifact:
++        content = path.read_bytes()
++        return InstalledArtifact(
++            role=role,
++            filename=path.name,
++            path=path,
++            sha256=hashlib.sha256(content).hexdigest(),
++            size=len(content),
++            component=component,
++        )
++
++    return Installation(
++        system="kokoro",
++        id="test-kokoro",
++        kind="model",
++        path=tmp_path,
++        artifacts=(
++            installed("model", base_path),
++            installed("model", graph_path, "inno_voicepack"),
++            installed("metadata", metadata_path, "inno_tuner"),
++        ),
++        metadata={
++            "runtime": {
++                "layout": "single-onnx-v1",
++                "voice_enrollers": [
++                    {
++                        "id": "inno-v0.2",
++                        "kind": "kokoro-voicepack-tuner",
++                        "input": "reference-audio",
++                        "transcript_required": False,
++                        "min_seconds": 3.0,
++                        "recommended_seconds": 5.0,
++                        "max_seconds": 30.0,
++                        "output": {
++                            "format": "kokoro-voicepack-v1",
++                            "shape": [510, 1, 256],
++                            "dtype": "float32",
++                        },
++                        "model_component": "inno_voicepack",
++                        "metadata_component": "inno_tuner",
++                    }
++                ],
++            }
++        },
++    )
++
++
++def test_inno_tuner_validates_inputs_runs_lazily_and_closes(tmp_path):
++    installation = _fake_inno_installation(tmp_path)
++    created = []
++
++    class FakeSession:
++        input_names = ("fbank", "tilt", "head_stats", "blend_weights", "head_enabled")
++        output_names = ("voicepack",)
++
++        def __init__(self):
++            self.inputs = None
++            self.closed = False
++
++        def run(self, inputs):
++            self.inputs = inputs
++            return [np.zeros((510, 1, 256), dtype=np.float32)]
++
++        def close(self):
++            self.closed = True
++
++    def session_factory(path, component):
++        created.append((path, component))
++        session = FakeSession()
++        created.append(session)
++        return session
++
++    tuner = InnoVoiceTuner(installation, session_factory=session_factory)
++    assert created == []
++    assert inno_model_fingerprint(installation) == tuner.model_fingerprint
++    with pytest.raises(RuntimeContractError, match="at least one frame"):
++        tuner.infer_graph(np.zeros((1, 0, 80)), 0.0, np.zeros((1, 2)), np.ones((1, 3)))
++    assert created == []
++
++    output = tuner.infer_graph(
++        np.zeros((1, 8, 80)),
++        -0.25,
++        np.asarray([[6.0, 1.2]], dtype=np.float32),
++        np.asarray([[0.2, 0.3, 0.5]], dtype=np.float32),
++        head=False,
++    )
++    assert output.shape == (510, 1, 256)
++    assert output.dtype == np.float32
++    assert created[0] == (
++        installation.artifact_path("model", component="inno_voicepack"),
++        "inno_voicepack",
++    )
++    session = created[1]
++    assert session.inputs["head_enabled"].tolist() == [0.0]
++    assert all(value.flags.c_contiguous for value in session.inputs.values())
++    tuner.close()
++    assert session.closed
++
++
++def test_inno_tuner_rejects_incompatible_metadata_version(tmp_path):
++    installation = _fake_inno_installation(tmp_path, version="0.1.0")
++    with pytest.raises(RuntimeContractError, match="Expected Inno tuner metadata v0.2.0"):
++        InnoVoiceTuner(installation)
++
++
++def test_inno_fingerprint_requires_advertised_capability(tmp_path):
++    installation = _fake_inno_installation(tmp_path)
++    installation.metadata["runtime"]["voice_enrollers"] = []
++    with pytest.raises(CapabilityError, match="does not advertise"):
++        inno_model_fingerprint(installation)
++
++
++def test_kokoro_voice_pack_owns_canonical_data_and_selects_style_rows():
++    source = np.ones((510, 1, 256), dtype=np.float64)
++    pack = KokoroVoicePack(
++        data=source,
++        enroller="inno-v0.2",
++        model_fingerprint="a" * 64,
++        metadata={"upstream_version": "0.2.0", "blend_weights": {"af_one": 1.0}},
++    )
++
++    assert pack.data.dtype == np.float32
++    assert pack.data.flags.c_contiguous and not pack.data.flags.writeable
++    assert not np.shares_memory(pack.data, source)
++    assert len(pack.fingerprint) == 64
++    assert len(pack.enroller_fingerprint) == 64
++    with pytest.raises(TypeError):
++        pack.metadata["blend_weights"]["af_one"] = 0.0
++    np.testing.assert_array_equal(pack.style_for(12), np.ones((1, 256), dtype=np.float32))
++    assert pack.style_for(1000).shape == (1, 256)
++    with pytest.raises(RuntimeContractError, match="non-negative integer"):
++        pack.style_for(-1)
++    with pytest.raises(RuntimeContractError, match="shape"):
++        KokoroVoicePack(np.zeros((510, 256)), "inno-v0.2", "a" * 64)
++    with pytest.raises(RuntimeContractError, match="finite"):
++        KokoroVoicePack(np.full((510, 1, 256), np.nan), "inno-v0.2", "a" * 64)
++    with pytest.raises(RuntimeContractError, match="fingerprint"):
++        KokoroVoicePack(
++            np.zeros((510, 1, 256)),
++            "inno-v0.2",
++            "a" * 64,
++            fingerprint="b" * 64,
++        )
++
++
++class _RecordingInnoSession:
++    input_names = ("fbank", "tilt", "head_stats", "blend_weights", "head_enabled")
++    output_names = ("voicepack",)
++
++    def __init__(self, path: Path):
++        self.path = path
++        self.inputs = None
++        self.closed = False
++
++    def run(self, inputs):
++        self.inputs = inputs
++        return [np.zeros((510, 1, 256), dtype=np.float32)]
++
++    def diagnostics(self):
++        return SessionDiagnostic(
++            component="inno_voicepack",
++            model_path=self.path,
++            providers_requested=("CPUExecutionProvider",),
++            providers_active=("CPUExecutionProvider",),
++            inputs=self.input_names,
++            outputs=self.output_names,
++        )
++
++    def close(self):
++        self.closed = True
++
++
++class _RecordingKokoroSession:
++    input_names = ("input_ids", "ref_s", "speed")
++    output_names = ("audio",)
++
++    def __init__(self, path: Path):
++        self.path = path
++        self.inputs = None
++        self.closed = False
++
++    def run(self, inputs):
++        self.inputs = inputs
++        return [np.zeros((1, 32), dtype=np.float32)]
++
++    def diagnostics(self):
++        return SessionDiagnostic(
++            component=None,
++            model_path=self.path,
++            providers_requested=("CPUExecutionProvider",),
++            providers_active=("CPUExecutionProvider",),
++            inputs=self.input_names,
++            outputs=self.output_names,
++        )
++
++    def close(self):
++        self.closed = True
++
++
++def test_adapter_enrollment_downmixes_truncates_and_reuses_style_without_changing_infer(
++    tmp_path, monkeypatch
++):
++    installation = _fake_inno_installation(tmp_path)
++    graph_sessions = []
++
++    def session_factory(path, component):
++        assert component == "inno_voicepack"
++        session = _RecordingInnoSession(path)
++        graph_sessions.append(session)
++        return session
++
++    observed = {"resamples": [], "stats_fmax": None, "target": None}
++
++    def fake_resample(audio, source_rate, target_rate):
++        observed["resamples"].append((audio.size, source_rate, target_rate))
++        return np.array(audio, dtype=np.float32, copy=True)
++
++    def fake_stats(audio, sample_rate, *, fmax):
++        observed["stats_fmax"] = fmax
++        return 5.0, 1.25, 0.75
++
++    def fake_blend(tuner, target):
++        observed["target"] = target.copy()
++        return {"af_one": 1.0}
++
++    monkeypatch.setattr(inno_module, "resample_audio", fake_resample)
++    monkeypatch.setattr(inno_module, "speaker_fbank", lambda audio: np.ones((1, 8, 80), np.float32))
++    monkeypatch.setattr(
++        inno_module, "ceiling", lambda *args, **kwargs: pytest.fail("fmax override ignored")
++    )
++    monkeypatch.setattr(inno_module, "stats", fake_stats)
++    monkeypatch.setattr(inno_module, "rate", lambda audio, sample_rate: 4.0)
++    monkeypatch.setattr(inno_module, "tilt", lambda audio, sample_rate: -8.0)
++    monkeypatch.setattr(
++        inno_module, "head_stats", lambda *args, **kwargs: pytest.fail("head disabled")
++    )
++    monkeypatch.setattr(inno_module, "blend_weights", fake_blend)
++
++    adapter = KokoroAdapter(installation, session_factory=session_factory)
++    sample_rate = 16000
++    time = np.arange(31 * sample_rate, dtype=np.float32) / sample_rate
++    stereo = np.column_stack(
++        [0.1 * np.sin(2 * np.pi * 200 * time), 0.08 * np.sin(2 * np.pi * 180 * time)]
++    ).astype(np.float32)
++    with pytest.raises(CapabilityError, match="Unsupported Kokoro voice enroller"):
++        adapter.enroll_voice(stereo, sample_rate=sample_rate, enroller="not-available")
++    assert graph_sessions == []
++    pack = adapter.enroll_voice(
++        stereo,
++        sample_rate=sample_rate,
++        options={"fmax": 190.0, "head": False},
++    )
++
++    reused = adapter.enroll_voice(
++        stereo,
++        sample_rate=sample_rate,
++        options={"fmax": 190.0, "head": False},
++    )
++    assert reused.fingerprint == pack.fingerprint
++    assert len(graph_sessions) == 1
++    assert isinstance(pack, KokoroVoicePack)
++    assert pack.enroller == "inno-v0.2"
++    assert pack.data.shape == (510, 1, 256)
++    assert pack.metadata["duration_seconds"] == 30.0
++    assert "audio" not in pack.metadata
++    assert (
++        observed["resamples"]
++        == [(30 * sample_rate, sample_rate, 16000), (30 * sample_rate, sample_rate, 24000)] * 2
++    )
++    assert observed["stats_fmax"] == 190.0
++    np.testing.assert_array_equal(observed["target"], [5.0, 1.25, 4.0])
++    assert graph_sessions[0].inputs["head_enabled"].tolist() == [0.0]
++    assert adapter._session is None
++
++    monkeypatch.setattr(
++        "onnxvoice.systems.kokoro.OnnxSession",
++        lambda path, **kwargs: _RecordingKokoroSession(path),
++    )
++    result = adapter.infer([4, 5, 6], style=pack.style_for(3))
++    base_session = adapter._session
++    assert isinstance(base_session, _RecordingKokoroSession)
++    assert base_session.path == installation.artifact_path("model")
++    assert result.audio.shape == (32,)
++    assert base_session.inputs["ref_s"].shape == (1, 256)
++    np.testing.assert_array_equal(base_session.inputs["ref_s"], pack.style_for(3))
++    diagnostics = adapter.diagnostics()
++    assert {session.component for session in diagnostics.sessions} == {None, "inno_voicepack"}
++
++    adapter.close()
++    adapter.close()
++    assert graph_sessions[0].closed and base_session.closed
++    assert pack.style_for(3).shape == (1, 256)
++
++
++def test_adapter_requires_advertised_inno_capability(tmp_path):
++    installation = _fake_inno_installation(tmp_path)
++    installation.metadata["runtime"]["voice_enrollers"] = []
++    adapter = KokoroAdapter(
++        installation, session_factory=lambda *args: pytest.fail("no graph session expected")
++    )
++    with pytest.raises(CapabilityError, match="does not advertise"):
++        adapter.enroll_voice(np.ones(5 * 16000, dtype=np.float32), sample_rate=16000)
++    assert adapter._inno_runtime is None
++
++
++def test_inno_enrollment_validates_audio_and_warns_for_short_references(tmp_path):
++    installation = _fake_inno_installation(tmp_path)
++    created = []
++    tuner = InnoVoiceTuner(installation, session_factory=lambda *args: created.append(args))
++
++    with pytest.raises(RuntimeContractError, match="positive integer"):
++        tuner.enroll(np.ones(4 * 16000, np.float32), sample_rate=0)
++    with pytest.raises(RuntimeContractError, match="floating-point"):
++        tuner.enroll(np.ones(4 * 16000, np.int16), sample_rate=16000)
++    with pytest.raises(RuntimeContractError, match="downmixable"):
++        tuner.enroll(np.ones((12, 12), np.float32), sample_rate=16000)
++    with pytest.raises(RuntimeContractError, match="finite"):
++        tuner.enroll(np.full(4 * 16000, np.nan, np.float32), sample_rate=16000)
++    with pytest.raises(RuntimeContractError, match="at least 3 seconds"):
++        tuner.enroll(np.ones(2 * 16000, np.float32) * 0.1, sample_rate=16000)
++    with (
++        pytest.warns(UserWarning, match="at least 5 seconds"),
++        pytest.raises(RuntimeContractError, match="non-silent RMS"),
++    ):
++        tuner.enroll(np.zeros(4 * 16000, np.float32), sample_rate=16000)
++    with (
++        pytest.warns(UserWarning, match="at least 5 seconds"),
++        pytest.raises(RuntimeContractError, match="grossly clipped"),
++    ):
++        tuner.enroll(np.ones(4 * 16000, np.float32), sample_rate=16000)
++    with pytest.raises(RuntimeContractError, match="Unsupported Inno enrollment options"):
++        tuner.enroll(
++            np.full(5 * 16000, 0.1, np.float32), sample_rate=16000, options={"unknown": True}
++        )
++    with pytest.raises(RuntimeContractError, match="fmax"):
++        tuner.enroll(np.full(5 * 16000, 0.1, np.float32), sample_rate=16000, options={"fmax": 0})
++    with pytest.raises(RuntimeContractError, match="head.*boolean"):
++        tuner.enroll(
++            np.full(5 * 16000, 0.1, np.float32), sample_rate=16000, options={"head": "yes"}
++        )
++    assert created == []
+diff --git a/tests/test_kokoro_inno_export.py b/tests/test_kokoro_inno_export.py
+new file mode 100644
+index 0000000..a0999aa
+--- /dev/null
++++ b/tests/test_kokoro_inno_export.py
+@@ -0,0 +1,130 @@
++from __future__ import annotations
++
++import hashlib
++import os
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from onnxvoice.systems.kokoro_inno import (
++    InnoVoiceTuner,
++    blend_weights,
++    dense_blend_weights,
++    head_stats,
++    speaker_fbank,
++    tilt,
++)
++from onnxvoice.types import Installation, InstalledArtifact
++
++
++@pytest.mark.integration
++@pytest.mark.resource_heavy
++def test_exported_inno_graph_matches_upstream_voicepack(tmp_path, monkeypatch):
++    checkpoint_value = os.environ.get("ONNXVOICE_INNO_CHECKPOINT")
++    if not checkpoint_value or not Path(checkpoint_value).is_file():
++        pytest.skip("set ONNXVOICE_INNO_CHECKPOINT to local upstream v0.2.0 model.safetensors")
++
++    torch = pytest.importorskip("torch")
++    pytest.importorskip("onnx")
++    pytest.importorskip("onnxruntime")
++    pytest.importorskip("scipy")
++    pytest.importorskip("parselmouth")
++    upstream = pytest.importorskip("inno_kokoro.enroll")
++    upstream_prosody = pytest.importorskip("inno_kokoro.prosody")
++    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
++
++    from tools.export_kokoro_inno import export_inno_voicepack
++
++    checkpoint = Path(checkpoint_value)
++    graph_path = tmp_path / "inno_voicepack.onnx"
++    metadata_path = tmp_path / "inno_tuner.npz"
++    export_inno_voicepack(checkpoint, graph_path, metadata_path)
++    assert graph_path.is_file()
++    assert metadata_path.is_file()
++
++    base_path = tmp_path / "base.onnx"
++    base_path.write_bytes(b"test base model")
++
++    def artifact(role: str, path: Path, component: str | None = None) -> InstalledArtifact:
++        content = path.read_bytes()
++        return InstalledArtifact(
++            role=role,
++            filename=path.name,
++            path=path,
++            sha256=hashlib.sha256(content).hexdigest(),
++            size=len(content),
++            component=component,
++        )
++
++    installation = Installation(
++        system="kokoro",
++        id="inno-export-parity",
++        kind="model",
++        path=tmp_path,
++        artifacts=(
++            artifact("model", base_path),
++            artifact("model", graph_path, "inno_voicepack"),
++            artifact("metadata", metadata_path, "inno_tuner"),
++        ),
++        metadata={
++            "runtime": {
++                "layout": "single-onnx-v1",
++                "voice_enrollers": [
++                    {
++                        "id": "inno-v0.2",
++                        "kind": "kokoro-voicepack-tuner",
++                        "input": "reference-audio",
++                        "transcript_required": False,
++                        "min_seconds": 3.0,
++                        "recommended_seconds": 5.0,
++                        "max_seconds": 30.0,
++                        "output": {
++                            "format": "kokoro-voicepack-v1",
++                            "shape": [510, 1, 256],
++                            "dtype": "float32",
++                        },
++                        "model_component": "inno_voicepack",
++                        "metadata_component": "inno_tuner",
++                    }
++                ],
++            }
++        },
++    )
++    runtime = InnoVoiceTuner(installation, providers=["CPUExecutionProvider"])
++
++    fixture_path = Path(__file__).parent / "fixtures" / "inno_fbank.npz"
++    with np.load(fixture_path, allow_pickle=False) as fixture:
++        waveform = fixture["prosody_waveform"]
++        sample_rate = int(fixture["sample_rate"])
++    waveform_tensor = torch.from_numpy(waveform)
++    upstream_tuner = upstream.Tuner(str(checkpoint), device="cpu")
++    expected_pack, expected_weights = upstream.enroll(waveform_tensor, sample_rate, upstream_tuner)
++
++    fmax = upstream_prosody.ceiling(waveform_tensor, sample_rate)
++    target = np.asarray(
++        [
++            *upstream_prosody.stats(waveform_tensor, sample_rate, fmax)[:2],
++            upstream_prosody.rate(waveform_tensor, sample_rate),
++        ],
++        dtype=np.float64,
++    )
++    upstream_weights = upstream.blend_weights(upstream_tuner, target)
++    assert upstream_weights == expected_weights
++    host_weights = blend_weights(runtime, target)
++    assert host_weights == upstream_weights
++
++    voicepack = runtime.infer_graph(
++        speaker_fbank(waveform),
++        (tilt(waveform, sample_rate) - runtime.tilt_mean) / runtime.tilt_sd,
++        np.asarray([head_stats(waveform, sample_rate, fmax=fmax)], dtype=np.float32),
++        dense_blend_weights(runtime.names, host_weights),
++    )
++    difference = np.abs(voicepack - expected_pack.detach().cpu().numpy())
++    assert difference.shape == (510, 1, 256)
++    assert float(difference.max()) < 2.0e-6
++    enrolled = runtime.enroll(waveform, sample_rate=sample_rate)
++    assert enrolled.fingerprint
++    assert enrolled.data.shape == (510, 1, 256)
++    assert float(np.abs(enrolled.data - expected_pack.detach().cpu().numpy()).max()) < 2.0e-6
++    runtime.close()
+diff --git a/tests/test_local_runtime.py b/tests/test_local_runtime.py
+index 44830ba..27889fd 100644
+--- a/tests/test_local_runtime.py
++++ b/tests/test_local_runtime.py
+@@ -1,6 +1,9 @@
+ from __future__ import annotations
+
++import pytest
++
+ import onnxvoice
++from onnxvoice.errors import CapabilityError
+ from onnxvoice.manager import OnnxVoice
+
+
+@@ -31,7 +34,6 @@ def test_module_local_runtime_does_not_create_default_cache(tmp_path, monkeypatc
+     assert not cache.exists()
+
+
+-
+ def test_local_kokoro_cloning_accepts_generic_role_component_artifacts(tmp_path):
+     components = (
+         "reference_wavlm",
+@@ -62,7 +64,70 @@ def test_local_kokoro_cloning_accepts_generic_role_component_artifacts(tmp_path)
+
+     model_artifacts = adapter.installation.artifacts_for(role="model")
+     assert {artifact.component for artifact in model_artifacts} == set(components)
+-    assert adapter.installation.artifact("metadata", component="source_params").path == source_params
++    assert (
++        adapter.installation.artifact("metadata", component="source_params").path == source_params
++    )
+     assert adapter.installation.voices == ()
+     assert adapter.installation.default_voice is None
+     assert adapter._uses_cloning_runtime()
++
++
++def _inno_capability():
++    return {
++        "id": "inno-v0.2",
++        "kind": "kokoro-voicepack-tuner",
++        "input": "reference-audio",
++        "transcript_required": False,
++        "min_seconds": 3.0,
++        "recommended_seconds": 5.0,
++        "max_seconds": 30.0,
++        "output": {"format": "kokoro-voicepack-v1", "shape": [510, 1, 256], "dtype": "float32"},
++        "model_component": "inno_voicepack",
++        "metadata_component": "inno_tuner",
++    }
++
++
++def test_local_kokoro_inno_artifacts_are_optional_role_components(tmp_path):
++    base_model = tmp_path / "base.onnx"
++    base_model.write_bytes(b"base")
++    inno_model = tmp_path / "inno.onnx"
++    inno_model.write_bytes(b"inno")
++    tuner_metadata = tmp_path / "inno.npz"
++    tuner_metadata.write_bytes(b"metadata")
++
++    adapter = OnnxVoice.open_local(
++        system="kokoro",
++        artifacts={
++            "model:inno_voicepack": inno_model,
++            "metadata:inno_tuner": tuner_metadata,
++            "model": base_model,
++        },
++        runtime={"layout": "single-onnx-v1", "voice_enrollers": [_inno_capability()]},
++        sample_rate=24000,
++    )
++
++    assert adapter.installation.id == "local-base"
++    assert (
++        next(
++            artifact
++            for artifact in adapter.installation.artifacts_for(role="model")
++            if artifact.component is None
++        ).path
++        == base_model
++    )
++    assert adapter.installation.artifact("model", component="inno_voicepack").path == inno_model
++    assert adapter.installation.artifact("metadata", component="inno_tuner").path == tuner_metadata
++    assert adapter._session is None
++
++
++def test_local_kokoro_rejects_incomplete_declared_inno_capability(tmp_path):
++    base_model = tmp_path / "base.onnx"
++    base_model.write_bytes(b"base")
++
++    with pytest.raises(CapabilityError, match="missing a required artifact"):
++        OnnxVoice.open_local(
++            system="kokoro",
++            artifacts={"model": base_model},
++            runtime={"layout": "single-onnx-v1", "voice_enrollers": [_inno_capability()]},
++            sample_rate=24000,
++        )
+diff --git a/tools/export_kokoro_inno.py b/tools/export_kokoro_inno.py
+new file mode 100644
+index 0000000..c074f48
+--- /dev/null
++++ b/tools/export_kokoro_inno.py
+@@ -0,0 +1,153 @@
++from __future__ import annotations
++
++import argparse
++import hashlib
++import os
++from pathlib import Path
++
++INNO_VERSION = "0.2.0"
++INNO_COMMIT = "892ef184bc932aa3ff9d72c1509d5b81ff6941e6"
++GRAPH_INPUTS = ("fbank", "tilt", "head_stats", "blend_weights", "head_enabled")
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def export_inno_voicepack(
++    checkpoint: Path, destination: Path, metadata_destination: Path | None = None
++) -> tuple[Path, Path]:
++    """Export a local upstream v0.2.0 checkpoint as one stock-pack ONNX graph."""
++    os.environ["HF_HUB_OFFLINE"] = "1"
++
++    import numpy as np
++    import onnx
++    import torch
++    import torch.nn.functional as functional
++    from inno_kokoro.enroll import Tuner
++
++    tuner = Tuner(str(checkpoint), device="cpu")
++    if tuner.version != INNO_VERSION:
++        raise ValueError(f"Expected Inno weights v{INNO_VERSION}, found v{tuner.version}")
++    if not tuner.head:
++        raise ValueError("The selected Inno checkpoint has no v0.2.0 prosody head")
++
++    class VoicepackGraph(torch.nn.Module):
++        def __init__(self, source_tuner):
++            super().__init__()
++            self.encoder = source_tuner.encoder
++            self.style = source_tuner.style
++            self.register_buffer("tilt_direction", source_tuner.tilt_dir.detach().float())
++            self.register_buffer("blend_rows", source_tuner.rows.detach().float())
++            self.register_buffer("head_weight", source_tuner.head["W"].detach().float())
++            self.register_buffer("head_mean", source_tuner.head["mu"].detach().float())
++            self.register_buffer("head_std", source_tuner.head["sd"].detach().float())
++
++        def forward(self, fbank, tilt, head_stats, blend_weights, head_enabled):
++            backbone = self.encoder.backbone
++            features = fbank.permute(0, 2, 1).unsqueeze(1)
++            hidden = functional.relu(backbone.bn1(backbone.conv1(features)))
++            for index in range(4):
++                hidden = getattr(backbone, f"layer{index + 1}")(hidden)
++            pooled = torch.cat(
++                [
++                    hidden.mean(-1).flatten(1),
++                    torch.sqrt(hidden.var(-1) + 1.0e-7).flatten(1),
++                ],
++                dim=1,
++            )
++            embedding = functional.normalize(self.encoder.proj(backbone.seg_1(pooled)), dim=-1)
++            style = self.style(embedding) + self.tilt_direction.unsqueeze(0) * tilt.reshape(1, 1)
++            acoustic = style[:, None, :128].expand(-1, 510, -1)
++
++            weighted_rows = self.blend_rows.unsqueeze(0) * blend_weights[:, :, None, None]
++            predictor = weighted_rows.sum(dim=1)
++            normalized_head = (head_stats - self.head_mean) / self.head_std
++            head_input = torch.cat([normalized_head, torch.ones_like(head_enabled[:, None])], dim=1)
++            delta = head_input @ self.head_weight
++            predictor = predictor + head_enabled[:, None, None] * delta[:, None, :]
++            return torch.cat([acoustic, predictor], dim=-1).permute(1, 0, 2)
++
++    model = VoicepackGraph(tuner).eval().requires_grad_(False)
++    destination.parent.mkdir(parents=True, exist_ok=True)
++    metadata_destination = metadata_destination or destination.with_name("inno_tuner.npz")
++    if destination.resolve() == metadata_destination.resolve():
++        raise ValueError("Graph and tuner metadata destinations must be different files")
++    if metadata_destination.suffix.lower() != ".npz":
++        raise ValueError("Tuner metadata destination must use the .npz extension")
++    metadata_destination.parent.mkdir(parents=True, exist_ok=True)
++    checkpoint_sha256 = _sha256(checkpoint)
++    np.savez_compressed(
++        metadata_destination,
++        blend_names=np.asarray(tuner.names, dtype=np.str_),
++        blend_stats=np.asarray(tuner.stats, dtype=np.float32),
++        blend_grades=np.asarray(tuner.grades, dtype=np.float32),
++        blend_scale=np.asarray(tuner.scale),
++        blend_gate=np.asarray(tuner.gate, dtype=np.float32),
++        grade_pen=np.asarray(tuner.grade_pen, dtype=np.float32),
++        tilt_mean=np.asarray(tuner.tilt_norm[0], dtype=np.float32),
++        tilt_sd=np.asarray(tuner.tilt_norm[1], dtype=np.float32),
++        version=np.asarray(INNO_VERSION),
++        upstream_commit=np.asarray(INNO_COMMIT),
++        checkpoint_sha256=np.asarray(checkpoint_sha256),
++    )
++    metadata_sha256 = _sha256(metadata_destination)
++    example_inputs = (
++        torch.zeros((1, 300, 80), dtype=torch.float32),
++        torch.zeros((1,), dtype=torch.float32),
++        torch.zeros((1, 2), dtype=torch.float32),
++        torch.full((1, len(tuner.names)), 1.0 / len(tuner.names), dtype=torch.float32),
++        torch.ones((1,), dtype=torch.float32),
++    )
++    with torch.no_grad():
++        torch.onnx.export(
++            model,
++            example_inputs,
++            str(destination),
++            input_names=list(GRAPH_INPUTS),
++            output_names=["voicepack"],
++            dynamic_axes={"fbank": {1: "frames"}},
++            opset_version=17,
++            dynamo=False,
++        )
++
++    graph = onnx.load(str(destination))
++    onnx.checker.check_model(graph)
++    properties = {
++        "inno_upstream_version": INNO_VERSION,
++        "inno_upstream_commit": INNO_COMMIT,
++        "inno_checkpoint_sha256": checkpoint_sha256,
++        "inno_metadata_sha256": metadata_sha256,
++        "inno_blend_names": ",".join(tuner.names),
++        "inno_license": "Apache-2.0; embedded speaker encoder weights CC BY-SA 3.0",
++    }
++    for key, value in properties.items():
++        item = graph.metadata_props.add()
++        item.key = key
++        item.value = value
++    onnx.save(graph, str(destination))
++    return destination, metadata_destination
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument(
++        "--weights", type=Path, required=True, help="local Inno v0.2.0 model.safetensors"
++    )
++    parser.add_argument(
++        "--output", type=Path, required=True, help="destination inno_voicepack.onnx"
++    )
++    parser.add_argument("--metadata-output", type=Path, help="destination tuner metadata NPZ")
++    arguments = parser.parse_args()
++    for path in export_inno_voicepack(
++        arguments.weights, arguments.output, arguments.metadata_output
++    ):
++        print(path)
++
++
++if __name__ == "__main__":
++    main()

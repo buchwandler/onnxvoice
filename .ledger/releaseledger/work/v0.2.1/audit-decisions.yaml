@@ -1,0 +1,49 @@
+rows:
+  - sha: 37bb0b89a4e86c423baed90baf64f420a1b731d5
+    inspected: true
+    inspected_paths:
+      - docs/systems/kokoro.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/manager.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/systems/kokoro_cloning.py
+      - tests/fixtures/kokoro_cloning_reference_mel.npz
+      - tests/test_catalog.py
+      - tests/test_kokoro_cloning.py
+      - tests/test_local_runtime.py
+    observed_behavior: "Introduces a Kokoro cloning layout that enrolls validated reference audio and transcript tokens into reusable, model-bound state, then performs reference-conditioned multi-graph ONNX synthesis."
+    public_impact: public
+    decision: accepted
+    target_entry_key: kokoro-reference-cloning
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: ae2684c5382921e48a11833b666c99284709f2e8
+    inspected: true
+    inspected_paths:
+      - docs/systems/kokoro.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/manager.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/systems/kokoro_cloning.py
+      - onnxvoice/systems/kokoro_inno.py
+      - pyproject.toml
+      - tests/fixtures/inno_fbank.npz
+      - tests/fixtures/inno_prosody.json
+      - tests/test_catalog.py
+      - tests/test_kokoro_cloning.py
+      - tests/test_kokoro_inno.py
+      - tests/test_kokoro_inno_export.py
+      - tests/test_local_runtime.py
+      - tools/export_kokoro_inno.py
+    observed_behavior: "Adds optional Inno v0.2 audio enrollment for ordinary Kokoro runtimes, producing provenance-bound stock-compatible voice packs using an ONNX graph and host-side preprocessing, plus an offline graph exporter."
+    public_impact: public
+    decision: accepted
+    target_entry_key: kokoro-inno-enrollment
+    target_entry_id: null
+    notes: ""
+    stale: false
