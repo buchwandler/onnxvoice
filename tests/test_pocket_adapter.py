@@ -985,6 +985,21 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
     assert state.metadata["model_revision"] == "d" * 40
 
 
+def test_predefined_voice_rejects_non_safetensors_record(tmp_path: Path) -> None:
+    payload = b"fake wav payload"
+    adapter = _predefined_adapter(tmp_path)
+    record = _explicit_voice_state_record(payload)
+    record["format"] = "wav"
+    record["source"]["path"] = "languages/english_2026-04/embeddings/alba.wav"
+    adapter.installation.metadata["voice_states"] = [record]
+    with (
+        patch("onnxvoice.systems.pocket.download_huggingface_file") as download,
+        pytest.raises(RuntimeContractError, match="safetensors"),
+    ):
+        adapter.prepare_predefined_voice("alba")
+    download.assert_not_called()
+
+
 def test_pinned_explicit_voice_reuses_legacy_cache_offline(tmp_path: Path) -> None:
     payload = b"cached pinned state"
     cache_dir = tmp_path / "voice-cache"

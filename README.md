@@ -22,6 +22,8 @@ python -m pip install "onnxvoice[openvino]"
 
 For Pocket's optional Hugging Face voice-state downloads, add the `pocket` extra. See [Pocket download setup](docs/pocket-downloads.md).
 
+Pocket reference-voice prompts are managed assets as well: `kyutai-tts-voices:<id>` references resolve to pinned, integrity-checked prompts. See [Python usage](docs/python-api.md).
+
 ## Quick start
 
 ### CLI

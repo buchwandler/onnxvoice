@@ -8,6 +8,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -431,8 +432,8 @@ def _normalize_voice_states(bundle_id: str, raw: Any) -> list[dict[str, Any]]:
         )
         format_name = value.get("format")
         _require(
-            isinstance(format_name, str) and bool(format_name),
-            f"{bundle_id}/{name}: format is required",
+            format_name == "safetensors",
+            f"{bundle_id}/{name}: format must be safetensors",
         )
         size = value.get("size")
         _require(
@@ -1065,4 +1066,313 @@ def load_catalog(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         raise CatalogError(f"Unable to load catalog: {path}") from exc
     verify_catalog(data)
+    return data
+
+
+DEFAULT_PROMPT_REPOSITORY = "kyutai/tts-voices"
+DEFAULT_PROMPT_REVISION = "main"
+PROMPT_CATALOG_KIND = "pocket-voice-prompt-catalog"
+PROMPT_RECORD_FIELDS = frozenset(
+    {
+        "id",
+        "dataset",
+        "variant",
+        "base_id",
+        "format",
+        "source_path",
+        "source_repository",
+        "source_revision",
+        "url",
+        "size",
+        "sha256",
+        "license",
+        "license_note",
+        "license_evidence",
+        "metadata",
+    }
+)
+
+# Checked-in license decisions from upstream documentation. A prompt without a
+# matching rule fails the build loudly instead of inheriting a permissive license.
+_PROMPT_LICENSE_RULES: tuple[tuple[str, str, str | None], ...] = (
+    ("alba-mackenna/", "CC-BY-4.0", None),
+    ("cml-tts/fr/", "CC-BY-4.0", None),
+    (
+        "ears/",
+        "CC-BY-NC-4.0",
+        "Non-commercial: upstream README licenses EARS prompts as CC BY-NC 4.0.",
+    ),
+    (
+        "expresso/",
+        "CC-BY-NC-4.0",
+        "Non-commercial: upstream README licenses Expresso prompts as CC BY-NC 4.0.",
+    ),
+    (
+        "unmute-prod-website/",
+        "CC0-1.0",
+        "Upstream README describes most unmute-prod-website prompts as Kyutai recordings usable as CC0.",
+    ),
+    ("voice-donations/", "CC0-1.0", None),
+    ("voice-zero/", "CC0-1.0", None),
+    ("vctk/", "CC-BY-4.0", None),
+)
+
+_PROMPT_LICENSE_OVERRIDES: dict[str, tuple[str, str | None]] = {
+    "unmute-prod-website/degaulle-2.wav": (
+        "NOASSERTION",
+        "Upstream README does not establish a definitive license for this file.",
+    ),
+    "unmute-prod-website/ex04_narration_longform_00001.wav": (
+        "CC-BY-NC-4.0",
+        "Non-commercial: upstream README identifies this prompt as Expresso material.",
+    ),
+    "unmute-prod-website/p329_022.wav": (
+        "CC-BY-4.0",
+        "Upstream README identifies this prompt as VCTK material under CC BY 4.0.",
+    ),
+}
+
+
+def prompt_license(source_path: str) -> tuple[str, str | None]:
+    """Return the checked-in license decision for one prompt source path."""
+    if source_path in _PROMPT_LICENSE_OVERRIDES:
+        return _PROMPT_LICENSE_OVERRIDES[source_path]
+    for prefix, license_name, note in _PROMPT_LICENSE_RULES:
+        if source_path.startswith(prefix):
+            return license_name, note
+    raise CatalogError(f"{source_path}: no checked-in license rule covers this prompt")
+
+
+def _prompt_license_evidence(repository: str, revision: str) -> str:
+    return f"https://huggingface.co/{repository}/blob/{revision}/README.md"
+
+
+def _prompt_variant(prompt_id: str) -> tuple[str, str | None]:
+    if prompt_id.endswith("_enhanced"):
+        base_id = prompt_id[: -len("_enhanced")]
+        _require(bool(base_id), f"{prompt_id}: enhanced prompt has no base prompt id")
+        return "enhanced", base_id
+    return "original", None
+
+
+def _normalize_prompt_record(
+    record: Mapping[str, Any], *, repository: str, revision: str
+) -> dict[str, Any]:
+    """Validate one prompt record and return its normalized canonical shape."""
+    _require(
+        set(record) == PROMPT_RECORD_FIELDS,
+        f"Prompt record fields must be exactly {sorted(PROMPT_RECORD_FIELDS)}",
+    )
+    source_path = _safe_relative_path(record.get("source_path"), "prompt source path")
+    _require(source_path.endswith(".wav"), f"{source_path}: prompt source path must end with .wav")
+    prompt_id = source_path.removesuffix(".wav")
+    _safe_relative_path(prompt_id, "prompt id")
+    dataset = source_path.split("/", 1)[0]
+    variant, base_id = _prompt_variant(prompt_id)
+    license_name, license_note = prompt_license(source_path)
+    _require(isinstance(record.get("metadata"), dict), f"{source_path}: metadata must be an object")
+    size = record.get("size")
+    sha256 = record.get("sha256")
+    if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256.lower()) is None:
+        raise CatalogError(f"{source_path}: invalid sha256")
+    normalized = {
+        "id": prompt_id,
+        "dataset": dataset,
+        "variant": variant,
+        "base_id": base_id,
+        "format": "wav",
+        "source_path": source_path,
+        "source_repository": repository,
+        "source_revision": revision,
+        "url": huggingface_resolve_url(repository, revision, source_path),
+        "size": size,
+        "sha256": sha256.lower(),
+        "license": license_name,
+        "license_note": license_note,
+        "license_evidence": _prompt_license_evidence(repository, revision),
+        "metadata": dict(record.get("metadata") or {}),
+    }
+    _require(
+        isinstance(size, int) and not isinstance(size, bool) and size > 0,
+        f"{source_path}: size must be positive",
+    )
+    _require(
+        record.get("id") == prompt_id, f"{source_path}: id must be the source path without .wav"
+    )
+    _require(
+        record.get("dataset") == dataset, f"{source_path}: dataset must be the top-level group"
+    )
+    _require(record.get("variant") == variant, f"{source_path}: variant must be {variant!r}")
+    _require(record.get("base_id") == base_id, f"{source_path}: base_id must be {base_id!r}")
+    _require(record.get("format") == "wav", f"{source_path}: prompt format must be wav")
+    _require(
+        record.get("source_repository") == repository,
+        f"{source_path}: source_repository is not the catalog source",
+    )
+    _require(
+        record.get("source_revision") == revision,
+        f"{source_path}: source_revision must pin the catalog revision",
+    )
+    _require(record.get("url") == normalized["url"], f"{source_path}: url is not pinned to source")
+    _require(
+        record.get("license") == license_name and record.get("license_note") == license_note,
+        f"{source_path}: license does not match the checked-in license rules",
+    )
+    _require(
+        record.get("license_evidence") == normalized["license_evidence"],
+        f"{source_path}: license_evidence must pin the upstream README",
+    )
+    return normalized
+
+
+def _build_prompt_record(
+    repository: str, revision: str, source_path: str, metadata: Mapping[str, Any]
+) -> dict[str, Any]:
+    size, sha256 = _file_integrity(repository, revision, source_path, dict(metadata))
+    license_name, license_note = prompt_license(source_path)
+    prompt_id = source_path.removesuffix(".wav")
+    variant, base_id = _prompt_variant(prompt_id)
+    return _normalize_prompt_record(
+        {
+            "id": prompt_id,
+            "dataset": source_path.split("/", 1)[0],
+            "variant": variant,
+            "base_id": base_id,
+            "format": "wav",
+            "source_path": source_path,
+            "source_repository": repository,
+            "source_revision": revision,
+            "url": huggingface_resolve_url(repository, revision, source_path),
+            "size": size,
+            "sha256": sha256,
+            "license": license_name,
+            "license_note": license_note,
+            "license_evidence": _prompt_license_evidence(repository, revision),
+            "metadata": {},
+        },
+        repository=repository,
+        revision=revision,
+    )
+
+
+def build_prompt_catalog(
+    *,
+    repository: str = DEFAULT_PROMPT_REPOSITORY,
+    revision: str = DEFAULT_PROMPT_REVISION,
+    resolved_revision: str | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic Pocket voice-prompt catalog for one exact upstream revision."""
+    actual_revision = (resolved_revision or resolve_revision(repository, revision)).lower()
+    _require(
+        _SHA_RE.fullmatch(actual_revision) is not None,
+        "resolved_revision must be a 40-character SHA",
+    )
+    records = [
+        _build_prompt_record(repository, actual_revision, item["path"], item)
+        for item in _repository_tree(repository, actual_revision)
+        if isinstance(item.get("path"), str) and item["path"].endswith(".wav")
+    ]
+    _require(bool(records), "No WAV prompts found in repository")
+    records.sort(key=lambda record: record["id"])
+    catalog = {
+        "schema": 1,
+        "kind": PROMPT_CATALOG_KIND,
+        "source": {
+            "provider": "huggingface",
+            "repository": repository,
+            "requested_revision": revision,
+            "revision": actual_revision,
+            "prompt_count": len(records),
+            "license": "mixed",
+            "snapshot_note": None,
+        },
+        "prompts": records,
+    }
+    verify_prompt_catalog(catalog)
+    return catalog
+
+
+def verify_prompt_catalog(catalog: Any) -> None:
+    """Verify the canonical Pocket voice-prompt catalog contract."""
+    _require(isinstance(catalog, dict), "Catalog must be an object")
+    _require(
+        set(catalog) == {"schema", "kind", "source", "prompts"},
+        "Catalog must have exactly schema, kind, source, prompts",
+    )
+    _require(catalog.get("schema") == 1, "Catalog schema must be 1")
+    _require(
+        catalog.get("kind") == PROMPT_CATALOG_KIND,
+        f"Unexpected catalog kind: {catalog.get('kind')!r}",
+    )
+
+    source = catalog.get("source")
+    _require(isinstance(source, dict), "Catalog source must be an object")
+    source = cast(dict[str, Any], source)
+    required_source = {
+        "provider",
+        "repository",
+        "requested_revision",
+        "revision",
+        "prompt_count",
+        "license",
+        "snapshot_note",
+    }
+    _require(set(source) == required_source, f"Catalog source must have exactly {required_source}")
+    _require(source.get("provider") == "huggingface", "Catalog source provider must be huggingface")
+    repository = source.get("repository")
+    _require(
+        isinstance(repository, str) and re.fullmatch(r"[^/\\ ]+/[^/\\ ]+", repository) is not None,
+        "Invalid source repository",
+    )
+    assert isinstance(repository, str)
+    requested_revision = source.get("requested_revision")
+    _require(
+        isinstance(requested_revision, str) and bool(requested_revision),
+        "Invalid requested revision",
+    )
+    revision = source.get("revision")
+    _require(
+        isinstance(revision, str) and _SHA_RE.fullmatch(revision) is not None,
+        "Source revision must be a lowercase 40-character SHA",
+    )
+    assert isinstance(revision, str)
+    _require(
+        isinstance(source.get("license"), str) and bool(source["license"]),
+        "Catalog license is required",
+    )
+    _require(
+        source.get("snapshot_note") is None or isinstance(source["snapshot_note"], str),
+        "Invalid snapshot_note",
+    )
+
+    prompts = catalog.get("prompts")
+    _require(isinstance(prompts, list), "Catalog prompts must be a list")
+    prompts = cast(list[Any], prompts)
+    prompt_count = source.get("prompt_count")
+    _require(isinstance(prompt_count, int) and prompt_count > 0, "Invalid prompt count")
+    _require(
+        len(prompts) == prompt_count,
+        f"Prompt count mismatch: expected {prompt_count}, got {len(prompts)}",
+    )
+    ids: list[str] = []
+    for raw in prompts:
+        _require(isinstance(raw, dict), "Prompt must be an object")
+        record = cast(dict[str, Any], raw)
+        normalized = _normalize_prompt_record(record, repository=repository, revision=revision)
+        _require(
+            record == normalized,
+            f"{record.get('source_path')}: prompt must use the normalized record shape",
+        )
+        ids.append(normalized["id"])
+    _require(len(set(ids)) == len(ids), "Duplicate prompt ids")
+    _require(ids == sorted(ids), "Catalog prompts must be sorted by id")
+
+
+def load_prompt_catalog(path: Path) -> dict[str, Any]:
+    """Load and verify a Pocket voice-prompt catalog from disk."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CatalogError(f"Unable to load prompt catalog: {path}") from exc
+    verify_prompt_catalog(data)
     return data

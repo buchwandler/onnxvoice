@@ -434,6 +434,44 @@ def test_build_catalog_preserves_explicit_voice_state_contract() -> None:
     assert state["source"]["path"] == state_path
 
 
+def test_build_catalog_rejects_non_safetensors_voice_state() -> None:
+    upstream = _upstream_bundle()
+    state_path = "languages/english_2026-04/embeddings/alba.wav"
+    upstream["voice_states"] = [
+        {
+            "name": "alba",
+            "compatible_bundle": "english_2026-04",
+            "source": {
+                "provider": "huggingface",
+                "repository": "kyutai/pocket-tts",
+                "revision": "d" * 40,
+                "path": state_path,
+            },
+            "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
+            "format": "wav",
+            "size": 123,
+            "sha256": "c" * 64,
+            "url": huggingface_resolve_url("kyutai/pocket-tts", "d" * 40, state_path),
+        }
+    ]
+    tree = [
+        {"path": artifact["path"], "size": artifact["size"], "lfs": {"oid": artifact["sha256"]}}
+        for artifact in _artifacts()
+    ]
+    with (
+        patch(
+            "onnxvoice.catalog_tools.pocket._list_bundle_paths",
+            return_value=[f"{BASE}/bundle.json"],
+        ),
+        patch(
+            "onnxvoice.catalog_tools.pocket._fetch_bundle_json", return_value=(upstream, "b" * 64)
+        ),
+        patch("onnxvoice.catalog_tools.pocket._repository_tree", return_value=tree),
+        pytest.raises(CatalogError, match="format must be safetensors"),
+    ):
+        build_catalog(resolved_revision=REVISION)
+
+
 def test_build_catalog_requires_bundles() -> None:
     with (
         patch("onnxvoice.catalog_tools.pocket._list_bundle_paths", return_value=[]),

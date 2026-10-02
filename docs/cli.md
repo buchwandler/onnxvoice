@@ -149,6 +149,12 @@ onnxvoice catalog piper build --output catalog/voices.json --source-output catal
 onnxvoice catalog piper verify --catalog catalog/voices.json --source catalog/source.json
 onnxvoice catalog pocket build --output catalog/bundles.json
 onnxvoice catalog pocket verify --catalog catalog/bundles.json
+onnxvoice catalog pocket prompts build \
+  --repository kyutai/tts-voices \
+  --revision main \
+  --output catalog/voice-prompts.json \
+  --source-output catalog/voice-prompts-source.json
+onnxvoice catalog pocket prompts verify --catalog catalog/voice-prompts.json --source catalog/voice-prompts-source.json
 onnxvoice catalog supertonic build --output catalog/supertonic.json
 onnxvoice catalog supertonic verify --catalog catalog/supertonic.json
 onnxvoice catalog kitten build \
@@ -160,3 +166,5 @@ onnxvoice catalog kitten verify --catalog catalog/models.json --source catalog/s
 ```
 
 Piper, Pocket, and Supertonic builders accept repository and revision options. The Kitten builder uses the normalized catalog as a seed manifest and refreshes each listed Hugging Face repository; it reads upstream `config.json` and artifact metadata. Build requires network access, while verification is offline. See [KittenTTS](systems/kitten.md) and `onnxvoice catalog <system> <action> --help` for details.
+
+The Pocket prompts builder resolves the requested revision to an exact commit SHA, enumerates that pinned tree, selects `.wav` prompts, and applies checked-in license rules. A prompt without a matching license rule fails the build loudly, and every prompt record pins revision, size, SHA-256, and license provenance. See [Pocket downloads](pocket-downloads.md).

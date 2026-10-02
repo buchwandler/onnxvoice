@@ -228,6 +228,31 @@ def build_parser() -> argparse.ArgumentParser:
     pocket_verify_parser.add_argument("--catalog", type=Path, required=True)
     pocket_verify_parser.add_argument("--source", type=Path)
 
+    pocket_prompts_parser = pocket_sub.add_parser(
+        "prompts", help="Manage the Pocket voice-prompt catalog"
+    )
+    pocket_prompts_sub = pocket_prompts_parser.add_subparsers(
+        dest="catalog_prompts_action", required=True
+    )
+
+    pocket_prompts_build_parser = pocket_prompts_sub.add_parser(
+        "build", help="Build a pinned Pocket voice-prompt catalog"
+    )
+    pocket_prompts_build_parser.add_argument("--output", type=Path, required=True)
+    pocket_prompts_build_parser.add_argument("--source-output", type=Path)
+    pocket_prompts_build_parser.add_argument(
+        "--repository", default=pocket_catalog_tools.DEFAULT_PROMPT_REPOSITORY
+    )
+    pocket_prompts_build_parser.add_argument(
+        "--revision", default=pocket_catalog_tools.DEFAULT_PROMPT_REVISION
+    )
+
+    pocket_prompts_verify_parser = pocket_prompts_sub.add_parser(
+        "verify", help="Verify a Pocket voice-prompt catalog"
+    )
+    pocket_prompts_verify_parser.add_argument("--catalog", type=Path, required=True)
+    pocket_prompts_verify_parser.add_argument("--source", type=Path)
+
     supertonic_parser = catalog_sub.add_parser("supertonic", help="Manage the Supertonic-3 catalog")
     supertonic_sub = supertonic_parser.add_subparsers(dest="catalog_action", required=True)
 
@@ -883,6 +908,29 @@ def main(argv: list[str] | None = None) -> int:
                             raise ValueError("Source metadata does not match catalog provenance")
                     print(f"Verified {len(catalog['bundles'])} Pocket bundles")
                     return 0
+                if args.catalog_action == "prompts":
+                    if args.catalog_prompts_action == "build":
+                        catalog = pocket_catalog_tools.build_prompt_catalog(
+                            repository=args.repository,
+                            revision=args.revision,
+                        )
+                        pocket_catalog_tools.verify_prompt_catalog(catalog)
+                        _write_json(args.output, catalog)
+                        if args.source_output is not None:
+                            _write_json(args.source_output, {"schema": 1, **catalog["source"]})
+                        print(f"Wrote {len(catalog['prompts'])} prompts to {args.output}")
+                        return 0
+                    if args.catalog_prompts_action == "verify":
+                        catalog = pocket_catalog_tools.load_prompt_catalog(args.catalog)
+                        if args.source is not None:
+                            source = json.loads(args.source.read_text(encoding="utf-8"))
+                            expected = {"schema": 1, **catalog["source"]}
+                            if source != expected:
+                                raise ValueError(
+                                    "Source metadata does not match catalog provenance"
+                                )
+                        print(f"Verified {len(catalog['prompts'])} Pocket voice prompts")
+                        return 0
             elif args.catalog_system == "supertonic":
                 if args.catalog_action == "build":
                     catalog = supertonic_catalog_tools.build_catalog(

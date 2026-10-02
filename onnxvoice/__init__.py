@@ -14,7 +14,20 @@ except ImportError:  # source checkout before setuptools_scm has generated _vers
 from typing import Any
 
 from .catalog import CatalogClient
-from .errors import NotInstalledError, VoiceNotFoundError
+from .errors import (
+    InvalidVoicePromptRefError,
+    NotInstalledError,
+    UnknownVoicePromptError,
+    VoiceNotFoundError,
+    VoicePromptAccessError,
+    VoicePromptCatalogError,
+    VoicePromptDownloadError,
+    VoicePromptError,
+    VoicePromptFormatError,
+    VoicePromptIntegrityError,
+    VoicePromptNotFoundError,
+    VoicePromptOfflineError,
+)
 from .inventory import (
     language_base,
     language_tags_match,
@@ -22,6 +35,7 @@ from .inventory import (
     normalize_language_tag,
 )
 from .manager import OnnxVoice
+from .pocket_voice_prompts import PocketVoicePrompt, PocketVoicePrompts
 from .runtime import OnnxSession, available_providers
 from .store import AssetStore
 from .systems import (
@@ -121,9 +135,39 @@ def remove(ref: str, **kwargs):
     return _manager().remove(ref, **kwargs)
 
 
+def list_pocket_voice_prompts(**kwargs: Any) -> tuple[PocketVoicePrompt, ...]:
+    """List cataloged Pocket reference-voice prompts from the shared catalog."""
+    return _manager().list_pocket_voice_prompts(**kwargs)
+
+
+def resolve_pocket_voice_prompt(ref: str, **kwargs: Any) -> PocketVoicePrompt:
+    """Resolve one managed Pocket voice-prompt reference to its typed record."""
+    return _manager().resolve_pocket_voice_prompt(ref, **kwargs)
+
+
+def fetch_pocket_voice_prompt(ref: str, **kwargs: Any):
+    """Fetch one Pocket voice prompt into the shared cache and return its local path."""
+    return _manager().fetch_pocket_voice_prompt(ref, **kwargs)
+
+
 __all__ = [
     "__version__",
     "OnnxVoice",
+    "PocketVoicePrompt",
+    "PocketVoicePrompts",
+    "VoicePromptError",
+    "InvalidVoicePromptRefError",
+    "VoicePromptFormatError",
+    "VoicePromptCatalogError",
+    "UnknownVoicePromptError",
+    "VoicePromptNotFoundError",
+    "VoicePromptOfflineError",
+    "VoicePromptAccessError",
+    "VoicePromptDownloadError",
+    "VoicePromptIntegrityError",
+    "list_pocket_voice_prompts",
+    "resolve_pocket_voice_prompt",
+    "fetch_pocket_voice_prompt",
     "CatalogClient",
     "language_base",
     "language_tags_match",

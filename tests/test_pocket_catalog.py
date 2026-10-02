@@ -457,6 +457,39 @@ def test_pocket_voice_discovery_requires_explicit_state_records() -> None:
     assert item.metadata["voice_states"][0]["source"]["path"] == state_path
 
 
+def test_voice_states_reject_non_safetensors_format() -> None:
+    entry = copy.deepcopy(SAMPLE_CATALOG["bundles"][0])
+    for artifact in entry["artifacts"]:
+        artifact["sha256"] = "a" * 64
+    state_path = "languages/english_2026-04/embeddings/alba.wav"
+    entry["voice_states"] = [
+        {
+            "name": "alba",
+            "compatible_bundle": entry["id"],
+            "source": {
+                "provider": "huggingface",
+                "repository": "kyutai/pocket-tts",
+                "revision": "d" * 40,
+                "path": state_path,
+            },
+            "access": {"gated": False, "distributable": True, "license": "cc-by-4.0"},
+            "format": "wav",
+            "size": 123,
+            "sha256": "b" * 64,
+            "url": huggingface_resolve_url("kyutai/pocket-tts", "d" * 40, state_path),
+            "resolver": None,
+        }
+    ]
+    catalog = {
+        "schema": 1,
+        "kind": "pocket-onnx-bundle-catalog",
+        "source": SAMPLE_CATALOG["source"],
+        "bundles": {entry["id"]: entry},
+    }
+    with pytest.raises(CatalogError, match="format must be safetensors"):
+        _parse_pocket(catalog)
+
+
 def _parse_catalog_with_voice_details(details):
     catalog = copy.deepcopy(SAMPLE_CATALOG)
     entry = catalog["bundles"][0]

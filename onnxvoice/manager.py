@@ -18,6 +18,7 @@ from .inventory import (
     voice_language_codes_from_catalog,
     voice_metadata_from_catalog,
 )
+from .pocket_voice_prompts import PocketVoicePrompt, PocketVoicePrompts
 from .store import AssetStore, ProgressCallback
 from .systems import get_adapter
 from .types import CatalogItem, Installation, InstalledArtifact, VoiceRecord
@@ -54,6 +55,10 @@ class OnnxVoice:
             cache_dir=Path(cache_dir) if cache_dir is not None else None,
             sources=catalog_sources,
             offline=offline,
+        )
+
+        self.voice_prompts = PocketVoicePrompts(
+            cache_dir=cache_dir, offline=offline, catalog_sources=catalog_sources
         )
 
     def list(
@@ -163,6 +168,42 @@ class OnnxVoice:
             )
 
         return sorted(records, key=lambda record: (record.system, record.asset_id, record.voice_id))
+
+    def list_pocket_voice_prompts(
+        self,
+        *,
+        dataset: str | None = None,
+        variant: str | None = None,
+        license: str | None = None,
+        refresh: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> tuple[PocketVoicePrompt, ...]:
+        """List cataloged Pocket reference-voice prompts with optional filters.
+
+        Catalog access can perform network I/O when cached catalog data is unusable.
+        """
+        return self.voice_prompts.list(
+            dataset=dataset,
+            variant=variant,
+            license=license,
+            refresh=refresh,
+            progress=progress,
+        )
+
+    def resolve_pocket_voice_prompt(self, ref: str, *, refresh: bool = False) -> PocketVoicePrompt:
+        """Resolve one managed Pocket voice-prompt reference to its typed record."""
+        return self.voice_prompts.resolve(ref, refresh=refresh)
+
+    def fetch_pocket_voice_prompt(
+        self,
+        ref: str,
+        *,
+        refresh: bool = False,
+        force: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> Path:
+        """Fetch one Pocket voice prompt and return its verified local cache path."""
+        return self.voice_prompts.fetch(ref, refresh=refresh, force=force, progress=progress)
 
     def install(
         self,

@@ -437,6 +437,10 @@ class PocketAdapter(SystemAdapter):
                     raise RuntimeContractError("Pocket voice-state metadata must contain objects")
                 if record.get("name") != name:
                     continue
+                if record.get("format") != "safetensors":
+                    raise RuntimeContractError(
+                        f"Pocket predefined voice {name!r} must use the safetensors format"
+                    )
                 source = record.get("source")
                 access = record.get("access")
                 if not isinstance(source, Mapping) or not isinstance(access, Mapping):

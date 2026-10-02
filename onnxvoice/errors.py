@@ -84,3 +84,43 @@ class RuntimeContractError(OnnxVoiceError):
 
 class CapabilityError(RuntimeContractError):
     """The requested model layout or runtime capability is unsupported."""
+
+
+class VoicePromptError(OnnxVoiceError):
+    """A managed Pocket voice prompt could not be parsed, resolved, or fetched."""
+
+
+class InvalidVoicePromptRefError(VoicePromptError):
+    """A voice prompt reference or source URL is malformed or unsafe."""
+
+
+class VoicePromptFormatError(VoicePromptError):
+    """A voice prompt uses an unsupported audio format."""
+
+
+class VoicePromptCatalogError(VoicePromptError, CatalogError):
+    """Voice prompt catalog data is invalid, unsafe, or incomplete."""
+
+
+class UnknownVoicePromptError(VoicePromptError, AssetNotFoundError):
+    """The requested voice prompt is not declared by the prompt catalog."""
+
+
+class VoicePromptNotFoundError(VoicePromptError, AssetNotFoundError):
+    """A cataloged voice prompt asset is missing at its pinned upstream revision."""
+
+
+class VoicePromptOfflineError(VoicePromptError, OfflineError):
+    """A voice prompt is unavailable while offline and not cached."""
+
+
+class VoicePromptAccessError(VoicePromptError, AssetAccessError):
+    """A voice prompt asset requires authentication or repository access."""
+
+
+class VoicePromptDownloadError(VoicePromptError, AssetDownloadError):
+    """A voice prompt asset could not be downloaded."""
+
+
+class VoicePromptIntegrityError(VoicePromptError, IntegrityError):
+    """A voice prompt asset failed size or SHA-256 verification."""

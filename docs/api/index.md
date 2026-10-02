@@ -13,6 +13,7 @@ The reference documents the public package facade and the lower-level modules. I
 
 manager
 catalog
+pocket_voice_prompts
 store
 runtime
 inventory

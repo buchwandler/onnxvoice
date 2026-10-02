@@ -40,6 +40,14 @@ onnxvoice --offline doctor --system pocket --format json
 
 For a gated-access failure, verify account access on the repository page and confirm the active Hugging Face account with `hf auth whoami`. If the application runs in a service, container, or a different user environment, verify that it sees the intended `HF_HOME`, `HF_TOKEN_PATH`, or `HF_TOKEN` configuration without displaying token contents.
 
+## Reference-voice prompts
+
+Managed reference-voice prompts, for example `kyutai-tts-voices:alba-mackenna/casual`, are public upstream WAV files from `kyutai/tts-voices`. The prompt catalog pins each prompt to an exact commit revision and records its size, SHA-256, dataset, variant, and license provenance. The audio stays on the Hugging Face repository and is cached lazily under `pocket-voice-prompts` in the OnnxVoice cache root.
+
+Fetches verify size and SHA-256 before an atomic cache publication, and both values are part of the cache identity, so a changed pin cannot reuse an older prompt. Cached prompts work offline, and an offline miss reports an offline error instead of touching the network. Set `ONNXVOICE_POCKET_VOICE_PROMPTS_CATALOG` to override the prompt catalog source with a local path or an HTTP(S) URL.
+
+Reference prompts never enter Pocket `voice_states`. Those records are predefined `.safetensors` states, and a catalog record with `"format": "wav"` is rejected at parse time, before any runtime loading.
+
 ## Offline and local use
 
 An online managed run downloads the model bundle and, when selected, its predefined voice state into OnnxVoice-managed storage. Once all required assets are cached, repeat the operation in offline mode:

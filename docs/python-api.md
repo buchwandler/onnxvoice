@@ -56,6 +56,21 @@ Kitten uses the same managed lifecycle. Its runtime receives model-ready token I
 
 An installation can also be found with `voice.installed()` or `voice.find_installed(ref)`. `voice.update(ref)` refreshes catalog data and atomically replaces the selected installation while preserving its quality and distribution by default.
 
+## Pocket reference-voice prompts
+
+Reference-voice prompts are cataloged upstream WAV assets and stay separate from predefined Pocket `.safetensors` voice states. Canonical references use the `kyutai-tts-voices:` namespace and accept nested prompt ids:
+
+```python
+prompt = voice.resolve_pocket_voice_prompt("kyutai-tts-voices:alba-mackenna/casual")
+print(prompt.id, prompt.variant, prompt.license, prompt.sha256)
+
+path = voice.fetch_pocket_voice_prompt("kyutai-tts-voices:alba-mackenna/casual")
+```
+
+`list_pocket_voice_prompts()` returns typed `PocketVoicePrompt` records and filters by `dataset=`, `variant=`, and `license=`. `fetch_pocket_voice_prompt()` downloads the exact pinned revision, verifies size and SHA-256, and returns the verified local `Path`; callers never need the cache layout. Offline mode serves cached prompts and raises a typed error on a miss.
+
+For parity with Pocket TTS, `resolve_pocket_voice_prompt()` also accepts `hf://<repository>/<path>` and revision-pinned `https://huggingface.co/<repository>/resolve/<sha>/<path>` URLs. Both forms resolve through the same pinned catalog, so integrity, offline caching, and license metadata always apply. Unpinned or uncataloged URLs are rejected.
+
 ## Open explicit local files
 
 Use `open_local()` when files should remain outside the managed store:

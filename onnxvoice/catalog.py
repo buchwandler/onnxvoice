@@ -687,8 +687,8 @@ def _parse_pocket_voice_states(
             raise CatalogError(f"{bundle_id}/{name}: access flags must be boolean")
         if not isinstance(access.get("license"), str) or not access["license"]:
             raise CatalogError(f"{bundle_id}/{name}: access.license is required")
-        if not isinstance(raw.get("format"), str) or not raw["format"]:
-            raise CatalogError(f"{bundle_id}/{name}: format is required")
+        if raw.get("format") != "safetensors":
+            raise CatalogError(f"{bundle_id}/{name}: format must be safetensors")
         size = raw.get("size")
         if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
             raise CatalogError(f"{bundle_id}/{name}: size must be positive")
