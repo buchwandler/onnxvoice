@@ -4,6 +4,7 @@ from ..errors import UnsupportedSystemError
 from .base import SystemAdapter
 from .kitten import KittenAdapter
 from .kokoro import KokoroAdapter
+from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
 from .kokoro_split import SplitKokoroRuntime
 from .piper import PiperAdapter
 from .pocket import PocketAdapter
@@ -41,6 +42,8 @@ __all__ = [
     "SupertonicAdapter",
     "KittenAdapter",
     "SplitKokoroRuntime",
+    "KokoroCloningRuntime",
+    "KokoroReferenceState",
     "register_adapter",
     "get_adapter",
     "registered_systems",

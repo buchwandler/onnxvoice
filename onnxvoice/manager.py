@@ -299,17 +299,15 @@ class OnnxVoice:
         }
         for key, raw_path in merged_files.items():
             component = None
-            if system == "supertonic":
-                if key in model_components:
-                    role = "model"
-                    component = key
-                elif key.startswith("voice_style:"):
-                    component = key.partition(":")[2]
-                    if not component:
+            if system == "supertonic" and key in model_components:
+                role = "model"
+                component = key
+            elif ":" in key:
+                role, _, component = key.partition(":")
+                if not role or not component or ":" in component:
+                    if key.startswith("voice_style:"):
                         raise ValueError("voice_style keys must include a component name")
-                    role = "voice_style"
-                else:
-                    role = key
+                    raise ValueError("Artifact keys must use non-empty role:component values")
             elif key in {"prosody", "curves", "decoder"}:
                 role = "model"
                 component = key

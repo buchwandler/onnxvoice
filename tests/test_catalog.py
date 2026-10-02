@@ -338,3 +338,100 @@ def test_kokoro_conflicting_timing_declarations_fail(tmp_path):
 def test_catalog_item_timing_output_tolerates_malformed_metadata(metadata):
     item = CatalogItem("kokoro", "v1.0", "model", (), metadata=metadata)
     assert item.timing_output is None
+
+
+
+def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path):
+    components = (
+        "reference_wavlm",
+        "reference_encoders",
+        "reference_mapper",
+        "prosody",
+        "curves",
+        "decoder",
+    )
+    artifacts = [
+        {
+            "role": "model",
+            "component": component,
+            "quality": quality,
+            "local_name": f"{component}-{quality}.onnx",
+            "url": "https://example.invalid/model.onnx",
+            "sha256": "a" * 64,
+        }
+        for quality in ("fp32", "int8")
+        for component in components
+    ]
+    artifacts.extend(
+        [
+            {
+                "role": "metadata",
+                "component": "source_params",
+                "local_name": "source_params.npz",
+                "url": "https://example.invalid/source_params.npz",
+                "sha256": "b" * 64,
+            },
+            {
+                "role": "config",
+                "local_name": "config.json",
+                "url": "https://example.invalid/config.json",
+                "sha256": "c" * 64,
+            },
+        ]
+    )
+    raw = {
+        "models": {
+            "clone": {
+                "sample_rate": 24000,
+                "runtime": {
+                    "layout": "cloning-onnx-v1",
+                    "voice_mode": "reference",
+                    "speed_supported": False,
+                    "style_dimensions": {"acoustic": 128, "duration": 128},
+                    "reference": {
+                        "format": "akinvox-cloning-reference-v1",
+                        "sample_rate": 24000,
+                        "identity_sample_rate": 16000,
+                        "min_seconds": 3.0,
+                        "max_seconds": 30.0,
+                        "style_width": 256,
+                        "memory_width": 192,
+                    },
+                },
+                "distributions": [{"id": "release", "artifacts": artifacts}],
+            }
+        }
+    }
+    source = tmp_path / "kokoro-clone.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    item = CatalogClient(
+        cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}
+    ).resolve("kokoro:clone", quality="int8")
+
+    assert item.voices == ()
+    assert item.default_voice is None
+    assert item.metadata["runtime"]["layout"] == "cloning-onnx-v1"
+    assert item.metadata["runtime"]["reference"]["identity_sample_rate"] == 16000
+    model_artifacts = [artifact for artifact in item.artifacts if artifact.role == "model"]
+    assert {artifact.component for artifact in model_artifacts} == set(components)
+    assert len(model_artifacts) == len(components)
+    assert {artifact.quality for artifact in model_artifacts} == {"int8"}
+    assert any(
+        artifact.role == "metadata" and artifact.component == "source_params"
+        for artifact in item.artifacts
+    )
+
+
+    incomplete = json.loads(json.dumps(raw))
+    incomplete["models"]["clone"]["distributions"][0]["artifacts"] = [
+        artifact
+        for artifact in incomplete["models"]["clone"]["distributions"][0]["artifacts"]
+        if artifact.get("component") != "curves"
+    ]
+    incomplete_source = tmp_path / "kokoro-clone-incomplete.json"
+    incomplete_source.write_text(json.dumps(incomplete), encoding="utf-8")
+    incomplete_client = CatalogClient(
+        cache_dir=tmp_path / "incomplete-cache", sources={"kokoro": str(incomplete_source)}
+    )
+    with pytest.raises(CatalogError, match="missing model components: curves"):
+        incomplete_client.resolve("kokoro:clone")

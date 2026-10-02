@@ -9,6 +9,7 @@ from ..errors import CapabilityError, RuntimeContractError
 from ..runtime import OnnxSession
 from ..types import InferenceResult, TensorSpec
 from .base import SystemAdapter
+from .kokoro_cloning import CLONING_LAYOUT, KokoroCloningRuntime, KokoroReferenceState
 from .kokoro_split import SplitKokoroRuntime
 
 
@@ -18,11 +19,16 @@ class KokoroAdapter(SystemAdapter):
     def __init__(self, *args: Any, session_factory: Any | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._split_runtime: SplitKokoroRuntime | None = None
+        self._cloning_runtime: KokoroCloningRuntime | None = None
         self._split_session_factory = session_factory
 
     def _uses_split_runtime(self) -> bool:
         runtime = self.installation.metadata.get("runtime") or {}
         return runtime.get("layout") in {"split", "multi", "split-onnx-v1"}
+
+    def _uses_cloning_runtime(self) -> bool:
+        runtime = self.installation.metadata.get("runtime") or {}
+        return runtime.get("layout") == CLONING_LAYOUT
 
     def _split(self) -> SplitKokoroRuntime:
         if self._split_runtime is None:
@@ -35,6 +41,30 @@ class KokoroAdapter(SystemAdapter):
             )
         return self._split_runtime
 
+    def _cloning(self) -> KokoroCloningRuntime:
+        if self._cloning_runtime is None:
+            self._cloning_runtime = KokoroCloningRuntime(
+                self.installation,
+                session_factory=self._split_session_factory,
+                providers=self.providers,
+                provider_options=self.provider_options,
+                session_options=self.session_options,
+            )
+        return self._cloning_runtime
+
+    def prepare_reference(
+        self,
+        reference_token_ids: Sequence[int],
+        *,
+        audio_24k: np.ndarray,
+        audio_16k: np.ndarray,
+    ) -> KokoroReferenceState:
+        if not self._uses_cloning_runtime():
+            raise CapabilityError("Reference enrollment requires the Kokoro cloning-onnx-v1 layout")
+        return self._cloning().prepare_reference(
+            reference_token_ids, audio_24k=audio_24k, audio_16k=audio_16k
+        )
+
     @property
     def session(self) -> OnnxSession:
         if self._session is None:
@@ -42,9 +72,12 @@ class KokoroAdapter(SystemAdapter):
                 artifact for artifact in self.installation.artifacts if artifact.role == "model"
             ]
             runtime = self.installation.metadata.get("runtime") or {}
-            if len(models) != 1 or runtime.get("layout") in {"split", "multi", "split-onnx-v1"}:
+            if (
+                len(models) != 1
+                or runtime.get("layout") in {"split", "multi", "split-onnx-v1", CLONING_LAYOUT}
+            ):
                 raise CapabilityError(
-                    "Split or multi-component Kokoro layouts do not expose a single session"
+                    "Split, cloning, or multi-component Kokoro layouts do not expose a single session"
                 )
             self._session = OnnxSession(
                 models[0].path,
@@ -54,15 +87,25 @@ class KokoroAdapter(SystemAdapter):
             )
         return self._session
 
+
     def infer(
         self,
         token_ids: Sequence[int],
         *,
         style: np.ndarray | Sequence[float] | None = None,
+        reference: KokoroReferenceState | None = None,
         speed: float = 1.0,
         seed: int = 1234,
         **_: Any,
     ) -> InferenceResult:
+        if self._uses_cloning_runtime():
+            if style is not None:
+                raise CapabilityError("Static style input is not supported by the Kokoro cloning layout")
+            if reference is None:
+                raise RuntimeContractError("A Kokoro reference state must be provided for cloning inference")
+            return self._cloning().infer(token_ids, reference=reference, speed=speed, seed=seed)
+        if reference is not None:
+            raise CapabilityError("Kokoro reference state requires the cloning-onnx-v1 layout")
         if self._uses_split_runtime():
             if style is None:
                 raise RuntimeContractError("A model-ready Kokoro style must be provided")
@@ -120,11 +163,16 @@ class KokoroAdapter(SystemAdapter):
         if self._split_runtime is not None:
             self._split_runtime.close()
             self._split_runtime = None
+        if self._cloning_runtime is not None:
+            self._cloning_runtime.close()
+            self._cloning_runtime = None
         super().close()
 
     def diagnostics(self) -> Any:
         if self._split_runtime is not None:
             return self._split_runtime.diagnostics()
+        if self._cloning_runtime is not None:
+            return self._cloning_runtime.diagnostics()
         return super().diagnostics()
 
     def _input_spec(self, name: str) -> TensorSpec | None:

@@ -66,6 +66,16 @@ DEFAULT_SOURCES = {
     "supertonic": "https://raw.githubusercontent.com/buchwandler/supertonic-onnx-bundles/main/catalog/bundles.json",
     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
 }
+_KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
+    {
+        "reference_wavlm",
+        "reference_encoders",
+        "reference_mapper",
+        "prosody",
+        "curves",
+        "decoder",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -400,6 +410,34 @@ def _parse_kokoro_entry(
             )
         )
     runtime, onnx_contract = _normalize_kokoro_runtime(entry)
+    if runtime.get("layout") == "cloning-onnx-v1":
+        model_artifacts = [artifact for artifact in artifacts if artifact.role == "model"]
+        model_components = {artifact.component for artifact in model_artifacts}
+        missing = _KOKORO_CLONING_MODEL_COMPONENTS - model_components
+        if missing:
+            raise CatalogError(
+                "Kokoro cloning distribution is missing model components: "
+                + ", ".join(sorted(missing))
+            )
+        for quality in {artifact.quality for artifact in model_artifacts}:
+            quality_components = {
+                artifact.component
+                for artifact in model_artifacts
+                if artifact.quality in {None, quality}
+            }
+            missing_for_quality = _KOKORO_CLONING_MODEL_COMPONENTS - quality_components
+            if missing_for_quality:
+                raise CatalogError(
+                    f"Kokoro cloning quality {quality!r} is missing model components: "
+                    + ", ".join(sorted(missing_for_quality))
+                )
+        if not any(
+            artifact.role == "metadata" and artifact.component == "source_params"
+            for artifact in artifacts
+        ):
+            raise CatalogError("Kokoro cloning distribution is missing metadata source_params")
+        if not any(artifact.role in {"config", "bundle", "manifest"} for artifact in artifacts):
+            raise CatalogError("Kokoro cloning distribution is missing its config/bundle")
     metadata = {
         "model_version": entry.get("model_version"),
         "frontend": entry.get("frontend"),

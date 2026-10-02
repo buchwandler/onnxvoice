@@ -24,7 +24,13 @@ from .inventory import (
 from .manager import OnnxVoice
 from .runtime import OnnxSession, available_providers
 from .store import AssetStore
-from .systems import SplitKokoroRuntime, register_adapter, registered_systems
+from .systems import (
+    KokoroCloningRuntime,
+    KokoroReferenceState,
+    SplitKokoroRuntime,
+    register_adapter,
+    registered_systems,
+)
 from .types import (
     Artifact,
     AssetProgress,
@@ -141,6 +147,8 @@ __all__ = [
     "register_adapter",
     "registered_systems",
     "SplitKokoroRuntime",
+    "KokoroReferenceState",
+    "KokoroCloningRuntime",
     "verify_installation",
     "validate_onnx",
     "validate_audio",
