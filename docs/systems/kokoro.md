@@ -1,10 +1,49 @@
 # Kokoro
 
-Kokoro supports a single ONNX model, the `split-onnx-v1` multi-component layout, and the reference-conditioned `cloning-onnx-v1` layout. Single and split inference accept caller-prepared model-ready style tensors. Cloning has a separate enrollment boundary and uses a reusable `KokoroReferenceState` instead of stock voices.
+Kokoro supports a single ONNX model, the `split-onnx-v1` multi-component layout, and the reference-conditioned `cloning-onnx-v1` layout. Single and split inference accept caller-prepared model-ready style tensors. Ordinary single and split installations may also advertise optional Inno voice enrollment through `runtime.voice_enrollers`; Inno adds components without changing the Kokoro layout. Cloning remains separate and uses a reusable `KokoroReferenceState` instead of stock voices.
 
 ## Quality and distribution
 
-A quality selection chooses a model variant within a distribution. It does not install every quality variant. Non-model runtime artifacts required by the selected distribution are installed with it. Explicit quality and distribution selections can have separate installation identities. A cloning distribution includes its enrollment graphs, synthesis graphs, source parameters, and config together for each supported quality.
+A quality selection chooses a base Kokoro model variant within a distribution. It does not install every quality variant. Required runtime artifacts are installed with the selected model. An Inno distribution keeps its shared `model:inno_voicepack` and `metadata:inno_tuner` artifacts when selecting a base-model quality. Explicit quality and distribution selections can have separate installation identities. A cloning distribution includes its enrollment graphs, synthesis graphs, source parameters, and config together for each supported quality.
+
+## Optional Inno voice enrollment
+
+Inno v0.2 adds reference-audio enrollment as an optional capability on ordinary single or split Kokoro installations. The base Kokoro inference graph remains separate. Enrollment uses an ONNX Runtime graph plus host-side preprocessing, and does not import PyTorch, Torchaudio, Transformers, or upstream Inno. Install the optional preprocessing dependencies with `pip install 'onnxvoice[inno]'`. The ONNX Runtime provider remains an independent installation choice.
+
+Catalog runtime metadata advertises the capability and names its artifacts as `model:inno_voicepack` and `metadata:inno_tuner`. Catalog parsing verifies that both are present and shared across base-model qualities. A local installation can use the same artifact roles and components:
+
+```python
+from onnxvoice import OnnxVoice
+
+# Copy the inno-v0.2 entry from catalog runtime.voice_enrollers.
+runtime = OnnxVoice.open_local(
+    system="kokoro",
+    artifacts={
+        "model": "model.onnx",
+        "voices": "voices.npz",
+        "model:inno_voicepack": "inno-voicepack.onnx",
+        "metadata:inno_tuner": "inno-tuner.npz",
+    },
+    runtime={
+        "layout": "single-onnx-v1",
+        "voice_enrollers": [inno_capability_metadata],
+    },
+    sample_rate=24000,
+)
+```
+
+`inno_capability_metadata` must declare id `inno-v0.2`, kind `kokoro-voicepack-tuner`, reference-audio input, no transcript requirement, duration limits of 3/5/30 seconds, output format `kokoro-voicepack-v1` with shape `[510, 1, 256]` and dtype `float32`, and the two component names above. Split installations use their usual `model:prosody`, `model:curves`, and `model:decoder` artifacts alongside the same Inno artifacts.
+
+Enrollment accepts a floating-point waveform and its sample rate. SciPy and Praat/Parselmouth are optional dependencies supplied by the `inno` extra. Inno's ONNX session is loaded only when enrollment is requested; the returned pack can then be used with the ordinary Kokoro inference API without loading the tuner again:
+
+```python
+pack = runtime.enroll_voice(reference_audio, sample_rate=24000)
+result = runtime.infer(token_ids, style=pack.style_for(len(token_ids)))
+```
+
+The `KokoroVoicePack` contains the stock-compatible `[510, 1, 256]` style table and artifact-bound provenance. `style_for` selects the row matching the token count and returns a model-ready style tensor. Enrollment does not replace or alter stock voice styles.
+
+The offline exporter targets `remsky/inno-kokoro` v0.2.0 at commit `892ef184bc932aa3ff9d72c1509d5b81ff6941e6`. Install its exporter-only dependencies with `pip install 'onnxvoice[inno-export]'`, then supply a local checkpoint: `python tools/export_kokoro_inno.py --weights model.safetensors --output inno_voicepack.onnx --metadata-output inno_tuner.npz`. It checks the checkpoint version and records the pinned source revision and checkpoint SHA-256 in the generated metadata and ONNX graph. It does not download weights, and model files are not bundled with onnxvoice.
 
 ## Single-model runtime
 

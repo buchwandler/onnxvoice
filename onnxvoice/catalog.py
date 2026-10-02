@@ -231,7 +231,12 @@ class CatalogClient:
         if item.system == "pocket":
             return _select_pocket_profile(item, quality)
         selected_quality = quality
-        model_artifacts = [a for a in item.artifacts if a.role == "model"]
+        model_artifacts = [
+            artifact
+            for artifact in item.artifacts
+            if artifact.role == "model"
+            and not (item.system == "kokoro" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT)
+        ]
         if selected_quality is None and len(model_artifacts) > 1:
             selected_quality = (
                 "fp32"
@@ -243,9 +248,17 @@ class CatalogClient:
         artifacts = tuple(
             artifact
             for artifact in item.artifacts
-            if artifact.role != "model" or artifact.quality in {None, selected_quality}
+            if (
+                artifact.role != "model"
+                or (item.system == "kokoro" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT)
+                or artifact.quality in {None, selected_quality}
+            )
         )
-        if not any(a.role == "model" for a in artifacts):
+        if not any(
+            artifact.role == "model"
+            and not (item.system == "kokoro" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT)
+            for artifact in artifacts
+        ):
             raise AssetNotFoundError(
                 f"{ref} has no model artifact with quality={selected_quality!r}"
             )
@@ -360,6 +373,123 @@ def _normalize_kokoro_runtime(
     return runtime, onnx_contract
 
 
+_KOKORO_INNO_ID = "inno-v0.2"
+_KOKORO_INNO_GRAPH_COMPONENT = "inno_voicepack"
+_KOKORO_INNO_METADATA_COMPONENT = "inno_tuner"
+_KOKORO_SPLIT_MODEL_COMPONENTS = frozenset({"prosody", "curves", "decoder"})
+_KOKORO_INNO_LAYOUTS = frozenset({"single", "single-onnx-v1", "split", "multi", "split-onnx-v1"})
+
+
+def _validate_kokoro_voice_enrollers(
+    runtime: Mapping[str, Any], artifacts: Sequence[Artifact]
+) -> None:
+    capabilities = runtime.get("voice_enrollers")
+    if capabilities is None:
+        return
+    if not isinstance(capabilities, (list, tuple)):
+        raise CatalogError("Kokoro runtime voice_enrollers must be a list")
+    seen_ids: set[str] = set()
+    for capability in capabilities:
+        if not isinstance(capability, Mapping):
+            raise CatalogError("Kokoro voice enroller declarations must be objects")
+        enroller_id = capability.get("id")
+        if not isinstance(enroller_id, str) or not enroller_id:
+            raise CatalogError("Kokoro voice enroller declaration is missing its id")
+        if enroller_id in seen_ids:
+            raise CatalogError(f"Kokoro voice enroller id {enroller_id!r} is duplicated")
+        seen_ids.add(enroller_id)
+        if not isinstance(capability.get("kind"), str) or not capability["kind"]:
+            raise CatalogError(f"Kokoro voice enroller {enroller_id!r} is missing its kind")
+        if enroller_id != _KOKORO_INNO_ID:
+            continue
+
+        expected = {
+            "kind": "kokoro-voicepack-tuner",
+            "input": "reference-audio",
+            "model_component": _KOKORO_INNO_GRAPH_COMPONENT,
+            "metadata_component": _KOKORO_INNO_METADATA_COMPONENT,
+        }
+        for key, value in expected.items():
+            if capability.get(key) != value:
+                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
+        if capability.get("transcript_required") is not False:
+            raise CatalogError("Kokoro Inno capability must declare transcript_required=false")
+        for key, value in (
+            ("min_seconds", 3.0),
+            ("recommended_seconds", 5.0),
+            ("max_seconds", 30.0),
+        ):
+            actual = capability.get(key)
+            if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
+            try:
+                actual_value = float(actual)
+            except (OverflowError, ValueError):
+                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}") from None
+            if not math.isfinite(actual_value) or actual_value != value:
+                raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
+        output = capability.get("output")
+        shape = output.get("shape") if isinstance(output, Mapping) else None
+        if (
+            not isinstance(output, Mapping)
+            or output.get("format") != "kokoro-voicepack-v1"
+            or not isinstance(shape, (list, tuple))
+            or tuple(shape) != (510, 1, 256)
+            or output.get("dtype") != "float32"
+        ):
+            raise CatalogError("Kokoro Inno capability has an invalid output contract")
+
+        layout = runtime.get("layout", "single")
+        if not isinstance(layout, str) or layout not in _KOKORO_INNO_LAYOUTS:
+            raise CatalogError(f"Kokoro Inno capability does not support layout {layout!r}")
+        base_models = [
+            artifact
+            for artifact in artifacts
+            if artifact.role == "model" and artifact.component != _KOKORO_INNO_GRAPH_COMPONENT
+        ]
+        if not base_models:
+            raise CatalogError("Kokoro Inno distribution is missing its base model artifacts")
+        for quality in {artifact.quality for artifact in base_models}:
+            selected_models = [
+                artifact for artifact in base_models if artifact.quality in {None, quality}
+            ]
+            components = {artifact.component for artifact in selected_models}
+            if layout in {"single", "single-onnx-v1"}:
+                if None not in components:
+                    raise CatalogError(
+                        f"Kokoro Inno quality {quality!r} is missing its single base model"
+                    )
+            elif not components >= _KOKORO_SPLIT_MODEL_COMPONENTS:
+                missing = _KOKORO_SPLIT_MODEL_COMPONENTS - components
+                raise CatalogError(
+                    f"Kokoro Inno quality {quality!r} is missing base model components: "
+                    + ", ".join(sorted(missing))
+                )
+
+        graph_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.role == "model" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT
+        ]
+        metadata_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.role == "metadata" and artifact.component == _KOKORO_INNO_METADATA_COMPONENT
+        ]
+        if len(graph_artifacts) != 1 or len(metadata_artifacts) != 1:
+            raise CatalogError(
+                "Kokoro Inno distribution requires one model:inno_voicepack and "
+                "one metadata:inno_tuner artifact"
+            )
+        graph, metadata = graph_artifacts[0], metadata_artifacts[0]
+        if graph.quality is not None or metadata.quality is not None:
+            raise CatalogError("Kokoro Inno artifacts must be shared across base model qualities")
+        if graph.format not in {None, "onnx"}:
+            raise CatalogError("Kokoro Inno model:inno_voicepack must use ONNX format")
+        if metadata.format not in {None, "npz", "numpy-npz", "json"}:
+            raise CatalogError("Kokoro Inno metadata:inno_tuner must use NPZ or JSON format")
+
+
 def _parse_kokoro_entry(
     model_id: str,
     entry: Mapping[str, Any],
@@ -410,6 +540,7 @@ def _parse_kokoro_entry(
             )
         )
     runtime, onnx_contract = _normalize_kokoro_runtime(entry)
+    _validate_kokoro_voice_enrollers(runtime, artifacts)
     if runtime.get("layout") == "cloning-onnx-v1":
         model_artifacts = [artifact for artifact in artifacts if artifact.role == "model"]
         model_components = {artifact.component for artifact in model_artifacts}

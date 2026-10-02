@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 
 from ..errors import CapabilityError, RuntimeContractError
 from ..runtime import OnnxSession
-from ..types import InferenceResult, TensorSpec
+from ..types import InferenceResult, RuntimeDiagnostic, TensorSpec
 from .base import SystemAdapter
 from .kokoro_cloning import CLONING_LAYOUT, KokoroCloningRuntime, KokoroReferenceState
+from .kokoro_inno import (
+    INNO_ENROLLER_ID,
+    INNO_SUPPORTED_LAYOUTS,
+    InnoVoiceTuner,
+    KokoroVoicePack,
+    validate_inno_installation,
+)
 from .kokoro_split import SplitKokoroRuntime
 
 
@@ -20,7 +27,16 @@ class KokoroAdapter(SystemAdapter):
         super().__init__(*args, **kwargs)
         self._split_runtime: SplitKokoroRuntime | None = None
         self._cloning_runtime: KokoroCloningRuntime | None = None
+        self._inno_runtime: InnoVoiceTuner | None = None
         self._split_session_factory = session_factory
+        runtime = self.installation.metadata.get("runtime") or {}
+        if isinstance(runtime, Mapping):
+            capabilities = runtime.get("voice_enrollers")
+            if isinstance(capabilities, (list, tuple)) and any(
+                isinstance(capability, Mapping) and capability.get("id") == INNO_ENROLLER_ID
+                for capability in capabilities
+            ):
+                validate_inno_installation(self.installation)
 
     def _uses_split_runtime(self) -> bool:
         runtime = self.installation.metadata.get("runtime") or {}
@@ -52,6 +68,40 @@ class KokoroAdapter(SystemAdapter):
             )
         return self._cloning_runtime
 
+    def _inno(self) -> InnoVoiceTuner:
+        if self._inno_runtime is None:
+            self._inno_runtime = InnoVoiceTuner(
+                self.installation,
+                session_factory=self._split_session_factory,
+                providers=self.providers,
+                provider_options=self.provider_options,
+                session_options=self.session_options,
+            )
+        return self._inno_runtime
+
+    def enroll_voice(
+        self,
+        audio: np.ndarray,
+        *,
+        sample_rate: int,
+        enroller: str = INNO_ENROLLER_ID,
+        options: Mapping[str, Any] | None = None,
+    ) -> KokoroVoicePack:
+        """Enroll a reference with an advertised Kokoro voice-pack tuner."""
+        if enroller != INNO_ENROLLER_ID:
+            raise CapabilityError(f"Unsupported Kokoro voice enroller {enroller!r}")
+        if self._uses_cloning_runtime():
+            raise CapabilityError(
+                "Inno voice enrollment is available only on ordinary Kokoro layouts"
+            )
+        runtime_metadata = self.installation.metadata.get("runtime") or {}
+        layout = runtime_metadata.get("layout", "single")
+        if layout not in INNO_SUPPORTED_LAYOUTS:
+            raise CapabilityError(
+                f"Inno voice enrollment does not support Kokoro layout {layout!r}"
+            )
+        return self._inno().enroll(audio, sample_rate=sample_rate, options=options)
+
     def prepare_reference(
         self,
         reference_token_ids: Sequence[int],
@@ -69,13 +119,17 @@ class KokoroAdapter(SystemAdapter):
     def session(self) -> OnnxSession:
         if self._session is None:
             models = [
-                artifact for artifact in self.installation.artifacts if artifact.role == "model"
+                artifact
+                for artifact in self.installation.artifacts
+                if artifact.role == "model" and artifact.component != "inno_voicepack"
             ]
             runtime = self.installation.metadata.get("runtime") or {}
-            if (
-                len(models) != 1
-                or runtime.get("layout") in {"split", "multi", "split-onnx-v1", CLONING_LAYOUT}
-            ):
+            if len(models) != 1 or runtime.get("layout") in {
+                "split",
+                "multi",
+                "split-onnx-v1",
+                CLONING_LAYOUT,
+            }:
                 raise CapabilityError(
                     "Split, cloning, or multi-component Kokoro layouts do not expose a single session"
                 )
@@ -86,7 +140,6 @@ class KokoroAdapter(SystemAdapter):
                 session_options=self.session_options,
             )
         return self._session
-
 
     def infer(
         self,
@@ -100,9 +153,13 @@ class KokoroAdapter(SystemAdapter):
     ) -> InferenceResult:
         if self._uses_cloning_runtime():
             if style is not None:
-                raise CapabilityError("Static style input is not supported by the Kokoro cloning layout")
+                raise CapabilityError(
+                    "Static style input is not supported by the Kokoro cloning layout"
+                )
             if reference is None:
-                raise RuntimeContractError("A Kokoro reference state must be provided for cloning inference")
+                raise RuntimeContractError(
+                    "A Kokoro reference state must be provided for cloning inference"
+                )
             return self._cloning().infer(token_ids, reference=reference, speed=speed, seed=seed)
         if reference is not None:
             raise CapabilityError("Kokoro reference state requires the cloning-onnx-v1 layout")
@@ -166,14 +223,27 @@ class KokoroAdapter(SystemAdapter):
         if self._cloning_runtime is not None:
             self._cloning_runtime.close()
             self._cloning_runtime = None
+        if self._inno_runtime is not None:
+            self._inno_runtime.close()
+            self._inno_runtime = None
         super().close()
 
-    def diagnostics(self) -> Any:
+    def diagnostics(self) -> RuntimeDiagnostic:
         if self._split_runtime is not None:
-            return self._split_runtime.diagnostics()
-        if self._cloning_runtime is not None:
-            return self._cloning_runtime.diagnostics()
-        return super().diagnostics()
+            base = self._split_runtime.diagnostics()
+        elif self._cloning_runtime is not None:
+            base = self._cloning_runtime.diagnostics()
+        else:
+            base = super().diagnostics()
+        if self._inno_runtime is None:
+            return base
+        inno = self._inno_runtime.diagnostics()
+        return RuntimeDiagnostic(
+            system=base.system,
+            ref=base.ref,
+            layout=base.layout,
+            sessions=(*base.sessions, *inno.sessions),
+        )
 
     def _input_spec(self, name: str) -> TensorSpec | None:
         for spec in getattr(self.session, "input_specs", ()):

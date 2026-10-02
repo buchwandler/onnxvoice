@@ -322,8 +322,18 @@ class OnnxVoice:
                 )
             )
         model_artifact = next(
-            (artifact for artifact in local_artifacts if artifact.role == "model"), None
+            (
+                artifact
+                for artifact in local_artifacts
+                if artifact.role == "model"
+                and not (system == "kokoro" and artifact.component == "inno_voicepack")
+            ),
+            None,
         )
+        if model_artifact is None:
+            model_artifact = next(
+                (artifact for artifact in local_artifacts if artifact.role == "model"), None
+            )
         if model_artifact is None:
             model_artifact = local_artifacts[0]
         merged_metadata: dict[str, Any] = {

@@ -5,8 +5,81 @@ import json
 import pytest
 
 from onnxvoice.catalog import CatalogClient
-from onnxvoice.errors import CatalogError
+from onnxvoice.errors import AssetNotFoundError, CatalogError
 from onnxvoice.types import CatalogItem
+
+
+def _kokoro_inno_catalog():
+    return {
+        "models": {
+            "v1.0": {
+                "sample_rate": 24000,
+                "runtime": {
+                    "layout": "single",
+                    "default_voice": "af_heart",
+                    "voices": ["af_heart"],
+                    "voice_enrollers": [
+                        {
+                            "id": "inno-v0.2",
+                            "kind": "kokoro-voicepack-tuner",
+                            "input": "reference-audio",
+                            "transcript_required": False,
+                            "min_seconds": 3.0,
+                            "recommended_seconds": 5.0,
+                            "max_seconds": 30.0,
+                            "output": {
+                                "format": "kokoro-voicepack-v1",
+                                "shape": [510, 1, 256],
+                                "dtype": "float32",
+                            },
+                            "model_component": "inno_voicepack",
+                            "metadata_component": "inno_tuner",
+                        }
+                    ],
+                },
+                "distributions": [
+                    {
+                        "id": "cpu",
+                        "runtime_ready": True,
+                        "artifacts": [
+                            {
+                                "id": "model-fp32",
+                                "role": "model",
+                                "local_name": "model-fp32.onnx",
+                                "url": "https://example.invalid/model-fp32.onnx",
+                                "quality": "fp32",
+                                "format": "onnx",
+                            },
+                            {
+                                "id": "model-fp16",
+                                "role": "model",
+                                "local_name": "model-fp16.onnx",
+                                "url": "https://example.invalid/model-fp16.onnx",
+                                "quality": "fp16",
+                                "format": "onnx",
+                            },
+                            {
+                                "id": "inno-graph",
+                                "role": "model",
+                                "component": "inno_voicepack",
+                                "local_name": "inno-voicepack.onnx",
+                                "url": "https://example.invalid/inno-voicepack.onnx",
+                                "format": "onnx",
+                            },
+                            {
+                                "id": "inno-metadata",
+                                "role": "metadata",
+                                "component": "inno_tuner",
+                                "local_name": "inno-tuner.npz",
+                                "url": "https://example.invalid/inno-tuner.npz",
+                                "format": "numpy-npz",
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+    }
 
 
 def test_piper_catalog_is_normalized(tmp_path):
@@ -100,6 +173,44 @@ def test_kokoro_default_selects_one_model_quality(tmp_path):
     assert [a.quality for a in default.artifacts if a.role == "model"] == ["fp32"]
     fp16 = client.resolve("kokoro:v1.0", quality="fp16")
     assert [a.quality for a in fp16.artifacts if a.role == "model"] == ["fp16"]
+
+
+def test_kokoro_inno_artifacts_survive_base_quality_selection(tmp_path):
+    source = tmp_path / "kokoro-inno.json"
+    source.write_text(json.dumps(_kokoro_inno_catalog()), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    for quality in (None, "fp16"):
+        item = client.resolve("kokoro:v1.0", quality=quality)
+        expected_quality = quality or "fp32"
+        base_models = [
+            artifact
+            for artifact in item.artifacts
+            if artifact.role == "model" and artifact.component != "inno_voicepack"
+        ]
+        assert [artifact.quality for artifact in base_models] == [expected_quality]
+        assert any(
+            artifact.role == "model" and artifact.component == "inno_voicepack"
+            for artifact in item.artifacts
+        )
+        assert any(
+            artifact.role == "metadata" and artifact.component == "inno_tuner"
+            for artifact in item.artifacts
+        )
+
+    with pytest.raises(AssetNotFoundError, match="quality='int8'"):
+        client.resolve("kokoro:v1.0", quality="int8")
+
+
+def test_kokoro_inno_catalog_requires_both_capability_artifacts(tmp_path):
+    raw = _kokoro_inno_catalog()
+    raw["models"]["v1.0"]["distributions"][0]["artifacts"].pop()
+    source = tmp_path / "kokoro-inno.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    with pytest.raises(CatalogError, match="model:inno_voicepack.*metadata:inno_tuner"):
+        client.resolve("kokoro:v1.0")
 
 
 def test_kokoro_distribution_selection_is_explicit(tmp_path):
@@ -340,7 +451,6 @@ def test_catalog_item_timing_output_tolerates_malformed_metadata(metadata):
     assert item.timing_output is None
 
 
-
 def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path):
     components = (
         "reference_wavlm",
@@ -404,9 +514,9 @@ def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path
     }
     source = tmp_path / "kokoro-clone.json"
     source.write_text(json.dumps(raw), encoding="utf-8")
-    item = CatalogClient(
-        cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}
-    ).resolve("kokoro:clone", quality="int8")
+    item = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}).resolve(
+        "kokoro:clone", quality="int8"
+    )
 
     assert item.voices == ()
     assert item.default_voice is None
@@ -420,7 +530,6 @@ def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path
         artifact.role == "metadata" and artifact.component == "source_params"
         for artifact in item.artifacts
     )
-
 
     incomplete = json.loads(json.dumps(raw))
     incomplete["models"]["clone"]["distributions"][0]["artifacts"] = [

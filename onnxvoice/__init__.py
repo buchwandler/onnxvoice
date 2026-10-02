@@ -27,6 +27,7 @@ from .store import AssetStore
 from .systems import (
     KokoroCloningRuntime,
     KokoroReferenceState,
+    KokoroVoicePack,
     SplitKokoroRuntime,
     register_adapter,
     registered_systems,
@@ -148,6 +149,7 @@ __all__ = [
     "registered_systems",
     "SplitKokoroRuntime",
     "KokoroReferenceState",
+    "KokoroVoicePack",
     "KokoroCloningRuntime",
     "verify_installation",
     "validate_onnx",

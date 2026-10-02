@@ -203,9 +203,7 @@ def test_reference_state_validates_shapes_finiteness_and_fingerprint():
     with pytest.raises(RuntimeContractError, match="mask must have shape"):
         KokoroReferenceState(np.zeros((1, 256)), np.zeros((1, 1, 192)), np.ones((1, 2)), "f")
     with pytest.raises(RuntimeContractError, match="finite"):
-        KokoroReferenceState(
-            np.full((1, 256), np.nan), np.zeros((1, 1, 192)), np.ones((1, 1)), "f"
-        )
+        KokoroReferenceState(np.full((1, 256), np.nan), np.zeros((1, 1, 192)), np.ones((1, 1)), "f")
     with pytest.raises(RuntimeContractError, match="non-empty model fingerprint"):
         KokoroReferenceState(np.zeros((1, 256)), np.zeros((1, 1, 192)), np.ones((1, 1)), " ")
 
@@ -240,7 +238,6 @@ def test_reference_state_arguments_are_clone_only(tmp_path):
         adapter.infer([1, 2], reference=state)
     with pytest.raises(CapabilityError, match="Reference enrollment requires"):
         adapter.prepare_reference([1], audio_24k=np.zeros(72000), audio_16k=np.zeros(48000))
-
 
 
 def test_reference_mels_match_upstream_torchaudio_fixture():
@@ -321,7 +318,6 @@ def test_reference_validation_precedes_session_creation(tmp_path):
         assert not runtime._sessions
 
 
-
 def _run_synthesis(tmp_path, *, durations=None):
     run_order = []
     sessions = {}
@@ -389,8 +385,14 @@ def test_precomputed_state_skips_enrollment_sessions_and_tracks_lifecycle(tmp_pa
     assert not np.array_equal(first_har, third_har)
     assert not any(component.startswith("reference_") for component in sessions)
     diagnostics = adapter.diagnostics()
-    assert {session.component for session in diagnostics.sessions} == {"prosody", "curves", "decoder"}
-    assert all(session.providers_active == ("CPUExecutionProvider",) for session in diagnostics.sessions)
+    assert {session.component for session in diagnostics.sessions} == {
+        "prosody",
+        "curves",
+        "decoder",
+    }
+    assert all(
+        session.providers_active == ("CPUExecutionProvider",) for session in diagnostics.sessions
+    )
     assert run_order == ["prosody", "curves", "decoder"] * 3
 
     adapter.close()
@@ -422,17 +424,16 @@ def test_cloning_duration_safety_limits(tmp_path, durations, message):
         (1.0, "b" * 64, RuntimeContractError, "different model build"),
     ],
 )
-def test_cloning_rejects_unsupported_speed_and_model_state(tmp_path, speed, fingerprint, error, message):
+def test_cloning_rejects_unsupported_speed_and_model_state(
+    tmp_path, speed, fingerprint, error, message
+):
     adapter, state, sessions, _ = _run_synthesis(tmp_path)
     if fingerprint is not None:
-        state = KokoroReferenceState(
-            state.style, state.memory, state.memory_mask, fingerprint
-        )
+        state = KokoroReferenceState(state.style, state.memory, state.memory_mask, fingerprint)
 
     with pytest.raises(error, match=message):
         adapter.infer([7, 8], reference=state, speed=speed)
     assert not sessions
-
 
 
 def test_local_component_mapping_runs_fake_enrollment_and_synthesis(tmp_path):

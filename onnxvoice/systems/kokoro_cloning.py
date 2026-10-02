@@ -104,14 +104,25 @@ class KokoroReferenceState:
 
         if style.shape != (1, 256):
             raise RuntimeContractError("Kokoro reference style must have shape [1, 256]")
-        if memory.ndim != 3 or memory.shape[0] != 1 or memory.shape[1] == 0 or memory.shape[2] != 192:
-            raise RuntimeContractError("Kokoro reference memory must have shape [1, M, 192] with M > 0")
+        if (
+            memory.ndim != 3
+            or memory.shape[0] != 1
+            or memory.shape[1] == 0
+            or memory.shape[2] != 192
+        ):
+            raise RuntimeContractError(
+                "Kokoro reference memory must have shape [1, M, 192] with M > 0"
+            )
         if memory_mask.shape != memory.shape[:2]:
             raise RuntimeContractError("Kokoro reference memory mask must have shape [1, M]")
         if not np.all(np.isfinite(style)) or not np.all(np.isfinite(memory)):
-            raise RuntimeContractError("Kokoro reference state tensors must contain only finite values")
+            raise RuntimeContractError(
+                "Kokoro reference state tensors must contain only finite values"
+            )
         if not isinstance(self.model_fingerprint, str) or not self.model_fingerprint.strip():
-            raise RuntimeContractError("Kokoro reference state requires a non-empty model fingerprint")
+            raise RuntimeContractError(
+                "Kokoro reference state requires a non-empty model fingerprint"
+            )
         if not isinstance(self.metadata, Mapping):
             raise RuntimeContractError("Kokoro reference state metadata must be a mapping")
 
@@ -171,8 +182,6 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
         super().__init__(installation, session_factory=session_factory, **kwargs)
         self.model_fingerprint = kokoro_model_fingerprint(installation)
 
-
-
     def _artifact(self, role: str, *, component: str | None = None) -> Path:
         try:
             return self.installation.artifact(role, component=component).path
@@ -182,9 +191,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
                 detail += f", component={component!r}"
             raise CapabilityError(f"Kokoro cloning runtime is missing {detail}") from exc
 
-
     def _component_path(self, component: str) -> Path:
         return self._artifact("model", component=component)
+
     def _load_supporting_assets(self) -> None:
         for role in ("config", "bundle", "manifest"):
             try:
@@ -231,7 +240,10 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
             if matches:
                 return matches[0].path
         for artifact in self.installation.artifacts:
-            if "source_params" in artifact.filename.lower() or "source-params" in artifact.filename.lower():
+            if (
+                "source_params" in artifact.filename.lower()
+                or "source-params" in artifact.filename.lower()
+            ):
                 return artifact.path
         raise CapabilityError("Kokoro cloning runtime is missing source parameters")
 
@@ -311,7 +323,6 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
             },
         )
 
-
     def infer(
         self,
         token_ids: Sequence[int],
@@ -325,16 +336,16 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
         if not isinstance(reference, KokoroReferenceState):
             raise RuntimeContractError("Kokoro cloning inference requires a KokoroReferenceState")
         if reference.model_fingerprint != self.model_fingerprint:
-            raise RuntimeContractError(
-                "Kokoro reference state belongs to a different model build"
-            )
+            raise RuntimeContractError("Kokoro reference state belongs to a different model build")
         tokens = self._validate_text_tokens(token_ids)
         if reference.style.shape != (1, 256):
             raise RuntimeContractError("Kokoro reference style must have shape [1, 256]")
         style_acou = np.ascontiguousarray(reference.style[:, :128])
         style_dur = np.ascontiguousarray(reference.style[:, 128:])
         if style_acou.shape != (1, 128) or style_dur.shape != (1, 128):
-            raise RuntimeContractError("Kokoro cloning style split must be 128 acoustic and 128 duration values")
+            raise RuntimeContractError(
+                "Kokoro cloning style split must be 128 acoustic and 128 duration values"
+            )
 
         input_ids = np.asarray([[0, *tokens, 0]], dtype=np.int64)
         prosody = self._get_session("prosody")
@@ -359,9 +370,13 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
         except (TypeError, ValueError) as exc:
             raise RuntimeContractError("Kokoro cloning durations must be numeric") from exc
         if duration_values.size != input_ids.shape[1] or not np.all(np.isfinite(duration_values)):
-            raise RuntimeContractError("Kokoro cloning durations must be finite and match the input phones")
+            raise RuntimeContractError(
+                "Kokoro cloning durations must be finite and match the input phones"
+            )
         if np.any(duration_values < 1) or np.any(duration_values != np.floor(duration_values)):
-            raise RuntimeContractError("Kokoro cloning durations must be integers of at least one frame")
+            raise RuntimeContractError(
+                "Kokoro cloning durations must be integers of at least one frame"
+            )
         if np.any(duration_values > 4000) or int(np.sum(duration_values)) > 4000:
             raise RuntimeContractError("Kokoro cloning duration expansion exceeds 4000 frames")
         durations = duration_values.astype(np.int64)
@@ -372,7 +387,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
         d = np.asarray(self._output(prosody_named, ("d", "duration_embedding"), 1))
         t_en = np.asarray(self._output(prosody_named, ("t_en", "asr"), 2))
         if d.ndim != 3 or d.shape[0] != 1 or not np.all(np.isfinite(d)):
-            raise RuntimeContractError("Kokoro cloning duration embeddings have incompatible values")
+            raise RuntimeContractError(
+                "Kokoro cloning duration embeddings have incompatible values"
+            )
         if d.shape[1] == durations.size:
             duration_context = d.transpose(0, 2, 1)
         elif d.shape[2] == durations.size:
@@ -446,7 +463,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
             raise RuntimeContractError(
                 f"Kokoro cloning token sequence exceeds the {self.max_tokens}-token limit"
             )
-        if any(isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens):
+        if any(
+            isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens
+        ):
             raise RuntimeContractError("Kokoro cloning token ids must be integers")
         return [int(token) for token in tokens]
 
@@ -468,7 +487,9 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
             raise RuntimeContractError(
                 f"Kokoro reference token sequence exceeds the {self.max_tokens}-token limit"
             )
-        if any(isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens):
+        if any(
+            isinstance(token, bool) or not isinstance(token, (int, np.integer)) for token in tokens
+        ):
             raise RuntimeContractError("Kokoro reference token ids must be integers")
         return [int(token) for token in tokens]
 
@@ -503,9 +524,7 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
         return np.ascontiguousarray(audio, dtype=np.float32)
 
     @staticmethod
-    def _validate_observation(
-        value: np.ndarray, shape: tuple[int, ...], name: str
-    ) -> np.ndarray:
+    def _validate_observation(value: np.ndarray, shape: tuple[int, ...], name: str) -> np.ndarray:
         observation = np.asarray(value, dtype=np.float32)
         if observation.shape != shape or not np.all(np.isfinite(observation)):
             raise RuntimeContractError(f"Kokoro {name} output must be finite with shape {shape}")

@@ -1,0 +1,69 @@
+{
+  "source": {
+    "repository": "https://github.com/remsky/inno-kokoro",
+    "version": "0.2.0",
+    "commit": "892ef184bc932aa3ff9d72c1509d5b81ff6941e6",
+    "module": "inno_kokoro.prosody and inno_kokoro.enroll.blend_weights",
+    "waveform_sha256": "2d59382ed0a68ade2f782fbf40453cf10a5347dc8996fea6015289d67bc3114e",
+    "sample_rate": 16000,
+    "sample_count": 212000
+  },
+  "prosody": {
+    "ceiling_default": 350.68493150684935,
+    "ceiling_override": 190.0,
+    "stats_default": [9.78445816040039, 3.550626516342163, 1.0],
+    "stats_override": [3.65754771232605, 2.1163346767425537, 1.0],
+    "rate": 4.905660376988252,
+    "tilt": -21.559858322143555,
+    "head_stats_default": [9.096092992560319, 9.996495556623686e-5],
+    "head_stats_override": [3.0960968692928823, 0.00010151973099480759]
+  },
+  "blend": {
+    "names": ["af_a", "af_b", "af_c", "am_a", "am_b", "bf_a", "bf_b"],
+    "stats": [
+      [8.0, 3.200000047683716, 3.5],
+      [9.699999809265137, 2.0999999046325684, 4.800000190734863],
+      [11.100000381469727, 4.0, 5.199999809265137],
+      [12.800000190734863, 1.2999999523162842, 4.0],
+      [15.0, 3.799999952316284, 5.800000190734863],
+      [19.0, 2.0, 3.200000047683716],
+      [23.0, 4.5, 5.0]
+    ],
+    "stats_dtype": "float32",
+    "grades": [
+      4.0, 3.200000047683716, 2.0, 3.799999952316284, 1.5, 3.0999999046325684,
+      2.4000000953674316
+    ],
+    "grades_dtype": "float32",
+    "gate": 4.0,
+    "scale": [1.0, 0.8, 1.2],
+    "scale_dtype": "float64",
+    "grade_pen": 0.75,
+    "cases": [
+      {
+        "name": "inside_gate",
+        "target": [10.5, 2.7, 4.6],
+        "weights": {
+          "af_a": 0.13513711897762223,
+          "af_b": 0.35878973023871963,
+          "af_c": 0.3171139727906789,
+          "am_a": 0.1889591779929793
+        }
+      },
+      {
+        "name": "below_stock_range",
+        "target": [1.0, 1.4, 3.0],
+        "weights": {
+          "af_a": 1.0
+        }
+      },
+      {
+        "name": "above_stock_range",
+        "target": [35.0, 4.0, 6.0],
+        "weights": {
+          "bf_b": 1.0
+        }
+      }
+    ]
+  }
+}
