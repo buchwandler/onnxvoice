@@ -280,9 +280,9 @@ def _cepstral_f0(waveform: np.ndarray) -> tuple[float, float]:
     if not frames.shape[0]:
         return 0.0, 0.0
 
-    index = np.arange(CEPSTRUM_FRAME_SAMPLES, dtype=np.float32)
+    sample_indices = np.arange(CEPSTRUM_FRAME_SAMPLES, dtype=np.float32)
     window = np.float32(0.5) - np.float32(0.5) * np.cos(
-        np.float32(2.0 * np.pi) * index / np.float32(CEPSTRUM_FRAME_SAMPLES)
+        np.float32(2.0 * np.pi) * sample_indices / np.float32(CEPSTRUM_FRAME_SAMPLES)
     )
     spectrum = np.fft.rfft(frames * window, axis=1)
     magnitude = np.abs(spectrum).astype(np.float32)
@@ -422,9 +422,9 @@ def head_stats(
     if not chunk_results:
         return 0.0, 0.0
     total_samples = sum(result[2] for result in chunk_results)
-    return tuple(
-        float(sum(result[index] * result[2] for result in chunk_results) / total_samples)
-        for index in (0, 1)
+    return (
+        float(sum(result[0] * result[2] for result in chunk_results) / total_samples),
+        float(sum(result[1] * result[2] for result in chunk_results) / total_samples),
     )
 
 
@@ -510,7 +510,7 @@ def _inno_capability(installation: Installation) -> Mapping[str, Any]:
             raise CapabilityError(f"Inno voice enroller metadata has invalid {key!r}")
     if capability.get("transcript_required") is not False:
         raise CapabilityError("Inno voice enroller must declare transcript_required=false")
-    for key, expected in (
+    for key, expected_seconds in (
         ("min_seconds", 3.0),
         ("recommended_seconds", 5.0),
         ("max_seconds", 30.0),
@@ -520,7 +520,7 @@ def _inno_capability(installation: Installation) -> Mapping[str, Any]:
             isinstance(value, (bool, np.bool_))
             or not isinstance(value, (int, float, np.integer, np.floating))
             or not math.isfinite(float(value))
-            or float(value) != expected
+            or float(value) != expected_seconds
         ):
             raise CapabilityError(f"Inno voice enroller metadata has invalid {key!r}")
     output = capability.get("output")
@@ -919,8 +919,6 @@ class InnoVoiceTuner:
         if clipped_fraction > 0.05:
             raise RuntimeContractError("Inno reference audio is grossly clipped")
 
-        audio_16k = resample_audio(analysis_audio, int(sample_rate), INNO_ENCODER_SAMPLE_RATE)
-        audio_24k = resample_audio(analysis_audio, int(sample_rate), INNO_TILT_SAMPLE_RATE)
         fmax = enrollment_options.get("fmax")
         if fmax is None:
             selected_fmax = ceiling(analysis_audio, int(sample_rate))
@@ -940,6 +938,8 @@ class InnoVoiceTuner:
                     "Inno enrollment option 'fmax' must be positive and finite"
                 )
 
+        audio_16k = resample_audio(analysis_audio, int(sample_rate), INNO_ENCODER_SAMPLE_RATE)
+        audio_24k = resample_audio(analysis_audio, int(sample_rate), INNO_TILT_SAMPLE_RATE)
         f0_mean, f0_sd, voiced_fraction = stats(
             analysis_audio, int(sample_rate), fmax=selected_fmax
         )

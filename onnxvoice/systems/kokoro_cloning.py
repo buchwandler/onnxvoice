@@ -330,7 +330,12 @@ class KokoroCloningRuntime(SplitKokoroRuntime):
         reference: KokoroReferenceState | None = None,
         speed: float = 1.0,
         seed: int = 1234,
+        **kwargs: Any,
     ) -> InferenceResult:
+        if kwargs:
+            raise RuntimeContractError(
+                "Unsupported Kokoro cloning inference arguments: " + ", ".join(sorted(kwargs))
+            )
         if speed != 1.0:
             raise CapabilityError("Kokoro cloning-onnx-v1 does not support speed control")
         if not isinstance(reference, KokoroReferenceState):

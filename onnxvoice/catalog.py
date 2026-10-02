@@ -414,7 +414,7 @@ def _validate_kokoro_voice_enrollers(
                 raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
         if capability.get("transcript_required") is not False:
             raise CatalogError("Kokoro Inno capability must declare transcript_required=false")
-        for key, value in (
+        for key, expected_seconds in (
             ("min_seconds", 3.0),
             ("recommended_seconds", 5.0),
             ("max_seconds", 30.0),
@@ -426,7 +426,7 @@ def _validate_kokoro_voice_enrollers(
                 actual_value = float(actual)
             except (OverflowError, ValueError):
                 raise CatalogError(f"Kokoro Inno capability has invalid {key!r}") from None
-            if not math.isfinite(actual_value) or actual_value != value:
+            if not math.isfinite(actual_value) or actual_value != expected_seconds:
                 raise CatalogError(f"Kokoro Inno capability has invalid {key!r}")
         output = capability.get("output")
         shape = output.get("shape") if isinstance(output, Mapping) else None

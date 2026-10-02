@@ -26,7 +26,7 @@ class SplitKokoroRuntime(SystemAdapter):
     """Runtime mechanics for catalog layout ``split-onnx-v1``."""
 
     system = "kokoro"
-    COMPONENTS = ("prosody", "curves", "decoder")
+    COMPONENTS: tuple[str, ...] = ("prosody", "curves", "decoder")
 
     def __init__(
         self,
