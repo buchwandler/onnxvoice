@@ -1,0 +1,31 @@
+rows:
+  - sha: 99acd679c22f68420ef50ea3bae5db04fe453107
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/api/index.md
+      - docs/api/pocket_voice_prompts.md
+      - docs/cli.md
+      - docs/pocket-downloads.md
+      - docs/python-api.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/pocket.py
+      - onnxvoice/cli.py
+      - onnxvoice/errors.py
+      - onnxvoice/manager.py
+      - onnxvoice/pocket_voice_prompts.py
+      - onnxvoice/systems/pocket.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_catalog.py
+      - tests/test_pocket_catalog_tools.py
+      - tests/test_pocket_catalog_tools_prompts.py
+      - tests/test_pocket_voice_prompt_cache.py
+      - tests/test_pocket_voice_prompts.py
+    observed_behavior: "Reviewed the complete diff: adds managed Pocket reference-voice prompts with kyutai-tts-voices:<id> references, a pinned prompt catalog with checked-in license rules and integrity fields, lazy verified caching under the OnnxVoice cache root, typed VoicePrompt errors, catalog pocket prompts build/verify commands, manager and package level list/resolve/fetch APIs, safetensors-only validation for predefined Pocket voice states, offline cache behavior, documentation, and prompt/cache/catalog tests"
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

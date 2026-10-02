@@ -1,0 +1,84 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.2
+git_base_ref: f353858d5e8de290b322cc78136bd5acc756e22e
+git_base_sha: f353858d5e8de290b322cc78136bd5acc756e22e
+git_head_ref: 99acd679c22f68420ef50ea3bae5db04fe453107
+git_head_sha: 99acd679c22f68420ef50ea3bae5db04fe453107
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: Added managed Pocket reference-voice prompts with pinned metadata, verified lazy caching, and typed prompt errors
+    status: accepted
+    source_refs:
+      - git:99acd679c22f68420ef50ea3bae5db04fe453107
+    paths:
+      - onnxvoice/pocket_voice_prompts.py
+      - onnxvoice/errors.py
+      - onnxvoice/__init__.py
+      - onnxvoice/manager.py
+    sources:
+      - git:99acd679c22f68420ef50ea3bae5db04fe453107
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: Added Pocket voice-prompt catalog build and verify commands with checked-in license rules and revision-pinned provenance
+    status: accepted
+    source_refs: []
+    paths:
+      - onnxvoice/cli.py
+      - onnxvoice/catalog_tools/pocket.py
+    sources:
+      - git:99acd679c22f68420ef50ea3bae5db04fe453107
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: Added Python APIs for listing, resolving, and fetching Pocket voice prompts with dataset, variant, and license filters
+    status: accepted
+    source_refs: []
+    paths:
+      - onnxvoice/manager.py
+      - onnxvoice/__init__.py
+    sources:
+      - git:99acd679c22f68420ef50ea3bae5db04fe453107
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: changed
+    summary: Changed predefined Pocket voice states to require the safetensors format at catalog and runtime parse time
+    status: accepted
+    source_refs: []
+    paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/systems/pocket.py
+      - onnxvoice/catalog_tools/pocket.py
+    sources:
+      - git:99acd679c22f68420ef50ea3bae5db04fe453107
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: docs
+    summary: Documented Pocket reference-voice prompt usage across CLI, Python API, Pocket downloads, and API reference docs
+    status: accepted
+    source_refs: []
+    paths:
+      - README.md
+      - docs/api/index.md
+      - docs/api/pocket_voice_prompts.md
+      - docs/cli.md
+      - docs/pocket-downloads.md
+      - docs/python-api.md
+    sources:
+      - git:99acd679c22f68420ef50ea3bae5db04fe453107
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
