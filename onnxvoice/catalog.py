@@ -380,14 +380,16 @@ _KOKORO_SPLIT_MODEL_COMPONENTS = frozenset({"prosody", "curves", "decoder"})
 _KOKORO_INNO_LAYOUTS = frozenset({"single", "single-onnx-v1", "split", "multi", "split-onnx-v1"})
 
 
-def _validate_kokoro_voice_enrollers(
+def _normalize_kokoro_voice_enrollers(
     runtime: Mapping[str, Any], artifacts: Sequence[Artifact]
-) -> None:
+) -> tuple[Mapping[str, Any], ...] | None:
+    """Keep only capabilities whose assets are included in the selected distribution."""
     capabilities = runtime.get("voice_enrollers")
     if capabilities is None:
-        return
+        return None
     if not isinstance(capabilities, (list, tuple)):
         raise CatalogError("Kokoro runtime voice_enrollers must be a list")
+    available: list[Mapping[str, Any]] = []
     seen_ids: set[str] = set()
     for capability in capabilities:
         if not isinstance(capability, Mapping):
@@ -401,6 +403,7 @@ def _validate_kokoro_voice_enrollers(
         if not isinstance(capability.get("kind"), str) or not capability["kind"]:
             raise CatalogError(f"Kokoro voice enroller {enroller_id!r} is missing its kind")
         if enroller_id != _KOKORO_INNO_ID:
+            available.append(capability)
             continue
 
         expected = {
@@ -439,6 +442,24 @@ def _validate_kokoro_voice_enrollers(
         ):
             raise CatalogError("Kokoro Inno capability has an invalid output contract")
 
+        graph_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.role == "model" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT
+        ]
+        metadata_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.role == "metadata" and artifact.component == _KOKORO_INNO_METADATA_COMPONENT
+        ]
+        if not graph_artifacts and not metadata_artifacts:
+            continue
+        if len(graph_artifacts) != 1 or len(metadata_artifacts) != 1:
+            raise CatalogError(
+                "Kokoro Inno distribution requires one model:inno_voicepack and "
+                "one metadata:inno_tuner artifact"
+            )
+
         layout = runtime.get("layout", "single")
         if not isinstance(layout, str) or layout not in _KOKORO_INNO_LAYOUTS:
             raise CatalogError(f"Kokoro Inno capability does not support layout {layout!r}")
@@ -466,21 +487,6 @@ def _validate_kokoro_voice_enrollers(
                     + ", ".join(sorted(missing))
                 )
 
-        graph_artifacts = [
-            artifact
-            for artifact in artifacts
-            if artifact.role == "model" and artifact.component == _KOKORO_INNO_GRAPH_COMPONENT
-        ]
-        metadata_artifacts = [
-            artifact
-            for artifact in artifacts
-            if artifact.role == "metadata" and artifact.component == _KOKORO_INNO_METADATA_COMPONENT
-        ]
-        if len(graph_artifacts) != 1 or len(metadata_artifacts) != 1:
-            raise CatalogError(
-                "Kokoro Inno distribution requires one model:inno_voicepack and "
-                "one metadata:inno_tuner artifact"
-            )
         graph, metadata = graph_artifacts[0], metadata_artifacts[0]
         if graph.quality is not None or metadata.quality is not None:
             raise CatalogError("Kokoro Inno artifacts must be shared across base model qualities")
@@ -488,6 +494,8 @@ def _validate_kokoro_voice_enrollers(
             raise CatalogError("Kokoro Inno model:inno_voicepack must use ONNX format")
         if metadata.format not in {None, "npz", "numpy-npz", "json"}:
             raise CatalogError("Kokoro Inno metadata:inno_tuner must use NPZ or JSON format")
+        available.append(capability)
+    return tuple(available)
 
 
 def _parse_kokoro_entry(
@@ -540,7 +548,9 @@ def _parse_kokoro_entry(
             )
         )
     runtime, onnx_contract = _normalize_kokoro_runtime(entry)
-    _validate_kokoro_voice_enrollers(runtime, artifacts)
+    available_enrollers = _normalize_kokoro_voice_enrollers(runtime, artifacts)
+    if available_enrollers is not None:
+        runtime["voice_enrollers"] = list(available_enrollers)
     if runtime.get("layout") == "cloning-onnx-v1":
         model_artifacts = [artifact for artifact in artifacts if artifact.role == "model"]
         model_components = {artifact.component for artifact in model_artifacts}

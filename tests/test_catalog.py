@@ -202,6 +202,23 @@ def test_kokoro_inno_artifacts_survive_base_quality_selection(tmp_path):
         client.resolve("kokoro:v1.0", quality="int8")
 
 
+def test_kokoro_inno_capability_is_omitted_without_distribution_assets(tmp_path):
+    raw = _kokoro_inno_catalog()
+    raw["models"]["v1.0"]["distributions"][0]["artifacts"] = [
+        artifact
+        for artifact in raw["models"]["v1.0"]["distributions"][0]["artifacts"]
+        if artifact.get("component") not in {"inno_voicepack", "inno_tuner"}
+    ]
+    source = tmp_path / "kokoro-inno-unavailable.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)})
+
+    item = client.resolve("kokoro:v1.0")
+
+    assert item.metadata["runtime"]["voice_enrollers"] == []
+    assert [artifact for artifact in item.artifacts if artifact.role == "model"]
+
+
 def test_kokoro_inno_catalog_requires_both_capability_artifacts(tmp_path):
     raw = _kokoro_inno_catalog()
     raw["models"]["v1.0"]["distributions"][0]["artifacts"].pop()
