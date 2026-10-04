@@ -1,0 +1,13 @@
+rows:
+  - sha: 2ee72dfb38b0cd3d60cd97bf673955836e4fbd91
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - tests/test_catalog.py
+    observed_behavior: "Kokoro catalogs omit the Inno enroller capability when both required distribution assets are absent, and reject distributions that include only one of the required assets."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed the catalog parser and focused test change; the exposed capability now matches assets available in the selected distribution."
+    stale: false

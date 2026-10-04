@@ -1,0 +1,25 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.3
+git_base_ref: 8f4fd313658f05db8cfd5d7649d92bfe1861a4fc
+git_base_sha: 8f4fd313658f05db8cfd5d7649d92bfe1861a4fc
+git_head_ref: 2ee72dfb38b0cd3d60cd97bf673955836e4fbd91
+git_head_sha: 2ee72dfb38b0cd3d60cd97bf673955836e4fbd91
+include_merges: nontrivial
+entries:
+  - kind: fixed
+    summary: Fixed Kokoro catalogs to expose Inno voice enrollment only when the selected distribution includes both required assets
+    status: accepted
+    source_refs:
+      - git:2ee72dfb38b0cd3d60cd97bf673955836e4fbd91
+    paths:
+      - onnxvoice/catalog.py
+      - tests/test_catalog.py
+    sources:
+      - git:2ee72dfb38b0cd3d60cd97bf673955836e4fbd91
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

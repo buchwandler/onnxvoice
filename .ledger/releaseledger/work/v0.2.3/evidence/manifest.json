@@ -1,0 +1,23 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 46,
+      "deletions": 19,
+      "patch_file": "2ee72df.patch",
+      "patch_sha256": "e1ba7a9577502177bba3e2f9fed9117ac69aef7be2ca452ff37811afe0bf1caa",
+      "paths": ["onnxvoice/catalog.py", "tests/test_catalog.py"],
+      "sha": "2ee72dfb38b0cd3d60cd97bf673955836e4fbd91",
+      "short_sha": "2ee72df",
+      "source_ref": "git:2ee72dfb38b0cd3d60cd97bf673955836e4fbd91"
+    }
+  ],
+  "git_base_ref": "8f4fd313658f05db8cfd5d7649d92bfe1861a4fc",
+  "git_base_sha": "8f4fd313658f05db8cfd5d7649d92bfe1861a4fc",
+  "git_head_ref": "2ee72dfb38b0cd3d60cd97bf673955836e4fbd91",
+  "git_head_sha": "2ee72dfb38b0cd3d60cd97bf673955836e4fbd91",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.3",
+  "schema_version": 1
+}
