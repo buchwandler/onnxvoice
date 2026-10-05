@@ -412,6 +412,13 @@ class TestPocketAdapterInfer:
         assert result.metadata["system"] == "pocket"
         assert result.metadata["temperature"] == 0.5
         assert result.metadata["lsd_steps"] == 2
+        assert result.metadata["eos_detected"] is False
+        assert result.metadata["eos_observed"] is False
+        assert result.metadata["eos_accepted"] is False
+        assert result.metadata["eos_step"] is None
+        assert result.metadata["frames_after_eos"] is None
+        assert result.metadata["min_frames_before_eos"] == 6
+        assert result.metadata["frames_generated"] > 0
 
     def test_infer_requires_bundle_metadata(self, tmp_path: Path) -> None:
         installation = _make_installation(metadata={})
@@ -616,13 +623,17 @@ def test_v2_runtime_uses_prefix_per_frame_flow_and_stateful_decode(
     voice = PocketVoiceState(np.zeros((1, 1, 4), dtype=np.float32), 24000)
     result = adapter.infer([1, 2], voice_state=voice, max_frames=5, frames_after_eos=0)
 
-    assert result.audio.shape == (16,)
+    assert result.audio.shape == (40,)
+    assert result.metadata["eos_observed"] is True
+    assert result.metadata["eos_accepted"] is False
+    assert result.metadata["eos_step"] is None
+    assert result.metadata["frames_generated"] == 5
     assert result.sample_rate == 24000
     assert np.array_equal(main_inputs[0]["text_embeddings"], np.zeros((1, 1, 4), dtype=np.float32))
     assert np.array_equal(main_inputs[1]["text_embeddings"], np.ones((1, 2, 4), dtype=np.float32))
-    assert main_calls == 4  # two prefix calls plus two generated frames
-    assert sessions["flow_lm_flow"].run.call_count == 2
-    assert sessions["mimi_decoder"].run.call_count == 2
+    assert main_calls == 7  # two prefix calls plus five generated frames
+    assert sessions["flow_lm_flow"].run.call_count == 5
+    assert sessions["mimi_decoder"].run.call_count == 5
     assert "token_ids" in sessions["text_conditioner"].run.call_args.args[0]
     assert set(sessions["flow_lm_flow"].run.call_args.args[0]) == {"c", "s", "t", "x"}
 
@@ -701,12 +712,15 @@ def test_predefined_flow_state_uses_text_prefix_and_defensive_copy(tmp_path: Pat
     ):
         result = adapter.infer([1], voice_state=voice_state, frames_after_eos=0)
 
-    assert result.audio.shape == (8,)
-    assert len(main_inputs) == 2
+    assert result.audio.shape == (48,)
+    assert result.metadata["eos_step"] == 6
+    assert result.metadata["frames_generated"] == 6
+    assert len(main_inputs) == 8
     assert np.array_equal(main_inputs[0]["text_embeddings"], text_embeddings)
     assert np.array_equal(main_inputs[0]["state_0"], [5.0])
     assert np.array_equal(main_inputs[1]["state_0"], [6.0])
     assert not np.shares_memory(main_state_inputs[0], imported_state)
+    assert voice_state.flow_state is not None
     assert np.array_equal(voice_state.flow_state["state_0"], [5.0])
 
 
@@ -738,7 +752,7 @@ def test_generate_latents_matches_rank_two_flow_inputs() -> None:
         flow_inputs.append(inputs) or [np.zeros((1, 3), dtype=np.float32)]
     )
 
-    latents, eos_detected, frame_count = adapter._generate_latents(
+    generation = adapter._generate_latents(
         main,
         flow,
         {},
@@ -750,14 +764,131 @@ def test_generate_latents_matches_rank_two_flow_inputs() -> None:
         conditioning_dim=4,
     )
 
-    assert latents.shape == (1, 2, 3)
-    assert not eos_detected
-    assert frame_count == 2
+    assert generation.latents.shape == (1, 2, 3)
+    assert not generation.eos_observed
+    assert generation.eos_step is None
+    assert generation.frames_generated == 2
+    assert generation.frames_after_eos is None
+    assert generation.min_frames_before_eos == 6
     assert [inputs["x"].shape for inputs in flow_inputs] == [(1, 3), (1, 3)]
     assert [inputs["c"].shape for inputs in flow_inputs] == [(1, 4), (1, 4)]
     assert [inputs["s"].shape for inputs in flow_inputs] == [(1, 1), (1, 1)]
     assert [inputs["t"].shape for inputs in flow_inputs] == [(1, 1), (1, 1)]
     assert [inputs["sequence"].shape for inputs in main_inputs] == [(1, 1, 3)] * 2
+
+
+def _generate_latents_for_eos_pattern(
+    eos_pattern: list[bool],
+    *,
+    frames_after_eos: int | None,
+    temperature: float = 0.0,
+) -> tuple[Any, MagicMock, list[dict[str, np.ndarray]]]:
+    adapter = PocketAdapter(_make_installation())
+    main = MagicMock()
+    main.output_names = ("conditioning", "eos")
+    eos_values = iter(eos_pattern)
+    main.run.side_effect = lambda _inputs: [
+        np.ones((1, 4), dtype=np.float32),
+        np.asarray([next(eos_values)], dtype=np.float32),
+    ]
+    flow = MagicMock()
+    flow.output_names = ("velocity",)
+    flow_inputs: list[dict[str, np.ndarray]] = []
+    flow.run.side_effect = lambda inputs: (
+        flow_inputs.append({name: np.array(value, copy=True) for name, value in inputs.items()})
+        or [np.zeros((1, 1, 3), dtype=np.float32)]
+    )
+
+    generation = adapter._generate_latents(
+        main,
+        flow,
+        {},
+        temperature=temperature,
+        lsd_steps=1,
+        max_frames=len(eos_pattern),
+        frames_after_eos=frames_after_eos,
+        latent_dim=3,
+        conditioning_dim=4,
+    )
+    return generation, main, flow_inputs
+
+
+def test_generate_latents_ignores_early_eos_and_accepts_at_minimum() -> None:
+    generation, main, _ = _generate_latents_for_eos_pattern([True] * 12, frames_after_eos=2)
+
+    assert generation.eos_observed
+    assert generation.eos_step == 6
+    assert generation.frames_generated == 8
+    assert generation.latents.shape[1] == 8
+    assert main.run.call_count == 9
+
+
+def test_generate_latents_tail_uses_first_flickering_eos_step() -> None:
+    eos_pattern = [False] * 6 + [True] + [False] * 8
+    generation, _, _ = _generate_latents_for_eos_pattern(eos_pattern, frames_after_eos=3)
+
+    assert generation.eos_observed
+    assert generation.eos_step == 6
+    assert generation.frames_generated == 9
+    assert generation.latents.shape[1] == 9
+
+
+def test_generate_latents_early_eos_does_not_arm_tail() -> None:
+    eos_pattern = [True] * 6 + [False, True] + [False] * 6
+    generation, _, _ = _generate_latents_for_eos_pattern(eos_pattern, frames_after_eos=2)
+
+    assert generation.eos_observed
+    assert generation.eos_step == 7
+    assert generation.frames_generated == 9
+
+
+@pytest.mark.parametrize(("tail", "expected_frames"), [(0, 6), (1, 7), (4, 10)])
+def test_generate_latents_explicit_eos_tail_boundaries(tail: int, expected_frames: int) -> None:
+    eos_pattern = [False] * 6 + [True] + [False] * 8
+    generation, _, _ = _generate_latents_for_eos_pattern(eos_pattern, frames_after_eos=tail)
+
+    assert generation.eos_step == 6
+    assert generation.frames_generated == expected_frames
+    assert generation.latents.shape[1] == expected_frames
+
+
+def test_generate_latents_none_tail_keeps_accepted_eos_frame() -> None:
+    eos_pattern = [False] * 6 + [True] + [False] * 4
+    generation, _, _ = _generate_latents_for_eos_pattern(eos_pattern, frames_after_eos=None)
+
+    assert generation.eos_step == 6
+    assert generation.frames_after_eos is None
+    assert generation.frames_generated == 7
+
+
+@pytest.mark.parametrize(("temperature", "expected_scale"), [(0.0, 0.0), (0.25, 0.5), (1.0, 1.0)])
+def test_generate_latents_temperature_uses_square_root_scale(
+    monkeypatch: pytest.MonkeyPatch,
+    temperature: float,
+    expected_scale: float,
+) -> None:
+    monkeypatch.setattr(
+        np.random,
+        "standard_normal",
+        lambda shape: np.ones(shape, dtype=np.float32),
+    )
+    _, _, flow_inputs = _generate_latents_for_eos_pattern(
+        [False], frames_after_eos=None, temperature=temperature
+    )
+
+    assert np.array_equal(
+        flow_inputs[0]["x"],
+        np.full((1, 1, 3), expected_scale, dtype=np.float32),
+    )
+
+
+def test_infer_rejects_negative_temperature() -> None:
+    adapter = PocketAdapter(_make_installation())
+    with (
+        patch.object(adapter, "_ensure_validated", return_value={}),
+        pytest.raises(RuntimeContractError, match="temperature must be non-negative"),
+    ):
+        adapter.infer([1], temperature=-0.1)
 
 
 def _predefined_adapter(

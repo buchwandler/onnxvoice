@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -64,6 +65,7 @@ _SUPPORTED_DTYPES = {
 
 PREDEFINED_VOICE_REPOSITORY = "kyutai/pocket-tts"
 PREDEFINED_VOICE_REVISION = "d18466fc6d3ad070afee1bde2f0db8992007c48f"
+POCKET_MIN_FRAMES_BEFORE_EOS = 6
 
 
 def _load_safetensors(path: Path) -> Mapping[str, np.ndarray]:
@@ -303,11 +305,24 @@ class PocketVoiceState:
         object.__setattr__(self, "values", compatible_values)
 
 
+@dataclass(frozen=True, slots=True)
+class _PocketGenerationResult:
+    """Private diagnostics for one Pocket autoregressive generation pass."""
+
+    latents: np.ndarray
+    eos_observed: bool
+    eos_step: int | None
+    frames_generated: int
+    frames_after_eos: int | None
+    min_frames_before_eos: int
+
+
 class PocketAdapter(SystemAdapter):
     """Pocket ONNX bundle adapter with lazy, contract-validated sessions."""
 
     system = "pocket"
     DEFAULT_MAX_FRAMES = 200
+    MIN_FRAMES_BEFORE_EOS = POCKET_MIN_FRAMES_BEFORE_EOS
 
     def __init__(
         self,
@@ -1079,16 +1094,16 @@ class PocketAdapter(SystemAdapter):
         frames_after_eos: int | None,
         latent_dim: int,
         conditioning_dim: int,
-    ) -> tuple[np.ndarray, bool, int]:
+    ) -> _PocketGenerationResult:
         if lsd_steps < 1:
             raise RuntimeContractError("lsd_steps must be at least 1")
         frames: list[np.ndarray] = []
         previous_latent: np.ndarray | None = None
-        eos_detected = False
-        post_eos = 0
+        eos_observed = False
+        eos_step: int | None = None
         flow_input_ranks = self._input_ranks(flow)
         empty_text = np.empty((1, 0, conditioning_dim), dtype=np.float32)
-        for _ in range(max_frames):
+        for generation_step in range(max_frames):
             sequence = (
                 previous_latent
                 if previous_latent is not None
@@ -1103,6 +1118,9 @@ class PocketAdapter(SystemAdapter):
                 (name for name in ("eos", "eos_logit", "eos_probability") if name in outputs), None
             )
             eos_now = eos_name is not None and bool(np.any(outputs[eos_name] > 0.5))
+            eos_observed = eos_observed or eos_now
+            if eos_now and eos_step is None and generation_step >= self.MIN_FRAMES_BEFORE_EOS:
+                eos_step = generation_step
             non_state = {
                 name: value
                 for name, value in outputs.items()
@@ -1116,9 +1134,8 @@ class PocketAdapter(SystemAdapter):
             conditioning = self._fit_rank(
                 non_state[conditioning_name], flow_input_ranks.get("c", 3)
             )
-            x = np.random.standard_normal((1, latent_dim)).astype(np.float32) * np.float32(
-                temperature
-            )
+            noise_std = np.float32(math.sqrt(float(temperature)))
+            x = np.random.standard_normal((1, latent_dim)).astype(np.float32) * noise_std
             x = self._fit_rank(x, flow_input_ranks.get("x", 3))
             for step in range(lsd_steps):
                 t = np.float32(1.0 - step / lsd_steps)
@@ -1147,16 +1164,26 @@ class PocketAdapter(SystemAdapter):
                 )
                 x = x + (t - s) * np.asarray(flow_outputs[velocity_name], dtype=np.float32)
             latent = self._fit_rank(x, 3)
+            if eos_step is not None:
+                if frames_after_eos is None:
+                    # Preserve the legacy low-level None policy: include the EOS frame.
+                    frames.append(latent)
+                    break
+                if generation_step >= eos_step + frames_after_eos:
+                    # Explicit tails use the upstream boundary before appending this frame.
+                    break
             frames.append(latent)
             previous_latent = latent
-            if eos_now:
-                eos_detected = True
-                post_eos += 1
-                if frames_after_eos is None or post_eos >= frames_after_eos:
-                    break
         if not frames:
             raise RuntimeContractError("Pocket Flow-LM generated no latent frames")
-        return np.concatenate(frames, axis=1), eos_detected, len(frames)
+        return _PocketGenerationResult(
+            latents=np.concatenate(frames, axis=1),
+            eos_observed=eos_observed,
+            eos_step=eos_step,
+            frames_generated=len(frames),
+            frames_after_eos=frames_after_eos,
+            min_frames_before_eos=self.MIN_FRAMES_BEFORE_EOS,
+        )
 
     def _decode_latents(
         self,
@@ -1246,7 +1273,7 @@ class PocketAdapter(SystemAdapter):
                     text_embeddings,
                     int(metadata["latent_dim"]),
                 )
-        latents, eos_detected, frame_count = self._generate_latents(
+        generation = self._generate_latents(
             main,
             flow,
             flow_state,
@@ -1257,6 +1284,7 @@ class PocketAdapter(SystemAdapter):
             latent_dim=int(metadata["latent_dim"]),
             conditioning_dim=int(metadata["conditioning_dim"]),
         )
+        latents = generation.latents
         chunk_value = metadata.get("decoder_chunk_frames")
         chunk_frames = int(chunk_value if chunk_value is not None else latents.shape[1])
         if chunk_frames <= 0:
@@ -1278,8 +1306,13 @@ class PocketAdapter(SystemAdapter):
                 "system": "pocket",
                 "temperature": temperature,
                 "lsd_steps": lsd_steps,
-                "frames_generated": frame_count,
-                "eos_detected": eos_detected,
+                "frames_generated": generation.frames_generated,
+                "eos_detected": generation.eos_step is not None,
+                "eos_observed": generation.eos_observed,
+                "eos_accepted": generation.eos_step is not None,
+                "eos_step": generation.eos_step,
+                "frames_after_eos": generation.frames_after_eos,
+                "min_frames_before_eos": generation.min_frames_before_eos,
             },
         )
 
