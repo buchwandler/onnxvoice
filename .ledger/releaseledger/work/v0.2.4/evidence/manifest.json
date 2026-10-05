@@ -1,0 +1,28 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 250,
+      "deletions": 37,
+      "patch_file": "b5380a2.patch",
+      "patch_sha256": "677f0c83312043721dc1a6047ffb89e311404ef804f9d645a280fdc6e84cc5a5",
+      "paths": [
+        "docs/systems/pocket.md",
+        "onnxvoice/systems/pocket.py",
+        "tests/test_pocket_adapter.py",
+        "tests/test_pocket_real_bundle.py"
+      ],
+      "sha": "b5380a29e5a39a5e6388a437e47baa54d0142ec6",
+      "short_sha": "b5380a2",
+      "source_ref": "git:b5380a29e5a39a5e6388a437e47baa54d0142ec6"
+    }
+  ],
+  "git_base_ref": "0245a05549d1b487cba9cde63d57749c955d4f02",
+  "git_base_sha": "0245a05549d1b487cba9cde63d57749c955d4f02",
+  "git_head_ref": "b5380a29e5a39a5e6388a437e47baa54d0142ec6",
+  "git_head_sha": "b5380a29e5a39a5e6388a437e47baa54d0142ec6",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.4",
+  "schema_version": 1
+}

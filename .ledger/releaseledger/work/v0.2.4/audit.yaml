@@ -1,0 +1,32 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.4
+git_base_ref: v0.2.3
+git_base_sha: 0245a05549d1b487cba9cde63d57749c955d4f02
+git_head_ref: HEAD
+git_head_sha: b5380a29e5a39a5e6388a437e47baa54d0142ec6
+git_range: 0245a05549d1b487cba9cde63d57749c955d4f02..b5380a29e5a39a5e6388a437e47baa54d0142ec6
+commit_count: 1
+rows:
+  - sha: b5380a29e5a39a5e6388a437e47baa54d0142ec6
+    source_ref: git:b5380a29e5a39a5e6388a437e47baa54d0142ec6
+    short_sha: b5380a2
+    changed_paths:
+      - docs/systems/pocket.md
+      - onnxvoice/systems/pocket.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_real_bundle.py
+    stats:
+      files_changed: 4
+      insertions: 250
+      deletions: 37
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "fix: EOS for pocket tts"

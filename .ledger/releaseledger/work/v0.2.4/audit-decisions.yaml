@@ -1,0 +1,15 @@
+rows:
+  - sha: b5380a29e5a39a5e6388a437e47baa54d0142ec6
+    inspected: true
+    inspected_paths:
+      - docs/systems/pocket.md
+      - onnxvoice/systems/pocket.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_real_bundle.py
+    observed_behavior: "Pocket generation now ignores EOS signals before the six-frame minimum, supports explicit post-EOS tails with diagnostic metadata, and uses square-root temperature scaling consistent with Pocket TTS"
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

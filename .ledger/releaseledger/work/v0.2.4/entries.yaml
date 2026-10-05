@@ -1,0 +1,27 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.4
+git_base_ref: 0245a05549d1b487cba9cde63d57749c955d4f02
+git_base_sha: 0245a05549d1b487cba9cde63d57749c955d4f02
+git_head_ref: b5380a29e5a39a5e6388a437e47baa54d0142ec6
+git_head_sha: b5380a29e5a39a5e6388a437e47baa54d0142ec6
+include_merges: nontrivial
+entries:
+  - kind: fixed
+    summary: "Fixed Pocket EOS handling with minimum-frame gating, tails, diagnostics, and Pocket-compatible temperature scaling"
+    status: accepted
+    source_refs:
+      - git:b5380a29e5a39a5e6388a437e47baa54d0142ec6
+    paths:
+      - docs/systems/pocket.md
+      - onnxvoice/systems/pocket.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_real_bundle.py
+    sources:
+      - git:b5380a29e5a39a5e6388a437e47baa54d0142ec6
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
