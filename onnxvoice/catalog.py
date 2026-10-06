@@ -113,6 +113,21 @@ class CatalogClient:
         assert self.cache_dir is not None
         return self.cache_dir / f"{system}.json"
 
+    @staticmethod
+    def _cache_generation(path: Path) -> tuple[int, int, int, int, int] | None:
+        """Return a stat fingerprint that changes when atomic cache publication replaces a file."""
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return None
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+
     def _catalog_lock_path(self, system: str) -> Path:
         assert self.cache_dir is not None
         return self.cache_dir.parent / "locks" / "catalog" / f"{system}.lock"
@@ -135,31 +150,59 @@ class CatalogClient:
     ) -> dict[str, Any]:
         """Load raw catalog data from cache or its configured source.
 
-
         Network access occurs when the cache cannot satisfy the request and offline
-        mode is disabled. ``refresh=True`` bypasses the normal cache freshness check.
+        mode is disabled. ``refresh=True`` bypasses normal cache freshness, but callers
+        waiting behind an overlapping refresh reuse a cache generation published after
+        they began waiting. Calls that start after publication perform their own refresh.
         """
         system = system.lower()
         if not self.sources or system not in self.sources:
             raise CatalogError(f"No catalog source configured for system {system!r}")
         self._emit(progress, AssetProgress("catalog_started", ref=system))
         cache_path = self._cache_path(system)
-        fresh = (
-            cache_path.exists() and (time.time() - cache_path.stat().st_mtime) < self.ttl_seconds
-        )
-        if cache_path.exists() and (fresh or self.offline) and not refresh:
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
-            self._emit(progress, AssetProgress("catalog_cached", ref=system))
+
+        def cached(
+            generation: tuple[int, int, int, int, int] | None,
+            *,
+            accept_refresh: bool = False,
+        ) -> dict[str, Any] | None:
+            fresh = (
+                generation is not None
+                and time.time_ns() - generation[3] < self.ttl_seconds * 1_000_000_000
+            )
+            if generation is not None and (
+                accept_refresh or ((fresh or self.offline) and not refresh)
+            ):
+                data = json.loads(cache_path.read_text(encoding="utf-8"))
+                self._emit(progress, AssetProgress("catalog_cached", ref=system))
+                return data
+            return None
+
+        # Snapshot before waiting. For refreshes, this distinguishes our own forced
+        # fetch from a newer cache another overlapping caller has already published.
+        cache_generation = self._cache_generation(cache_path)
+        data = cached(cache_generation)
+        if data is not None:
             return data
-        payload = self._read_source(self.sources[system])
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise CatalogError(f"Invalid JSON in {system} catalog") from exc
+
         with FileLock(self._catalog_lock_path(system)):
+            current_generation = self._cache_generation(cache_path)
+            if refresh and not self.offline and current_generation != cache_generation:
+                data = cached(current_generation, accept_refresh=True)
+                if data is not None:
+                    return data
+            data = cached(current_generation)
+            if data is not None:
+                return data
+            payload = self._read_source(self.sources[system])
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise CatalogError(f"Invalid JSON in {system} catalog") from exc
             tmp = cache_path.with_suffix(".json.tmp")
             tmp.write_bytes(payload)
             os.replace(tmp, cache_path)
+
         self._emit(progress, AssetProgress("catalog_completed", ref=system))
         return data
 

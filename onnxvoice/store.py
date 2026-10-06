@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import urllib.request
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
@@ -40,9 +43,91 @@ from .types import (
 
 ProgressCallback = Callable[[AssetProgress], None]
 
+_LOCAL_LOCKS: dict[str, threading.Lock] = {}
+_LOCAL_LOCKS_GUARD = threading.Lock()
+_ACTIVE_FILE_LOCKS: weakref.WeakSet[Any] = weakref.WeakSet()
+
+
+def _local_lock_for(path: Path) -> threading.Lock:
+    key = os.path.normcase(os.path.abspath(os.fspath(path)))
+    with _LOCAL_LOCKS_GUARD:
+        return _LOCAL_LOCKS.setdefault(key, threading.Lock())
+
+
+def _reset_local_locks_after_fork() -> None:
+    """Discard inherited thread locks and close child copies of lock handles."""
+    global _LOCAL_LOCKS, _LOCAL_LOCKS_GUARD, _ACTIVE_FILE_LOCKS
+
+    for lock in tuple(_ACTIVE_FILE_LOCKS):
+        fd = lock._fd
+        lock._fd = None
+        lock._owned = False
+        lock._local_lock = None
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
+    _ACTIVE_FILE_LOCKS = weakref.WeakSet()
+    _LOCAL_LOCKS = {}
+    _LOCAL_LOCKS_GUARD = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_local_locks_after_fork)
+
+
+def _try_os_lock(fd: int) -> bool:
+    """Try an exclusive non-blocking platform lock; return False if contended."""
+    if os.name == "nt":
+        import msvcrt
+
+        if os.fstat(fd).st_size == 0:
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, b"\0")
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EDEADLK):
+                return False
+            raise
+        return True
+
+    if os.name == "posix":
+        import fcntl
+
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return False
+            raise
+        return True
+
+    raise OSError(f"No advisory file-lock implementation for os.name={os.name!r}")
+
+
+def _unlock_os_lock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    raise OSError(f"No advisory file-lock implementation for os.name={os.name!r}")
+
 
 class FileLock:
-    """Small cross-process lock based on an atomically-created lock file."""
+    """Cross-process advisory lock held by an open OS-managed lock-file handle.
+
+    ``stale_after`` is retained as a source-compatible constructor argument. OS
+    locks are released by the operating system when their owning process exits,
+    so PID/timestamp based stale-lock reclamation is not needed.
+    """
 
     def __init__(
         self,
@@ -57,37 +142,71 @@ class FileLock:
         self.poll_interval = poll_interval
         self.stale_after = stale_after
         self._owned = False
+        self._fd: int | None = None
+        self._local_lock: threading.Lock | None = None
+        with _LOCAL_LOCKS_GUARD:
+            _ACTIVE_FILE_LOCKS.add(self)
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.timeout
-        while True:
+        local_lock = _local_lock_for(self.path)
+        if not local_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise LockError(f"Timed out acquiring lock: {self.path}") from None
+        self._local_lock = local_lock
+        try:
             try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            except FileExistsError:
-                self._remove_stale()
-                if time.monotonic() >= deadline:
-                    raise LockError(f"Timed out acquiring lock: {self.path}") from None
-                time.sleep(self.poll_interval)
-                continue
+                self._fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
             except OSError as exc:
                 raise LockError(f"Could not acquire lock {self.path}: {exc}") from exc
-            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
-                lock_file.write(f"{os.getpid()} {time.time()}\n")
-            self._owned = True
-            return
+
+            while True:
+                try:
+                    if _try_os_lock(self._fd):
+                        self._owned = True
+                        return
+                except OSError as exc:
+                    raise LockError(f"Could not acquire lock {self.path}: {exc}") from exc
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LockError(f"Timed out acquiring lock: {self.path}") from None
+                time.sleep(min(max(0.0, self.poll_interval), remaining))
+        except BaseException:
+            fd = self._fd
+            self._fd = None
+            self._owned = False
+            self._local_lock = None
+            if fd is not None:
+                with suppress(OSError):
+                    os.close(fd)
+            local_lock.release()
+            raise
 
     def release(self) -> None:
         if not self._owned:
             return
-        try:
-            self.path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            raise LockError(f"Could not release lock {self.path}: {exc}") from exc
-        finally:
-            self._owned = False
+        fd = self._fd
+        local_lock = self._local_lock
+        self._fd = None
+        self._local_lock = None
+        self._owned = False
+        release_error: OSError | None = None
+        if fd is not None:
+            try:
+                _unlock_os_lock(fd)
+            except OSError as exc:
+                release_error = exc
+            try:
+                os.close(fd)
+            except OSError as exc:
+                if release_error is None:
+                    release_error = exc
+        if local_lock is not None:
+            local_lock.release()
+        if release_error is not None:
+            raise LockError(
+                f"Could not release lock {self.path}: {release_error}"
+            ) from release_error
 
     def __enter__(self) -> FileLock:
         self.acquire()
@@ -95,31 +214,6 @@ class FileLock:
 
     def __exit__(self, *_: object) -> None:
         self.release()
-
-    def _remove_stale(self) -> None:
-        try:
-            raw = self.path.read_text(encoding="utf-8").split()
-            pid = int(raw[0])
-            timestamp = float(raw[1])
-        except (OSError, ValueError, IndexError):
-            return
-        if time.time() - timestamp < self.stale_after or _process_exists(pid):
-            return
-        with suppress(FileNotFoundError):
-            self.path.unlink()
-            pass
-
-
-def _process_exists(pid: int) -> bool:
-    if pid == os.getpid():
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 class AssetStore:
