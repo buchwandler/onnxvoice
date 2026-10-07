@@ -93,13 +93,17 @@ class InflectAdapter(SystemAdapter):
         try:
             rng = np.random.default_rng(seed)
         except (TypeError, ValueError, OverflowError) as exc:
-            raise RuntimeContractError("Inflect seed must be a valid non-negative RNG seed") from exc
+            raise RuntimeContractError(
+                "Inflect seed must be a valid non-negative RNG seed"
+            ) from exc
         tokens = self._token_values(token_ids)
         sample_rate = self._sample_rate()
 
         # Validate both graphs before executing either one, so a bad decoder does not
         # produce misleading partial work or consume runtime resources unnecessarily.
-        duration_input_specs, duration_output_names, duration_output_specs = self._validate_duration_graph()
+        duration_input_specs, duration_output_names, duration_output_specs = (
+            self._validate_duration_graph()
+        )
         decode_input_specs, decode_output_names, decode_output_specs = self._validate_decode_graph()
         token_input = self._integer_feed(tokens, duration_input_specs["tokens"], "tokens", rank=2)
         length_input = self._integer_feed(
@@ -112,17 +116,24 @@ class InflectAdapter(SystemAdapter):
         duration_values = self.duration_session.run(
             {"tokens": token_input, "lengths": length_input, "length_scale": length_scale}
         )
-        duration_named = self._named_outputs(
-            duration_values, duration_output_names, "duration"
-        )
+        duration_named = self._named_outputs(duration_values, duration_output_names, "duration")
         intermediates = {
             name: self._finite_float_array(duration_named[name], f"duration output {name!r}")
             for name in ("m_p_exp", "logs_p_exp", "y_mask")
         }
-        shapes = {value.shape for value in intermediates.values()}
-        if len(shapes) != 1:
+        if intermediates["m_p_exp"].shape != intermediates["logs_p_exp"].shape:
             raise RuntimeContractError(
-                "Inflect duration outputs m_p_exp, logs_p_exp, and y_mask must have matching shapes"
+                "Inflect duration outputs m_p_exp and logs_p_exp must have matching shapes"
+            )
+        latent_shape = intermediates["m_p_exp"].shape
+        mask_shape = intermediates["y_mask"].shape
+        if (
+            mask_shape[0] != latent_shape[0]
+            or mask_shape[1] != 1
+            or mask_shape[2] != latent_shape[2]
+        ):
+            raise RuntimeContractError(
+                "Inflect duration output y_mask must have one channel and match latent batch/time dimensions"
             )
         m_p_exp = intermediates["m_p_exp"]
         for name, value in intermediates.items():
@@ -150,7 +161,9 @@ class InflectAdapter(SystemAdapter):
         if audio.ndim == 0:
             audio = audio.reshape(1)
         if audio.ndim != 1:
-            raise RuntimeContractError("Inflect waveform must resolve to an unambiguous mono signal")
+            raise RuntimeContractError(
+                "Inflect waveform must resolve to an unambiguous mono signal"
+            )
         if audio.size == 0 or not np.all(np.isfinite(audio)):
             raise RuntimeContractError("Inflect waveform must be non-empty and finite")
 
@@ -224,7 +237,11 @@ class InflectAdapter(SystemAdapter):
         self._validate_spec_rank(inputs["length_scale"], (0, 1), "length_scale")
         for name, spec in outputs.items():
             self._fp32_dtype(spec, name)
-        self._validate_compatible_specs(outputs, tuple(_EXPECTED_DURATION_OUTPUTS), "duration outputs")
+        for name, spec in outputs.items():
+            self._validate_spec_rank(spec, 3, name)
+        self._validate_compatible_specs(
+            outputs, tuple(_EXPECTED_DURATION_OUTPUTS), "duration outputs"
+        )
         return inputs, output_names, outputs
 
     def _validate_decode_graph(
@@ -240,6 +257,8 @@ class InflectAdapter(SystemAdapter):
         for name, spec in inputs.items():
             self._fp32_dtype(spec, name)
         self._fp32_dtype(outputs["waveform"], "waveform")
+        for name in ("m_p_exp", "logs_p_exp", "y_mask", "zp_noise"):
+            self._validate_spec_rank(inputs[name], 3, name)
         self._validate_compatible_specs(
             inputs, ("m_p_exp", "logs_p_exp", "y_mask", "zp_noise"), "decode latent inputs"
         )
@@ -247,9 +266,7 @@ class InflectAdapter(SystemAdapter):
         return inputs, output_names, outputs
 
     @staticmethod
-    def _validate_names(
-        names: Sequence[str], expected: set[str], label: str
-    ) -> tuple[str, ...]:
+    def _validate_names(names: Sequence[str], expected: set[str], label: str) -> tuple[str, ...]:
         actual = tuple(names)
         if len(actual) != len(expected) or set(actual) != expected:
             missing = sorted(expected - set(actual))
@@ -259,9 +276,7 @@ class InflectAdapter(SystemAdapter):
                 details.append(f"missing: {', '.join(missing)}")
             if unexpected:
                 details.append(f"unexpected: {', '.join(unexpected)}")
-            raise RuntimeContractError(
-                f"Inflect {label} contract mismatch ({'; '.join(details)})"
-            )
+            raise RuntimeContractError(f"Inflect {label} contract mismatch ({'; '.join(details)})")
         return actual
 
     @staticmethod
@@ -316,7 +331,19 @@ class InflectAdapter(SystemAdapter):
         if any(len(shape) != rank for shape in shapes[1:]):
             raise RuntimeContractError(f"Inflect {label} must have compatible tensor ranks")
         for axis in range(rank):
-            dimensions = [shape[axis] for shape in shapes]
+            if axis == 1 and "y_mask" in names:
+                mask_channels = specs["y_mask"].shape[axis]
+                if (
+                    isinstance(mask_channels, int)
+                    and not isinstance(mask_channels, bool)
+                    and mask_channels != 1
+                ):
+                    raise RuntimeContractError(
+                        f"Inflect {label} y_mask must have a singleton channel dimension"
+                    )
+                dimensions = [specs[name].shape[axis] for name in names if name != "y_mask"]
+            else:
+                dimensions = [specs[name].shape[axis] for name in names]
             static = {
                 dimension
                 for dimension in dimensions
@@ -346,9 +373,7 @@ class InflectAdapter(SystemAdapter):
             raise RuntimeContractError(f"Inflect tensor {name!r} must have rank {rank}")
         bounds = np.iinfo(dtype)
         if any(value < bounds.min or value > bounds.max for value in values):
-            raise RuntimeContractError(
-                f"Inflect {name} values do not fit graph dtype {dtype.name}"
-            )
+            raise RuntimeContractError(f"Inflect {name} values do not fit graph dtype {dtype.name}")
         feed = np.asarray(values, dtype=dtype)
         if name == "tokens":
             feed = feed[None, :]

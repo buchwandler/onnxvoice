@@ -79,6 +79,7 @@ def _try_os_lock(fd: int) -> bool:
     """Try an exclusive non-blocking platform lock; return False if contended."""
     if os.name == "nt":
         import msvcrt
+
         msvcrt_api: Any = msvcrt
 
         if os.fstat(fd).st_size == 0:
@@ -110,6 +111,7 @@ def _try_os_lock(fd: int) -> bool:
 def _unlock_os_lock(fd: int) -> None:
     if os.name == "nt":
         import msvcrt
+
         msvcrt_api: Any = msvcrt
 
         os.lseek(fd, 0, os.SEEK_SET)

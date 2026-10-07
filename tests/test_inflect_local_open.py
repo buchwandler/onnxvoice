@@ -104,7 +104,6 @@ def test_inflect_open_local_provider_options_reach_both_sessions(
         runtime.close()
 
 
-
 def test_inflect_managed_install_verifies_both_artifact_roles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

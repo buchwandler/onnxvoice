@@ -17,9 +17,7 @@ def _catalog() -> dict[str, Any]:
 
 
 def test_default_sources_contains_inflect() -> None:
-    assert DEFAULT_SOURCES["inflect"].endswith(
-        "inflect-onnx-bundles/main/catalog/models.json"
-    )
+    assert DEFAULT_SOURCES["inflect"].endswith("inflect-onnx-bundles/main/catalog/models.json")
 
 
 def test_parse_inflect_nano_and_micro() -> None:
@@ -102,7 +100,6 @@ def test_inflect_voice_details_are_catalog_derived() -> None:
         "synthetic": True,
     }
     assert item.metadata["language_codes"] == ("en-US",)
-
 
 
 def test_inflect_catalog_preserves_unknown_voice_gender() -> None:

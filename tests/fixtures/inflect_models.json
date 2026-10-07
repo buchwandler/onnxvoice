@@ -21,11 +21,15 @@
         }
       },
       "controls": {
-        "speed": {"default": 1.0, "minimum": 0.5, "maximum": 2.0},
-        "variation": {"default": 0.667, "minimum": 0.0, "maximum": 1.0},
+        "speed": { "default": 1.0, "minimum": 0.5, "maximum": 2.0 },
+        "variation": { "default": 0.667, "minimum": 0.0, "maximum": 1.0 },
         "seed_default": 0
       },
-      "runtime": {"profile": "inflect-v2-split-v1", "precision": "fp32", "onnx_opset": 17},
+      "runtime": {
+        "profile": "inflect-v2-split-v1",
+        "precision": "fp32",
+        "onnx_opset": 17
+      },
       "upstream": {
         "provider": "huggingface",
         "repository": "owensong/Inflect-Nano-v2-ONNX",
@@ -52,7 +56,10 @@
           "sha256": "f98b1ba21f3d5306ee6cf96a02ba9783082ef99314e77f1ee0c03954dc7de2b8"
         }
       ],
-      "metadata": {"source_model_sha256": "bfca468489c9069361d6b87b295a17eef611af8ff09854ce0b80305d9122f5b3", "fixed_voice": true}
+      "metadata": {
+        "source_model_sha256": "bfca468489c9069361d6b87b295a17eef611af8ff09854ce0b80305d9122f5b3",
+        "fixed_voice": true
+      }
     },
     "micro-v2": {
       "id": "micro-v2",
@@ -73,11 +80,15 @@
         }
       },
       "controls": {
-        "speed": {"default": 1.0, "minimum": 0.5, "maximum": 2.0},
-        "variation": {"default": 0.667, "minimum": 0.0, "maximum": 1.0},
+        "speed": { "default": 1.0, "minimum": 0.5, "maximum": 2.0 },
+        "variation": { "default": 0.667, "minimum": 0.0, "maximum": 1.0 },
         "seed_default": 0
       },
-      "runtime": {"profile": "inflect-v2-split-v1", "precision": "fp32", "onnx_opset": 17},
+      "runtime": {
+        "profile": "inflect-v2-split-v1",
+        "precision": "fp32",
+        "onnx_opset": 17
+      },
       "upstream": {
         "provider": "huggingface",
         "repository": "owensong/Inflect-Micro-v2-ONNX",
@@ -104,7 +115,10 @@
           "sha256": "7940923add86f76e7fa78d910b0632ca1779f8cc9a2ca2b49236381a9ca77183"
         }
       ],
-      "metadata": {"source_model_sha256": "3eede065c9ccfa88ade0a5a9a5c23de34afcbbb32213e59aad44d5cf100fdee8", "fixed_voice": true}
+      "metadata": {
+        "source_model_sha256": "3eede065c9ccfa88ade0a5a9a5c23de34afcbbb32213e59aad44d5cf100fdee8",
+        "fixed_voice": true
+      }
     }
   }
 }

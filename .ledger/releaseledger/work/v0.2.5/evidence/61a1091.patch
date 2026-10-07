@@ -1,0 +1,2144 @@
+ MANIFEST.in                        |   2 +
+ README.md                          |   1 +
+ docs/cli.md                        |   7 +-
+ docs/concepts.md                   |   8 +-
+ docs/index.md                      |   1 +
+ docs/systems/index.md              |   2 +
+ docs/systems/inflect.md            | 102 ++++++++
+ onnxvoice/catalog.py               | 347 +++++++++++++++++++++++++++
+ onnxvoice/store.py                 |   6 +-
+ onnxvoice/systems/__init__.py      |   3 +
+ onnxvoice/systems/inflect.py       | 409 ++++++++++++++++++++++++++++++++
+ pyproject.toml                     |   2 +
+ tests/fixtures/inflect_models.json | 110 +++++++++
+ tests/test_inflect_adapter.py      | 474 +++++++++++++++++++++++++++++++++++++
+ tests/test_inflect_catalog.py      | 205 ++++++++++++++++
+ tests/test_inflect_local_open.py   | 145 ++++++++++++
+ tests/test_inflect_voices.py       |  71 ++++++
+ 17 files changed, 1887 insertions(+), 8 deletions(-)
+
+diff --git a/MANIFEST.in b/MANIFEST.in
+index defe79c..2fb0fce 100644
+--- a/MANIFEST.in
++++ b/MANIFEST.in
+@@ -1,4 +1,6 @@
+ include LICENSE
+ include README.md
+ include docs/systems/kitten.md
++include docs/systems/inflect.md
++include tests/fixtures/inflect_models.json
+ prune .ledger
+diff --git a/README.md b/README.md
+index 507d9be..a1965ab 100644
+--- a/README.md
++++ b/README.md
+@@ -62,6 +62,7 @@ finally:
+ | Pocket     | Yes              | Yes     | Catalog-dependent |
+ | Supertonic | Yes              | Yes     | Yes               |
+ | Kitten     | Yes              | Yes     | Yes               |
++| Inflect    | Yes              | Yes     | Fixed `default` voice |
+
+ Catalog contents determine which named voices are available. Discovery does not depend on a separate capability list. Adapters execute system-specific model contracts and do not imply text normalization or phonemization support.
+
+diff --git a/docs/cli.md b/docs/cli.md
+index 0a4cd38..4b49de7 100644
+--- a/docs/cli.md
++++ b/docs/cli.md
+@@ -44,7 +44,7 @@ onnxvoice installed --format tsv
+
+ | Flag                   | Accepted values or meaning                          |
+ | ---------------------- | --------------------------------------------------- |
+-| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten` |
++| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect` |
+ | `--kind`               | `voice`, `model`, `bundle`                          |
+ | `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`      |
+ | `--gender`             | `male`, `female`, `neutral`, `unknown`              |
+@@ -62,6 +62,7 @@ Gender is source metadata and is never inferred from a voice name or ID. When th
+ ```bash
+ onnxvoice install piper:en_US-lessac-medium
+ onnxvoice install kokoro:v1.0 --quality fp16
++onnxvoice install inflect:nano-v2
+ onnxvoice info piper:en_US-lessac-medium
+ onnxvoice path piper:en_US-lessac-medium
+ onnxvoice show piper:en_US-lessac-medium
+@@ -117,9 +118,11 @@ onnxvoice voices list --system supertonic --lang de
+ onnxvoice voices show supertonic:supertonic-3/F1
+ onnxvoice voices list --system kitten --lang en-US
+ onnxvoice voices show kitten:nano-0.8-int8/Bella
++onnxvoice voices list --system inflect
++onnxvoice voices show inflect:nano-v2/default
+ ```
+
+-`voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`. See [KittenTTS](systems/kitten.md) for the runtime boundary. See [Catalog voices](voices.md) for reference forms and record fields.
++`voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`; Inflect models expose a fixed `default` voice such as `inflect:nano-v2/default`. See [Inflect v2](systems/inflect.md) for its token-ID runtime boundary and [KittenTTS](systems/kitten.md) for the Kitten boundary. See [Catalog voices](voices.md) for reference forms and record fields.
+
+ ## Pocket diagnostics and offline use
+
+diff --git a/docs/concepts.md b/docs/concepts.md
+index 5cd64b6..c4e5d46 100644
+--- a/docs/concepts.md
++++ b/docs/concepts.md
+@@ -2,7 +2,7 @@
+
+ ## System
+
+-A system identifies an adapter and catalog format. The built-in systems are Piper, Kokoro, Pocket, Supertonic, and Kitten. Normalized catalog items determine which voices are exposed for each system.
++A system identifies an adapter and catalog format. The built-in systems are Piper, Kokoro, Pocket, Supertonic, Kitten, and Inflect. Normalized catalog items determine which voices are exposed for each system.
+
+ ## Catalog item and artifact
+
+@@ -12,13 +12,13 @@ For Kokoro, selecting a quality chooses a model variant rather than installing e
+
+ ## Reference and installation
+
+-A reference is the canonical `system:id` name used to identify a catalog item, such as `piper:en_US-lessac-medium`, `kokoro:v1.0`, `pocket:english_2026-04`, and `kitten:nano-0.8-int8`. An installation is the verified managed local representation of a selected catalog item or imported model.
++A reference is the canonical `system:id` name used to identify a catalog item, such as `piper:en_US-lessac-medium`, `kokoro:v1.0`, `pocket:english_2026-04`, `kitten:nano-0.8-int8`, and `inflect:nano-v2`. An installation is the verified managed local representation of a selected catalog item or imported model.
+
+ An installation manifest records the artifacts and selected metadata. An installation may share immutable content-addressed blobs with other installations.
+
+ ## Voice record and semantic reference
+
+-A voice record identifies a normalized catalog voice with `(system, asset_id, voice_id)`. Its semantic reference has the form `<system>:<asset-id>[/<voice-id>]`. For example, `piper:en_US-lessac-medium` identifies an asset that is itself a voice, while `kokoro:v1.0/af_heart`, `supertonic:supertonic-3/F1`, and `kitten:nano-0.8-int8/Bella` identify child voices in model or bundle catalog items. See [Catalog voices](voices.md).
++A voice record identifies a normalized catalog voice with `(system, asset_id, voice_id)`. Its semantic reference has the form `<system>:<asset-id>[/<voice-id>]`. For example, `piper:en_US-lessac-medium` identifies an asset that is itself a voice, while `kokoro:v1.0/af_heart`, `supertonic:supertonic-3/F1`, `kitten:nano-0.8-int8/Bella`, and `inflect:nano-v2/default` identify child voices in model or bundle catalog items. Inflect v2 models expose one fixed `default` voice. See [Catalog voices](voices.md).
+
+ ## Managed and local runtime opening
+
+@@ -36,4 +36,4 @@ The cache can contain catalog data, installed assets, content-addressed blobs, a
+
+ ## Catalog sources
+
+-The default catalog client has sources for Piper, Kokoro, Pocket, Supertonic, and Kitten. Catalogs and model artifacts are external data and are not bundled with the package. Override a system source with `ONNXVOICE_PIPER_CATALOG`, `ONNXVOICE_KOKORO_CATALOG`, `ONNXVOICE_POCKET_CATALOG`, `ONNXVOICE_SUPERTONIC_CATALOG`, or `ONNXVOICE_KITTEN_CATALOG`. Each value may be a local path or an HTTP(S) URL. Python callers can use `catalog_sources` when constructing `OnnxVoice`.
++The default catalog client has sources for Piper, Kokoro, Pocket, Supertonic, Kitten, and Inflect. Catalogs and model artifacts are external data and are not bundled with the package. Override a system source with `ONNXVOICE_PIPER_CATALOG`, `ONNXVOICE_KOKORO_CATALOG`, `ONNXVOICE_POCKET_CATALOG`, `ONNXVOICE_SUPERTONIC_CATALOG`, `ONNXVOICE_KITTEN_CATALOG`, or `ONNXVOICE_INFLECT_CATALOG`. Each value may be a local path or an HTTP(S) URL. Python callers can use `catalog_sources` when constructing `OnnxVoice`.
+diff --git a/docs/index.md b/docs/index.md
+index 654d552..7f863a6 100644
+--- a/docs/index.md
++++ b/docs/index.md
+@@ -20,6 +20,7 @@ It deliberately does not own text normalization, G2P/phonemization, sentence pla
+ - [Getting started](getting-started.md)
+ - [CLI reference and common workflows](cli.md)
+ - [Catalog voices and semantic references](voices.md)
++- [Inflect v2 runtime](systems/inflect.md)
+ - [Python usage](python-api.md)
+ - [Storage and cache management](storage.md)
+ - [ONNX Runtime providers](providers.md)
+diff --git a/docs/systems/index.md b/docs/systems/index.md
+index 95a34dc..453bf1e 100644
+--- a/docs/systems/index.md
++++ b/docs/systems/index.md
+@@ -9,6 +9,7 @@ Each system adapter owns the model-specific ONNX graph contract. It does not pro
+ | Pocket     | Yes              | Yes              | IDs in each item's `voices` field      | Token IDs and prepared voice state                      |
+ | Supertonic | Yes              | Yes              | Child voice IDs on model items         | Token IDs, text mask, and caller-provided style tensors |
+ | Kitten     | Yes              | Yes              | Child voice IDs on model items         | Model-ready token IDs, style tensor, and speed          |
++| Inflect    | Yes              | Yes              | One fixed `default` voice             | Model-ready token IDs, speed, variation, and seed |
+
+ `OnnxVoice` discovers voices from the normalized catalog data shown above. A catalog item whose kind is `voice` contributes its own ID; items with child voices contribute the IDs already present in `CatalogItem.voices`. The catalog determines which voices are available.
+ Adapter registration and catalog availability are distinct. A built-in adapter does not guarantee that external catalog data is available.
+@@ -21,4 +22,5 @@ kokoro
+ pocket
+ supertonic
+ kitten
++inflect
+ ```
+diff --git a/docs/systems/inflect.md b/docs/systems/inflect.md
+new file mode 100644
+index 0000000..9c01973
+--- /dev/null
++++ b/docs/systems/inflect.md
+@@ -0,0 +1,102 @@
++# Inflect v2
++
++ONNXVoice provides a low-level runtime adapter for Inflect Nano v2 and Inflect Micro v2. Both models use a fixed `default` voice and produce 24 kHz audio. The catalog carries the voice description (including locale and gender); the adapter does not infer or invent voice metadata.
++
++Inflect v2 is a two-graph runtime:
++
++| Artifact role | File |
++| --- | --- |
++| `duration` | `duration.onnx` |
++| `decode` | `decode.onnx` |
++
++The adapter creates and owns one lazy ONNX Runtime session per graph. ONNXVoice handles catalog discovery, pinned artifact downloads and SHA-256 verification, provider selection, session options, and runtime diagnostics. Model discovery and voice listing use catalog metadata and do not require installing the ONNX files.
++
++## Runtime boundary
++
++`InflectAdapter.infer()` accepts a non-empty sequence of model-ready integer token IDs. It does not accept text and does not import InflectG2P. Text normalization, G2P, and conversion to the model's token IDs belong to InflectSynth / InflectG2P.
++
++Supported controls:
++
++| Control | Default | Range | Effect |
++| --- | ---: | ---: | --- |
++| `speed` | `1.0` | `0.5`–`2.0` | Scales duration as `1 / speed` |
++| `variation` | `0.667` | `0.0`–`1.0` | Decoder noise scale |
++| `seed` | `0` | Python integer | Seeds request-local decoder noise |
++
++A repeated request with the same tokens, controls, model, runtime stack, and seed produces the same decoder-noise tensor. The result is finite mono `float32` PCM at 24 kHz. ONNXVoice returns raw model audio: it does not clip, normalize loudness, fade edges, split text, concatenate chunks, or insert pauses.
++
++## CLI
++
++```bash
++onnxvoice list --system inflect
++onnxvoice install inflect:nano-v2
++onnxvoice voices list --system inflect
++onnxvoice voices show inflect:nano-v2/default
++```
++
++The catalog can be overridden with `ONNXVOICE_INFLECT_CATALOG`, set to a local JSON path or an HTTP(S) URL. The default source is the Inflect ONNX bundles catalog. Catalog aliases such as `inflect:nano` and `inflect:Inflect-Nano-v2-ONNX` resolve to the canonical `inflect:nano-v2` item.
++
++## Managed Python usage
++
++```python
++from onnxvoice import OnnxVoice
++
++manager = OnnxVoice()
++installation = manager.install("inflect:nano-v2")
++with manager.open(installation, providers="cpu") as runtime:
++    result = runtime.infer(
++        token_ids,
++        speed=1.0,
++        variation=0.667,
++        seed=0,
++    )
++    audio = result.audio
++    sample_rate = result.sample_rate  # 24000
++```
++
++`token_ids` must already be encoded by the producer frontend. The managed install contains both verified artifact roles; `open()` does not download or resolve a catalog entry.
++
++## Local Python usage
++
++Use the existing multi-artifact `open_local()` API when the graph files are already available. These unmanaged files are not copied into the ONNXVoice store.
++
++```python
++from onnxvoice import OnnxVoice
++
++runtime = OnnxVoice.open_local(
++    system="inflect",
++    artifacts={
++        "duration": "duration.onnx",
++        "decode": "decode.onnx",
++    },
++    sample_rate=24000,
++    runtime={
++        "profile": "inflect-v2-split-v1",
++        "layout": "split",
++        "precision": "fp32",
++    },
++    metadata={"default_voice": "default", "voices": ["default"]},
++    providers="cpu",
++)
++try:
++    result = runtime.infer(token_ids, speed=1.1, variation=0.5, seed=42)
++finally:
++    runtime.close()
++```
++
++## Providers and diagnostics
++
++Provider choice and provider/session options are managed by ONNXVoice and passed to both graph sessions. For example:
++
++```python
++runtime = manager.open(
++    installation,
++    providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
++    provider_options=[{"device_id": "0"}, {}],
++    session_options=session_options,
++)
++```
++
++The runtime diagnostic reports the split layout and each created component (`duration` and `decode`), its model path, provider selection, and graph inputs/outputs. Missing artifacts raise `CapabilityError`; incompatible graph names, types, shapes, or inference values raise `RuntimeContractError`.
++
++The CLI's one-model import command is not a split-graph import workflow. Use the Python `open_local()` API for local Inflect files.
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index ddc3673..f1df888 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -65,6 +65,7 @@ DEFAULT_SOURCES = {
+     "pocket": "https://raw.githubusercontent.com/buchwandler/pocket-onnx-bundles/main/catalog/bundles.json",
+     "supertonic": "https://raw.githubusercontent.com/buchwandler/supertonic-onnx-bundles/main/catalog/bundles.json",
+     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
++    "inflect": "https://raw.githubusercontent.com/buchwandler/inflect-onnx-bundles/main/catalog/models.json",
+ }
+ _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
+     {
+@@ -226,6 +227,8 @@ class CatalogClient:
+             return _parse_supertonic(raw)
+         if system == "kitten":
+             return _parse_kitten(raw)
++        if system == "inflect":
++            return _parse_inflect(raw)
+         raise CatalogError(f"No parser for system {system!r}")
+
+     def resolve(
+@@ -1341,6 +1344,350 @@ def _parse_kitten(data: Mapping[str, Any]) -> list[CatalogItem]:
+     return result
+
+
++_INFLECT_MODEL_FIELDS = frozenset(
++    {
++        "id",
++        "aliases",
++        "name",
++        "version",
++        "language",
++        "sample_rate",
++        "voice_mode",
++        "default_voice",
++        "voices",
++        "controls",
++        "runtime",
++        "upstream",
++        "artifacts",
++        "metadata",
++    }
++)
++_INFLECT_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
++_INFLECT_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_INFLECT_HF_REPOSITORY_RE = re.compile(r"^[^/\\\\\s]+/[^/\\\\\s]+$")
++_INFLECT_HF_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
++_INFLECT_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
++_INFLECT_ARTIFACT_FILENAMES = {"duration": "duration.onnx", "decode": "decode.onnx"}
++
++
++def _require_inflect_fields(
++    value: Mapping[str, Any], expected: set[str] | frozenset[str], label: str
++) -> None:
++    if set(value) == set(expected):
++        return
++    missing = sorted(set(expected) - set(value))
++    unexpected = sorted(set(value) - set(expected))
++    details = []
++    if missing:
++        details.append(f"missing: {', '.join(missing)}")
++    if unexpected:
++        details.append(f"unexpected: {', '.join(unexpected)}")
++    raise CatalogError(f"{label} fields mismatch ({'; '.join(details)})")
++
++
++def _require_inflect_safe_id(value: Any, label: str) -> str:
++    if not isinstance(value, str) or _INFLECT_SAFE_ID_RE.fullmatch(value) is None:
++        raise CatalogError(f"{label} is unsafe: {value!r}")
++    return value
++
++
++def _require_inflect_text(value: Any, label: str) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise CatalogError(f"{label} must be a non-empty string")
++    return value
++
++
++def _require_inflect_language(value: Any, label: str) -> str:
++    if not isinstance(value, str) or _INFLECT_LANGUAGE_RE.fullmatch(value) is None:
++        raise CatalogError(f"{label} must be a valid language tag")
++    return normalize_language_tag(value)
++
++
++def _inflect_number(value: Any, label: str) -> float:
++    if isinstance(value, bool) or not isinstance(value, (int, float)):
++        raise CatalogError(f"{label} must be a finite real number")
++    try:
++        number = float(value)
++    except (OverflowError, ValueError):
++        raise CatalogError(f"{label} must be a finite real number") from None
++    if not math.isfinite(number):
++        raise CatalogError(f"{label} must be a finite real number")
++    return number
++
++
++def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
++    """Parse and validate the pinned schema-1 Inflect v2 model catalog."""
++    if not isinstance(data, Mapping):
++        raise CatalogError("Inflect catalog must be an object")
++    if set(data) != {"schema", "kind", "models"}:
++        raise CatalogError("Inflect catalog must contain exactly schema, kind, and models")
++    if type(data.get("schema")) is not int or data["schema"] != 1:
++        raise CatalogError("Inflect catalog schema must be 1")
++    if data.get("kind") != "inflect-onnx-model-catalog":
++        raise CatalogError(f"Unexpected Inflect catalog kind: {data.get('kind')!r}")
++
++    models = data.get("models")
++    if not isinstance(models, Mapping) or not models:
++        raise CatalogError("Inflect catalog models must be a non-empty mapping")
++    model_ids: dict[str, str] = {}
++    for model_id in models:
++        safe_id = _require_inflect_safe_id(model_id, "Inflect model ID")
++        folded_id = safe_id.casefold()
++        if folded_id in model_ids:
++            raise CatalogError(f"Inflect model IDs collide after normalization: {safe_id!r}")
++        model_ids[folded_id] = safe_id
++
++    result: list[CatalogItem] = []
++    normalized_names = dict(model_ids)
++    for model_id, raw_model in models.items():
++        if not isinstance(raw_model, Mapping):
++            raise CatalogError(f"{model_id}: model entry must be an object")
++        _require_inflect_fields(raw_model, _INFLECT_MODEL_FIELDS, f"{model_id} model")
++        if raw_model.get("id") != model_id:
++            raise CatalogError(f"Inflect model map key {model_id!r} does not match id")
++
++        raw_aliases = raw_model["aliases"]
++        if not isinstance(raw_aliases, Sequence) or isinstance(raw_aliases, (str, bytes)):
++            raise CatalogError(f"{model_id}: aliases must be a sequence")
++        aliases: list[str] = []
++        for raw_alias in raw_aliases:
++            alias = _require_inflect_safe_id(raw_alias, f"{model_id} alias")
++            folded_alias = alias.casefold()
++            if folded_alias in normalized_names:
++                raise CatalogError(f"{model_id}: duplicate or conflicting alias {alias!r}")
++            normalized_names[folded_alias] = alias
++            aliases.append(alias)
++
++        name = _require_inflect_text(raw_model["name"], f"{model_id} name")
++        version = _require_inflect_text(raw_model["version"], f"{model_id} version")
++        language = _require_inflect_language(raw_model["language"], f"{model_id} language")
++        sample_rate = raw_model["sample_rate"]
++        if type(sample_rate) is not int or sample_rate != 24000:
++            raise CatalogError(f"{model_id}: sample_rate must be 24000 for Inflect v2")
++
++        if raw_model["voice_mode"] != "fixed":
++            raise CatalogError(f"{model_id}: voice_mode must be 'fixed'")
++        default_voice = _require_inflect_safe_id(raw_model["default_voice"], f"{model_id} default_voice")
++        if default_voice != "default":
++            raise CatalogError(f"{model_id}: fixed voice default_voice must be 'default'")
++        raw_voices = raw_model["voices"]
++        if not isinstance(raw_voices, Mapping) or set(raw_voices) != {default_voice}:
++            raise CatalogError(f"{model_id}: fixed voice catalog must contain exactly 'default'")
++        raw_voice = raw_voices[default_voice]
++        if not isinstance(raw_voice, Mapping):
++            raise CatalogError(f"{model_id}: fixed voice entry must be an object")
++        _require_inflect_fields(
++            raw_voice, {"id", "name", "language", "gender", "synthetic"}, f"{model_id} voice"
++        )
++        voice_id = _require_inflect_safe_id(raw_voice["id"], f"{model_id} voice id")
++        if voice_id != default_voice:
++            raise CatalogError(f"{model_id}: fixed voice id must match default_voice")
++        voice_name = _require_inflect_text(raw_voice["name"], f"{model_id} voice name")
++        voice_language = _require_inflect_language(
++            raw_voice["language"], f"{model_id} voice language"
++        )
++        if voice_language != language:
++            raise CatalogError(f"{model_id}: fixed voice language must match model language")
++        gender = raw_voice["gender"]
++        if not isinstance(gender, str) or gender not in VALID_GENDERS:
++            raise CatalogError(f"{model_id}: voice gender is not a supported descriptive value")
++        synthetic = raw_voice["synthetic"]
++        if not isinstance(synthetic, bool):
++            raise CatalogError(f"{model_id}: voice synthetic flag must be boolean")
++        voice_details = {
++            default_voice: {
++                "id": voice_id,
++                "name": voice_name,
++                "language": language_base(voice_language),
++                "locale": voice_language,
++                "gender": gender,
++                "synthetic": synthetic,
++            }
++        }
++
++        controls = raw_model["controls"]
++        if not isinstance(controls, Mapping):
++            raise CatalogError(f"{model_id}: controls must be an object")
++        _require_inflect_fields(controls, {"speed", "variation", "seed_default"}, f"{model_id} controls")
++        normalized_controls: dict[str, Any] = {}
++        for control_name, lower_limit, upper_limit in (
++            ("speed", 0.5, 2.0),
++            ("variation", 0.0, 1.0),
++        ):
++            raw_control = controls[control_name]
++            if not isinstance(raw_control, Mapping):
++                raise CatalogError(f"{model_id}: {control_name} control must be an object")
++            _require_inflect_fields(
++                raw_control,
++                {"default", "minimum", "maximum"},
++                f"{model_id} {control_name} control",
++            )
++            control_values = {
++                field: _inflect_number(raw_control[field], f"{model_id} {control_name} control {field}")
++                for field in ("default", "minimum", "maximum")
++            }
++            minimum = control_values["minimum"]
++            maximum = control_values["maximum"]
++            if (
++                minimum > control_values["default"]
++                or control_values["default"] > maximum
++                or minimum < lower_limit
++                or maximum > upper_limit
++            ):
++                raise CatalogError(f"{model_id}: {control_name} control has incoherent bounds")
++            normalized_controls[control_name] = control_values
++        seed_default = controls["seed_default"]
++        if isinstance(seed_default, bool) or not isinstance(seed_default, int):
++            raise CatalogError(f"{model_id}: seed_default must be an integer, not bool")
++        normalized_controls["seed_default"] = seed_default
++
++        runtime = raw_model["runtime"]
++        if not isinstance(runtime, Mapping):
++            raise CatalogError(f"{model_id}: runtime must be an object")
++        _require_inflect_fields(
++            runtime, {"profile", "precision", "onnx_opset"}, f"{model_id} runtime"
++        )
++        if runtime["profile"] != "inflect-v2-split-v1":
++            raise CatalogError(f"{model_id}: unsupported runtime profile {runtime['profile']!r}")
++        if runtime["precision"] != "fp32":
++            raise CatalogError(f"{model_id}: Inflect v2 runtime precision must be 'fp32'")
++        if type(runtime["onnx_opset"]) is not int or runtime["onnx_opset"] <= 0:
++            raise CatalogError(f"{model_id}: runtime onnx_opset must be a positive integer")
++        normalized_runtime = {**runtime, "layout": "split"}
++
++        upstream = raw_model["upstream"]
++        if not isinstance(upstream, Mapping):
++            raise CatalogError(f"{model_id}: upstream must be an object")
++        _require_inflect_fields(
++            upstream,
++            {"provider", "repository", "revision", "license", "source_repository", "source_revision"},
++            f"{model_id} upstream",
++        )
++        if upstream["provider"] != "huggingface":
++            raise CatalogError(f"{model_id}: upstream provider must be huggingface")
++        repository = upstream["repository"]
++        if not isinstance(repository, str) or _INFLECT_HF_REPOSITORY_RE.fullmatch(repository) is None:
++            raise CatalogError(f"{model_id}: upstream repository must have owner/name form")
++        revision = upstream["revision"]
++        if not isinstance(revision, str) or _INFLECT_HF_REVISION_RE.fullmatch(revision) is None:
++            raise CatalogError(f"{model_id}: upstream revision must be a lowercase 40-character SHA")
++        source_repository = upstream["source_repository"]
++        if (
++            not isinstance(source_repository, str)
++            or _INFLECT_HF_REPOSITORY_RE.fullmatch(source_repository) is None
++        ):
++            raise CatalogError(f"{model_id}: source_repository must have owner/name form")
++        source_revision = upstream["source_revision"]
++        if (
++            not isinstance(source_revision, str)
++            or _INFLECT_HF_REVISION_RE.fullmatch(source_revision) is None
++        ):
++            raise CatalogError(
++                f"{model_id}: source_revision must be a lowercase 40-character SHA"
++            )
++        license_name = _require_inflect_text(upstream["license"], f"{model_id} upstream license")
++
++        raw_artifacts = raw_model["artifacts"]
++        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
++            raise CatalogError(f"{model_id}: artifacts must be a sequence")
++        if len(raw_artifacts) != 2:
++            raise CatalogError(f"{model_id}: artifacts must contain exactly duration and decode")
++        artifacts: list[Artifact] = []
++        seen_roles: set[str] = set()
++        for raw_artifact in raw_artifacts:
++            if not isinstance(raw_artifact, Mapping):
++                raise CatalogError(f"{model_id}: artifact must be an object")
++            _require_inflect_fields(
++                raw_artifact,
++                {"role", "format", "filename", "url", "size", "sha256"},
++                f"{model_id} artifact",
++            )
++            role = raw_artifact["role"]
++            if not isinstance(role, str) or role not in _INFLECT_ARTIFACT_FILENAMES:
++                raise CatalogError(f"{model_id}: unknown Inflect artifact role {role!r}")
++            if role in seen_roles:
++                raise CatalogError(f"{model_id}: duplicate {role!r} artifact")
++            seen_roles.add(role)
++            if raw_artifact["format"] != "onnx":
++                raise CatalogError(f"{model_id}/{role}: format must be 'onnx'")
++            filename = _require_inflect_safe_id(
++                raw_artifact["filename"], f"{model_id}/{role} filename"
++            )
++            if filename != _INFLECT_ARTIFACT_FILENAMES[role]:
++                raise CatalogError(f"{model_id}/{role}: filename must be {role}.onnx")
++            expected_url = (
++                f"https://huggingface.co/{repository}/resolve/{revision}/onnx/{filename}"
++            )
++            url = raw_artifact["url"]
++            if not isinstance(url, str) or url != expected_url:
++                raise CatalogError(
++                    f"{model_id}/{role}: URL is not pinned to upstream repository/revision"
++                )
++            size = raw_artifact["size"]
++            if type(size) is not int or size <= 0:
++                raise CatalogError(f"{model_id}/{role}: size must be a positive integer")
++            sha256 = raw_artifact["sha256"]
++            if not isinstance(sha256, str) or _INFLECT_SHA256_RE.fullmatch(sha256) is None:
++                raise CatalogError(
++                    f"{model_id}/{role}: sha256 must be lowercase 64-character hex"
++                )
++            source_path = f"onnx/{filename}"
++            artifacts.append(
++                Artifact(
++                    role=role,
++                    filename=filename,
++                    url=url,
++                    size=size,
++                    sha256=sha256,
++                    format="onnx",
++                    metadata={
++                        "path": source_path,
++                        "source": {
++                            "provider": "huggingface",
++                            "repository": repository,
++                            "revision": revision,
++                            "path": source_path,
++                        },
++                    },
++                )
++            )
++        if seen_roles != set(_INFLECT_ARTIFACT_FILENAMES):
++            raise CatalogError(f"{model_id}: artifacts must contain exactly duration and decode")
++
++        raw_metadata = raw_model["metadata"]
++        if not isinstance(raw_metadata, Mapping):
++            raise CatalogError(f"{model_id}: metadata must be an object")
++        metadata = {
++            **raw_metadata,
++            "name": name,
++            "version": version,
++            "language": language,
++            "language_codes": (language,),
++            "voice_mode": "fixed",
++            "controls": normalized_controls,
++            "runtime": normalized_runtime,
++            "upstream": dict(upstream),
++            "source_repository": source_repository,
++            "source_revision": source_revision,
++            "license": license_name,
++            "voice_details": voice_details,
++        }
++        result.append(
++            CatalogItem(
++                system="inflect",
++                id=model_id,
++                kind="model",
++                artifacts=tuple(artifacts),
++                aliases=tuple(aliases),
++                sample_rate=sample_rate,
++                voices=(default_voice,),
++                default_voice=default_voice,
++                metadata=metadata,
++            )
++        )
++    return result
++
++
+ def _parse_pocket(data: dict[str, Any]) -> list[CatalogItem]:
+
+     if "schema" in data and data["schema"] != 1:
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index 90e3daf..3eb802b 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -79,13 +79,14 @@ def _try_os_lock(fd: int) -> bool:
+     """Try an exclusive non-blocking platform lock; return False if contended."""
+     if os.name == "nt":
+         import msvcrt
++        msvcrt_api: Any = msvcrt
+
+         if os.fstat(fd).st_size == 0:
+             os.lseek(fd, 0, os.SEEK_SET)
+             os.write(fd, b"\0")
+         os.lseek(fd, 0, os.SEEK_SET)
+         try:
+-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
++            msvcrt_api.locking(fd, msvcrt_api.LK_NBLCK, 1)
+         except OSError as exc:
+             if exc.errno in (errno.EACCES, errno.EDEADLK):
+                 return False
+@@ -109,9 +110,10 @@ def _try_os_lock(fd: int) -> bool:
+ def _unlock_os_lock(fd: int) -> None:
+     if os.name == "nt":
+         import msvcrt
++        msvcrt_api: Any = msvcrt
+
+         os.lseek(fd, 0, os.SEEK_SET)
+-        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
++        msvcrt_api.locking(fd, msvcrt_api.LK_UNLCK, 1)
+         return
+     if os.name == "posix":
+         import fcntl
+diff --git a/onnxvoice/systems/__init__.py b/onnxvoice/systems/__init__.py
+index d627a19..446d46c 100644
+--- a/onnxvoice/systems/__init__.py
++++ b/onnxvoice/systems/__init__.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+
+ from ..errors import UnsupportedSystemError
+ from .base import SystemAdapter
++from .inflect import InflectAdapter
+ from .kitten import KittenAdapter
+ from .kokoro import KokoroAdapter
+ from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
+@@ -17,6 +18,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
+     PocketAdapter.system: PocketAdapter,
+     SupertonicAdapter.system: SupertonicAdapter,
+     KittenAdapter.system: KittenAdapter,
++    InflectAdapter.system: InflectAdapter,
+ }
+
+
+@@ -42,6 +44,7 @@ __all__ = [
+     "PocketAdapter",
+     "SupertonicAdapter",
+     "KittenAdapter",
++    "InflectAdapter",
+     "SplitKokoroRuntime",
+     "KokoroCloningRuntime",
+     "KokoroReferenceState",
+diff --git a/onnxvoice/systems/inflect.py b/onnxvoice/systems/inflect.py
+new file mode 100644
+index 0000000..ee23e8a
+--- /dev/null
++++ b/onnxvoice/systems/inflect.py
+@@ -0,0 +1,409 @@
++from __future__ import annotations
++
++import math
++from collections.abc import Mapping, Sequence
++from numbers import Real
++from typing import Any, cast
++
++import numpy as np
++
++from ..errors import CapabilityError, RuntimeContractError
++from ..runtime import OnnxSession
++from ..types import InferenceResult, Installation, TensorSpec
++from .base import SystemAdapter
++
++_EXPECTED_DURATION_INPUTS = {"tokens", "lengths", "length_scale"}
++_EXPECTED_DURATION_OUTPUTS = {"m_p_exp", "logs_p_exp", "y_mask"}
++_EXPECTED_DECODE_INPUTS = {
++    "m_p_exp",
++    "logs_p_exp",
++    "y_mask",
++    "zp_noise",
++    "noise_scale",
++}
++_EXPECTED_DECODE_OUTPUTS = {"waveform"}
++_INTEGER_DTYPES = {
++    "tensor(int8)": np.dtype(np.int8),
++    "tensor(int16)": np.dtype(np.int16),
++    "tensor(int32)": np.dtype(np.int32),
++    "tensor(int64)": np.dtype(np.int64),
++    "tensor(uint8)": np.dtype(np.uint8),
++    "tensor(uint16)": np.dtype(np.uint16),
++    "tensor(uint32)": np.dtype(np.uint32),
++    "tensor(uint64)": np.dtype(np.uint64),
++}
++_FLOAT_DTYPES = {
++    "tensor(float16)": np.dtype(np.float16),
++    "tensor(float)": np.dtype(np.float32),
++    "tensor(double)": np.dtype(np.float64),
++}
++
++
++class InflectAdapter(SystemAdapter):
++    """Execute model-ready Inflect v2 token IDs with the split ONNX runtime."""
++
++    system = "inflect"
++
++    def __init__(self, installation: Installation, **kwargs: Any) -> None:
++        super().__init__(installation, **kwargs)
++        self._sessions: dict[str, OnnxSession] = {}
++
++    def _session_for(self, role: str) -> OnnxSession:
++        session = self._sessions.get(role)
++        if session is not None:
++            return session
++        try:
++            model_path = self.installation.require_artifact(role).path
++        except KeyError as exc:
++            raise CapabilityError(f"Inflect installation is missing its {role!r} artifact") from exc
++        session = OnnxSession(
++            model_path,
++            component=role,
++            providers=self.providers,
++            provider_options=self.provider_options,
++            session_options=self.session_options,
++        )
++        self._sessions[role] = session
++        return session
++
++    @property
++    def duration_session(self) -> OnnxSession:
++        return self._session_for("duration")
++
++    @property
++    def decode_session(self) -> OnnxSession:
++        return self._session_for("decode")
++
++    def infer(
++        self,
++        token_ids: Sequence[int],
++        *,
++        speed: float = 1.0,
++        variation: float = 0.667,
++        seed: int = 0,
++        **kwargs: Any,
++    ) -> InferenceResult:
++        if kwargs:
++            names = ", ".join(sorted(kwargs))
++            raise TypeError(f"Inflect inference got unexpected arguments: {names}")
++        speed_value = self._control(speed, "speed", minimum=0.5, maximum=2.0)
++        variation_value = self._control(variation, "variation", minimum=0.0, maximum=1.0)
++        if isinstance(seed, bool) or not isinstance(seed, int):
++            raise RuntimeContractError("Inflect seed must be a Python integer, not bool")
++        try:
++            rng = np.random.default_rng(seed)
++        except (TypeError, ValueError, OverflowError) as exc:
++            raise RuntimeContractError("Inflect seed must be a valid non-negative RNG seed") from exc
++        tokens = self._token_values(token_ids)
++        sample_rate = self._sample_rate()
++
++        # Validate both graphs before executing either one, so a bad decoder does not
++        # produce misleading partial work or consume runtime resources unnecessarily.
++        duration_input_specs, duration_output_names, duration_output_specs = self._validate_duration_graph()
++        decode_input_specs, decode_output_names, decode_output_specs = self._validate_decode_graph()
++        token_input = self._integer_feed(tokens, duration_input_specs["tokens"], "tokens", rank=2)
++        length_input = self._integer_feed(
++            [len(tokens)], duration_input_specs["lengths"], "lengths", rank=1
++        )
++        length_scale = self._scalar_feed(
++            1.0 / speed_value, duration_input_specs["length_scale"], "length_scale"
++        )
++
++        duration_values = self.duration_session.run(
++            {"tokens": token_input, "lengths": length_input, "length_scale": length_scale}
++        )
++        duration_named = self._named_outputs(
++            duration_values, duration_output_names, "duration"
++        )
++        intermediates = {
++            name: self._finite_float_array(duration_named[name], f"duration output {name!r}")
++            for name in ("m_p_exp", "logs_p_exp", "y_mask")
++        }
++        shapes = {value.shape for value in intermediates.values()}
++        if len(shapes) != 1:
++            raise RuntimeContractError(
++                "Inflect duration outputs m_p_exp, logs_p_exp, and y_mask must have matching shapes"
++            )
++        m_p_exp = intermediates["m_p_exp"]
++        for name, value in intermediates.items():
++            self._validate_declared_shape(value, duration_output_specs[name], name)
++            self._validate_declared_shape(value, decode_input_specs[name], name)
++
++        zp_noise = rng.standard_normal(m_p_exp.shape, dtype=np.float32)
++        noise_spec = decode_input_specs["zp_noise"]
++        self._validate_declared_shape(zp_noise, noise_spec, "zp_noise")
++        noise_dtype = self._fp32_dtype(noise_spec, "zp_noise")
++        zp_noise = zp_noise.astype(noise_dtype, copy=False)
++        noise_scale = self._scalar_feed(
++            variation_value, decode_input_specs["noise_scale"], "noise_scale"
++        )
++        decode_feeds = {
++            **intermediates,
++            "zp_noise": zp_noise,
++            "noise_scale": noise_scale,
++        }
++        decode_values = self.decode_session.run(decode_feeds)
++        waveform_named = self._named_outputs(decode_values, decode_output_names, "decode")
++        audio_values = self._finite_float_array(waveform_named["waveform"], "waveform")
++        self._validate_declared_shape(audio_values, decode_output_specs["waveform"], "waveform")
++        audio = np.squeeze(audio_values).astype(np.float32, copy=False)
++        if audio.ndim == 0:
++            audio = audio.reshape(1)
++        if audio.ndim != 1:
++            raise RuntimeContractError("Inflect waveform must resolve to an unambiguous mono signal")
++        if audio.size == 0 or not np.all(np.isfinite(audio)):
++            raise RuntimeContractError("Inflect waveform must be non-empty and finite")
++
++        return InferenceResult(
++            audio=audio,
++            sample_rate=sample_rate,
++            metadata={
++                "system": self.system,
++                "speed": speed_value,
++                "variation": variation_value,
++                "seed": seed,
++            },
++        )
++
++    def _sample_rate(self) -> int:
++        sample_rate = self.installation.sample_rate
++        if sample_rate is None:
++            return 24000
++        if type(sample_rate) is not int or sample_rate != 24000:
++            raise RuntimeContractError("Inflect v2 requires a 24000 Hz sample rate")
++        return sample_rate
++
++    @staticmethod
++    def _control(value: Any, name: str, *, minimum: float, maximum: float) -> float:
++        if isinstance(value, bool) or not isinstance(value, Real):
++            raise RuntimeContractError(f"Inflect {name} must be a finite real number")
++        try:
++            number = float(value)
++        except (OverflowError, ValueError):
++            raise RuntimeContractError(f"Inflect {name} must be a finite real number") from None
++        if not math.isfinite(number) or not minimum <= number <= maximum:
++            raise RuntimeContractError(
++                f"Inflect {name} must be finite and between {minimum} and {maximum}"
++            )
++        return number
++
++    @staticmethod
++    def _token_values(token_ids: Sequence[int]) -> tuple[int, ...]:
++        if isinstance(token_ids, (str, bytes)):
++            raise RuntimeContractError("Inflect token_ids must be a non-empty integer sequence")
++        try:
++            values = tuple(token_ids)
++        except TypeError as exc:
++            raise RuntimeContractError(
++                "Inflect token_ids must be a non-empty integer sequence"
++            ) from exc
++        if not values or any(
++            isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer))
++            for value in values
++        ):
++            raise RuntimeContractError("Inflect token_ids must be a non-empty integer sequence")
++        return tuple(int(value) for value in values)
++
++    def _validate_duration_graph(
++        self,
++    ) -> tuple[dict[str, TensorSpec], tuple[str, ...], dict[str, TensorSpec]]:
++        session = self.duration_session
++        self._validate_names(session.input_names, _EXPECTED_DURATION_INPUTS, "duration input")
++        output_names = self._validate_names(
++            session.output_names, _EXPECTED_DURATION_OUTPUTS, "duration output"
++        )
++        inputs = self._spec_map(session.input_specs, _EXPECTED_DURATION_INPUTS, "duration input")
++        outputs = self._spec_map(
++            session.output_specs, _EXPECTED_DURATION_OUTPUTS, "duration output"
++        )
++        self._integer_dtype(inputs["tokens"], "tokens")
++        self._integer_dtype(inputs["lengths"], "lengths")
++        self._fp32_dtype(inputs["length_scale"], "length_scale")
++        self._validate_spec_rank(inputs["tokens"], 2, "tokens")
++        self._validate_spec_rank(inputs["lengths"], 1, "lengths")
++        self._validate_spec_rank(inputs["length_scale"], (0, 1), "length_scale")
++        for name, spec in outputs.items():
++            self._fp32_dtype(spec, name)
++        self._validate_compatible_specs(outputs, tuple(_EXPECTED_DURATION_OUTPUTS), "duration outputs")
++        return inputs, output_names, outputs
++
++    def _validate_decode_graph(
++        self,
++    ) -> tuple[dict[str, TensorSpec], tuple[str, ...], dict[str, TensorSpec]]:
++        session = self.decode_session
++        self._validate_names(session.input_names, _EXPECTED_DECODE_INPUTS, "decode input")
++        output_names = self._validate_names(
++            session.output_names, _EXPECTED_DECODE_OUTPUTS, "decode output"
++        )
++        inputs = self._spec_map(session.input_specs, _EXPECTED_DECODE_INPUTS, "decode input")
++        outputs = self._spec_map(session.output_specs, _EXPECTED_DECODE_OUTPUTS, "decode output")
++        for name, spec in inputs.items():
++            self._fp32_dtype(spec, name)
++        self._fp32_dtype(outputs["waveform"], "waveform")
++        self._validate_compatible_specs(
++            inputs, ("m_p_exp", "logs_p_exp", "y_mask", "zp_noise"), "decode latent inputs"
++        )
++        self._validate_spec_rank(inputs["noise_scale"], (0, 1), "noise_scale")
++        return inputs, output_names, outputs
++
++    @staticmethod
++    def _validate_names(
++        names: Sequence[str], expected: set[str], label: str
++    ) -> tuple[str, ...]:
++        actual = tuple(names)
++        if len(actual) != len(expected) or set(actual) != expected:
++            missing = sorted(expected - set(actual))
++            unexpected = sorted(set(actual) - expected)
++            details = []
++            if missing:
++                details.append(f"missing: {', '.join(missing)}")
++            if unexpected:
++                details.append(f"unexpected: {', '.join(unexpected)}")
++            raise RuntimeContractError(
++                f"Inflect {label} contract mismatch ({'; '.join(details)})"
++            )
++        return actual
++
++    @staticmethod
++    def _spec_map(
++        specs: Sequence[TensorSpec], expected: set[str], label: str
++    ) -> dict[str, TensorSpec]:
++        by_name = {spec.name: spec for spec in specs}
++        if len(by_name) != len(specs) or set(by_name) != expected:
++            raise RuntimeContractError(f"Inflect {label} tensor specifications are incomplete")
++        return by_name
++
++    @staticmethod
++    def _integer_dtype(spec: TensorSpec, name: str) -> np.dtype[Any]:
++        try:
++            return cast(np.dtype[Any], _INTEGER_DTYPES[spec.ort_type.lower()])
++        except KeyError as exc:
++            raise RuntimeContractError(
++                f"Inflect tensor {name!r} must use an integer type, got {spec.ort_type!r}"
++            ) from exc
++
++    @staticmethod
++    def _float_dtype(spec: TensorSpec, name: str) -> np.dtype[Any]:
++        try:
++            return cast(np.dtype[Any], _FLOAT_DTYPES[spec.ort_type.lower()])
++        except KeyError as exc:
++            raise RuntimeContractError(
++                f"Inflect tensor {name!r} must use a floating type, got {spec.ort_type!r}"
++            ) from exc
++
++    @classmethod
++    def _fp32_dtype(cls, spec: TensorSpec, name: str) -> np.dtype[Any]:
++        dtype = cls._float_dtype(spec, name)
++        if dtype != np.dtype(np.float32):
++            raise RuntimeContractError(f"Inflect tensor {name!r} must use fp32 precision")
++        return dtype
++
++    @staticmethod
++    def _validate_spec_rank(spec: TensorSpec, ranks: int | tuple[int, ...], name: str) -> None:
++        allowed = (ranks,) if isinstance(ranks, int) else ranks
++        if len(spec.shape) not in allowed:
++            expected = " or ".join(str(rank) for rank in allowed)
++            raise RuntimeContractError(
++                f"Inflect tensor {name!r} must have rank {expected}, got {len(spec.shape)}"
++            )
++
++    @staticmethod
++    def _validate_compatible_specs(
++        specs: Mapping[str, TensorSpec], names: tuple[str, ...], label: str
++    ) -> None:
++        shapes = [specs[name].shape for name in names]
++        rank = len(shapes[0])
++        if any(len(shape) != rank for shape in shapes[1:]):
++            raise RuntimeContractError(f"Inflect {label} must have compatible tensor ranks")
++        for axis in range(rank):
++            dimensions = [shape[axis] for shape in shapes]
++            static = {
++                dimension
++                for dimension in dimensions
++                if isinstance(dimension, int) and not isinstance(dimension, bool)
++            }
++            if len(static) > 1:
++                raise RuntimeContractError(f"Inflect {label} have incompatible declared shapes")
++
++    @staticmethod
++    def _validate_declared_shape(array: np.ndarray, spec: TensorSpec, name: str) -> None:
++        if array.ndim != len(spec.shape):
++            raise RuntimeContractError(
++                f"Inflect tensor {name!r} must have rank {len(spec.shape)}, got {array.ndim}"
++            )
++        for axis, (actual, declared) in enumerate(zip(array.shape, spec.shape, strict=True)):
++            if isinstance(declared, int) and not isinstance(declared, bool) and declared != actual:
++                raise RuntimeContractError(
++                    f"Inflect tensor {name!r} axis {axis} must have size {declared}, got {actual}"
++                )
++
++    @classmethod
++    def _integer_feed(
++        cls, values: Sequence[int], spec: TensorSpec, name: str, *, rank: int
++    ) -> np.ndarray:
++        dtype = cls._integer_dtype(spec, name)
++        if len(spec.shape) != rank:
++            raise RuntimeContractError(f"Inflect tensor {name!r} must have rank {rank}")
++        bounds = np.iinfo(dtype)
++        if any(value < bounds.min or value > bounds.max for value in values):
++            raise RuntimeContractError(
++                f"Inflect {name} values do not fit graph dtype {dtype.name}"
++            )
++        feed = np.asarray(values, dtype=dtype)
++        if name == "tokens":
++            feed = feed[None, :]
++        cls._validate_declared_shape(feed, spec, name)
++        if name == "lengths" and feed.shape[0] != 1:
++            raise RuntimeContractError("Inflect lengths must have batch size 1")
++        if name == "tokens" and feed.shape[0] != 1:
++            raise RuntimeContractError("Inflect tokens must have batch size 1")
++        return feed
++
++    @classmethod
++    def _scalar_feed(cls, value: float, spec: TensorSpec, name: str) -> np.ndarray:
++        dtype = cls._float_dtype(spec, name)
++        if len(spec.shape) == 0:
++            feed = np.asarray(value, dtype=dtype)
++        elif len(spec.shape) == 1 and (
++            spec.shape[0] is None
++            or isinstance(spec.shape[0], str)
++            or (type(spec.shape[0]) is int and spec.shape[0] == 1)
++        ):
++            feed = np.asarray([value], dtype=dtype)
++        else:
++            raise RuntimeContractError(
++                f"Inflect tensor {name!r} must be scalar or have a compatible one-element shape"
++            )
++        cls._validate_declared_shape(feed, spec, name)
++        if not np.all(np.isfinite(feed)):
++            raise RuntimeContractError(f"Inflect {name} is not finite in the graph dtype")
++        return feed
++
++    @staticmethod
++    def _named_outputs(
++        values: Sequence[Any], names: Sequence[str], component: str
++    ) -> dict[str, Any]:
++        try:
++            return dict(zip(names, values, strict=True))
++        except ValueError as exc:
++            raise RuntimeContractError(
++                f"Inflect {component} graph returned an unexpected number of outputs"
++            ) from exc
++
++    @staticmethod
++    def _finite_float_array(value: Any, label: str) -> np.ndarray:
++        try:
++            array = np.asarray(value)
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError(f"Inflect {label} must be a finite numeric tensor") from exc
++        if (
++            not np.issubdtype(array.dtype, np.number)
++            or np.issubdtype(array.dtype, np.complexfloating)
++            or not np.all(np.isfinite(array))
++        ):
++            raise RuntimeContractError(f"Inflect {label} must be a finite real numeric tensor")
++        with np.errstate(over="ignore", invalid="ignore"):
++            result = array.astype(np.float32, copy=False)
++        if not np.all(np.isfinite(result)):
++            raise RuntimeContractError(f"Inflect {label} is not finite as float32")
++        return result
+diff --git a/pyproject.toml b/pyproject.toml
+index 40ae6ef..782f26c 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -26,6 +26,8 @@ keywords = [
+   "pocket",
+   "kitten",
+   "kitten-tts",
++  "inflect",
++  "inflect-tts",
+   "asset-cache",
+ ]
+ dependencies = [
+diff --git a/tests/fixtures/inflect_models.json b/tests/fixtures/inflect_models.json
+new file mode 100644
+index 0000000..8c8ae0f
+--- /dev/null
++++ b/tests/fixtures/inflect_models.json
+@@ -0,0 +1,110 @@
++{
++  "schema": 1,
++  "kind": "inflect-onnx-model-catalog",
++  "models": {
++    "nano-v2": {
++      "id": "nano-v2",
++      "aliases": ["nano", "Inflect-Nano-v2-ONNX"],
++      "name": "Inflect Nano v2",
++      "version": "2",
++      "language": "en-US",
++      "sample_rate": 24000,
++      "voice_mode": "fixed",
++      "default_voice": "default",
++      "voices": {
++        "default": {
++          "id": "default",
++          "name": "Default",
++          "language": "en-US",
++          "gender": "male",
++          "synthetic": true
++        }
++      },
++      "controls": {
++        "speed": {"default": 1.0, "minimum": 0.5, "maximum": 2.0},
++        "variation": {"default": 0.667, "minimum": 0.0, "maximum": 1.0},
++        "seed_default": 0
++      },
++      "runtime": {"profile": "inflect-v2-split-v1", "precision": "fp32", "onnx_opset": 17},
++      "upstream": {
++        "provider": "huggingface",
++        "repository": "owensong/Inflect-Nano-v2-ONNX",
++        "revision": "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9",
++        "license": "Apache-2.0",
++        "source_repository": "owensong/Inflect-Nano-v2",
++        "source_revision": "67fc9249e0bb8ab4b196d25cb09b6dd43f5e4f13"
++      },
++      "artifacts": [
++        {
++          "role": "duration",
++          "format": "onnx",
++          "filename": "duration.onnx",
++          "url": "https://huggingface.co/owensong/Inflect-Nano-v2-ONNX/resolve/df3627e44c26192714c9dcba6b8e9b47e7a6e3d9/onnx/duration.onnx",
++          "size": 3636541,
++          "sha256": "6e5fe09584f979dcd2da4f89d5274385ad5197efcd5ddcaa5ac03db637d7451e"
++        },
++        {
++          "role": "decode",
++          "format": "onnx",
++          "filename": "decode.onnx",
++          "url": "https://huggingface.co/owensong/Inflect-Nano-v2-ONNX/resolve/df3627e44c26192714c9dcba6b8e9b47e7a6e3d9/onnx/decode.onnx",
++          "size": 12570009,
++          "sha256": "f98b1ba21f3d5306ee6cf96a02ba9783082ef99314e77f1ee0c03954dc7de2b8"
++        }
++      ],
++      "metadata": {"source_model_sha256": "bfca468489c9069361d6b87b295a17eef611af8ff09854ce0b80305d9122f5b3", "fixed_voice": true}
++    },
++    "micro-v2": {
++      "id": "micro-v2",
++      "aliases": ["micro", "Inflect-Micro-v2-ONNX"],
++      "name": "Inflect Micro v2",
++      "version": "2",
++      "language": "en-US",
++      "sample_rate": 24000,
++      "voice_mode": "fixed",
++      "default_voice": "default",
++      "voices": {
++        "default": {
++          "id": "default",
++          "name": "Default",
++          "language": "en-US",
++          "gender": "male",
++          "synthetic": true
++        }
++      },
++      "controls": {
++        "speed": {"default": 1.0, "minimum": 0.5, "maximum": 2.0},
++        "variation": {"default": 0.667, "minimum": 0.0, "maximum": 1.0},
++        "seed_default": 0
++      },
++      "runtime": {"profile": "inflect-v2-split-v1", "precision": "fp32", "onnx_opset": 17},
++      "upstream": {
++        "provider": "huggingface",
++        "repository": "owensong/Inflect-Micro-v2-ONNX",
++        "revision": "91b1ab6432323064ec0e8e9704d92fcecd24855f",
++        "license": "Apache-2.0",
++        "source_repository": "owensong/Inflect-Micro-v2",
++        "source_revision": "3e8c567f9bce1a309eea12d38ca9fbf7050df72e"
++      },
++      "artifacts": [
++        {
++          "role": "duration",
++          "format": "onnx",
++          "filename": "duration.onnx",
++          "url": "https://huggingface.co/owensong/Inflect-Micro-v2-ONNX/resolve/91b1ab6432323064ec0e8e9704d92fcecd24855f/onnx/duration.onnx",
++          "size": 7322687,
++          "sha256": "b728ca2564b9e5b7d6cf5e446f65e02a6fe2f1880ba281466fec93a667dd2388"
++        },
++        {
++          "role": "decode",
++          "format": "onnx",
++          "filename": "decode.onnx",
++          "url": "https://huggingface.co/owensong/Inflect-Micro-v2-ONNX/resolve/91b1ab6432323064ec0e8e9704d92fcecd24855f/onnx/decode.onnx",
++          "size": 30427790,
++          "sha256": "7940923add86f76e7fa78d910b0632ca1779f8cc9a2ca2b49236381a9ca77183"
++        }
++      ],
++      "metadata": {"source_model_sha256": "3eede065c9ccfa88ade0a5a9a5c23de34afcbbb32213e59aad44d5cf100fdee8", "fixed_voice": true}
++    }
++  }
++}
+diff --git a/tests/test_inflect_adapter.py b/tests/test_inflect_adapter.py
+new file mode 100644
+index 0000000..1b8871c
+--- /dev/null
++++ b/tests/test_inflect_adapter.py
+@@ -0,0 +1,474 @@
++from __future__ import annotations
++
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import pytest
++
++import onnxvoice.systems.inflect as inflect_module
++from onnxvoice.errors import CapabilityError, RuntimeContractError
++from onnxvoice.systems.inflect import InflectAdapter
++from onnxvoice.types import Installation, InstalledArtifact, SessionDiagnostic, TensorSpec
++
++_DURATION_INPUTS = {
++    "tokens": TensorSpec("tokens", "tensor(int64)", (1, None)),
++    "lengths": TensorSpec("lengths", "tensor(int64)", (1,)),
++    "length_scale": TensorSpec("length_scale", "tensor(float)", ()),
++}
++_DURATION_OUTPUTS = {
++    "m_p_exp": TensorSpec("m_p_exp", "tensor(float)", (1, 1, 2)),
++    "logs_p_exp": TensorSpec("logs_p_exp", "tensor(float)", (1, 1, 2)),
++    "y_mask": TensorSpec("y_mask", "tensor(float)", (1, 1, 2)),
++}
++_DECODE_INPUTS = {
++    name: TensorSpec(name, "tensor(float)", (1, 1, 2))
++    for name in ("m_p_exp", "logs_p_exp", "y_mask", "zp_noise")
++}
++_DECODE_INPUTS["noise_scale"] = TensorSpec("noise_scale", "tensor(float)", ())
++_DECODE_OUTPUTS = {"waveform": TensorSpec("waveform", "tensor(float)", (1, 1, 3))}
++
++
++class FakeOnnxSession:
++    def __init__(
++        self,
++        path: Path,
++        *,
++        component: str,
++        providers: Any,
++        provider_options: Any,
++        session_options: Any,
++        input_names: tuple[str, ...] | None = None,
++        output_names: tuple[str, ...] | None = None,
++        input_specs: dict[str, TensorSpec] | None = None,
++        output_specs: dict[str, TensorSpec] | None = None,
++        waveform: Any | None = None,
++    ) -> None:
++        self.model = path
++        self.component = component
++        self.providers = providers
++        self.provider_options = provider_options
++        self.session_options = session_options
++        default_inputs = _DURATION_INPUTS if component == "duration" else _DECODE_INPUTS
++        default_outputs = _DURATION_OUTPUTS if component == "duration" else _DECODE_OUTPUTS
++        self.input_specs = tuple((input_specs or default_inputs).values())
++        self.output_specs = tuple((output_specs or default_outputs).values())
++        self.input_names = input_names or tuple(spec.name for spec in self.input_specs)
++        self.output_names = output_names or tuple(spec.name for spec in self.output_specs)
++        self.waveform = (
++            np.asarray([[[0.1, -0.2, 0.3]]], dtype=np.float32)
++            if waveform is None
++            else waveform
++        )
++        self.inputs_seen: dict[str, Any] | None = None
++        self.closed = False
++
++    def run(self, inputs: dict[str, Any]) -> list[Any]:
++        self.inputs_seen = inputs
++        if self.component == "duration":
++            outputs = {
++                "m_p_exp": np.asarray([[[0.1, 0.2]]], dtype=np.float32),
++                "logs_p_exp": np.asarray([[[0.3, 0.4]]], dtype=np.float32),
++                "y_mask": np.asarray([[[1.0, 1.0]]], dtype=np.float32),
++            }
++        else:
++            outputs = {"waveform": self.waveform}
++        return [outputs[name] for name in self.output_names]
++
++    def diagnostics(self) -> SessionDiagnostic:
++        return SessionDiagnostic(
++            component=self.component,
++            model_path=self.model,
++            providers_requested=("CPUExecutionProvider",),
++            providers_active=("CPUExecutionProvider",),
++            inputs=tuple(self.input_names),
++            outputs=tuple(self.output_names),
++        )
++
++    def close(self) -> None:
++        self.closed = True
++
++
++def _installation(tmp_path: Path, roles: tuple[str, ...] = ("duration", "decode"), *, sample_rate: int | None = 24000) -> Installation:
++    artifacts = tuple(
++        InstalledArtifact(
++            role=role,
++            filename=f"{role}.onnx",
++            path=tmp_path / f"{role}.onnx",
++            sha256="0" * 64,
++            size=1,
++            format="onnx",
++        )
++        for role in roles
++    )
++    return Installation(
++        system="inflect",
++        id="nano-v2",
++        kind="model",
++        path=tmp_path,
++        artifacts=artifacts,
++        sample_rate=sample_rate,
++        voices=("default",),
++        default_voice="default",
++        metadata={"runtime": {"profile": "inflect-v2-split-v1", "layout": "split"}},
++    )
++
++
++def _adapter(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    *,
++    roles: tuple[str, ...] = ("duration", "decode"),
++    sample_rate: int | None = 24000,
++    duration_input_names: tuple[str, ...] | None = None,
++    duration_output_names: tuple[str, ...] | None = None,
++    decode_input_names: tuple[str, ...] | None = None,
++    decode_output_names: tuple[str, ...] | None = None,
++    duration_input_specs: dict[str, TensorSpec] | None = None,
++    duration_output_specs: dict[str, TensorSpec] | None = None,
++    decode_input_specs: dict[str, TensorSpec] | None = None,
++    decode_output_specs: dict[str, TensorSpec] | None = None,
++    waveform: Any | None = None,
++    providers: Any = "cpu",
++    provider_options: Any = None,
++    session_options: Any = None,
++) -> tuple[InflectAdapter, list[FakeOnnxSession]]:
++    created: list[FakeOnnxSession] = []
++
++    def factory(
++        path: Path,
++        *,
++        component: str,
++        providers: Any,
++        provider_options: Any,
++        session_options: Any,
++    ) -> FakeOnnxSession:
++        session = FakeOnnxSession(
++            path,
++            component=component,
++            providers=providers,
++            provider_options=provider_options,
++            session_options=session_options,
++            input_names=duration_input_names if component == "duration" else decode_input_names,
++            output_names=duration_output_names if component == "duration" else decode_output_names,
++            input_specs=duration_input_specs if component == "duration" else decode_input_specs,
++            output_specs=duration_output_specs if component == "duration" else decode_output_specs,
++            waveform=waveform,
++        )
++        created.append(session)
++        return session
++
++    monkeypatch.setattr(inflect_module, "OnnxSession", factory)
++    adapter = InflectAdapter(
++        _installation(tmp_path, roles, sample_rate=sample_rate),
++        providers=providers,
++        provider_options=provider_options,
++        session_options=session_options,
++    )
++    return adapter, created
++
++
++def test_inflect_adapter_requires_duration_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, _ = _adapter(tmp_path, monkeypatch, roles=("decode",))
++    with pytest.raises(CapabilityError, match="missing its 'duration' artifact"):
++        _ = adapter.duration_session
++
++
++def test_inflect_adapter_requires_decode_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, _ = _adapter(tmp_path, monkeypatch, roles=("duration",))
++    with pytest.raises(CapabilityError, match="missing its 'decode' artifact"):
++        _ = adapter.decode_session
++
++
++def test_inflect_adapter_sessions_are_lazy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    assert created == []
++    assert adapter.duration_session.component == "duration"
++    assert [session.component for session in created] == ["duration"]
++    assert adapter.decode_session.component == "decode"
++    assert [session.component for session in created] == ["duration", "decode"]
++
++
++def test_inflect_adapter_forwards_provider_options_to_both_sessions(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    options = [{"device_id": "7"}]
++    session_options = object()
++    adapter, created = _adapter(
++        tmp_path,
++        monkeypatch,
++        providers=["CPUExecutionProvider"],
++        provider_options=options,
++        session_options=session_options,
++    )
++    adapter.infer([4, 5])
++    assert [session.component for session in created] == ["duration", "decode"]
++    for session in created:
++        assert session.providers == ["CPUExecutionProvider"]
++        assert session.provider_options == options
++        assert session.session_options is session_options
++
++
++@pytest.mark.parametrize(
++    ("component", "names", "message"),
++    [
++        ("duration_input", ("tokens", "lengths", "scale"), "duration input contract mismatch"),
++        (
++            "duration_output",
++            ("m_p_exp", "logs_p_exp", "mask"),
++            "duration output contract mismatch",
++        ),
++        (
++            "decode_input",
++            ("m_p_exp", "logs_p_exp", "y_mask", "zp_noise", "scale"),
++            "decode input contract mismatch",
++        ),
++        ("decode_output", ("audio",), "decode output contract mismatch"),
++    ],
++)
++def test_inflect_adapter_validates_graph_names(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    component: str,
++    names: tuple[str, ...],
++    message: str,
++) -> None:
++    options = {
++        "duration_input": {"duration_input_names": names},
++        "duration_output": {"duration_output_names": names},
++        "decode_input": {"decode_input_names": names},
++        "decode_output": {"decode_output_names": names},
++    }
++    adapter, _ = _adapter(tmp_path, monkeypatch, **options[component])
++    with pytest.raises(RuntimeContractError, match=message):
++        adapter.infer([1, 2])
++
++
++def test_inflect_adapter_rejects_empty_token_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    with pytest.raises(RuntimeContractError, match="non-empty integer sequence"):
++        adapter.infer([])
++    assert created == []
++
++
++def test_inflect_adapter_rejects_bool_token_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, _ = _adapter(tmp_path, monkeypatch)
++    with pytest.raises(RuntimeContractError, match="integer sequence"):
++        adapter.infer([True])
++
++
++@pytest.mark.parametrize("speed", [True, 0.49, 2.01, float("inf"), float("nan")])
++def test_inflect_adapter_rejects_invalid_speed(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, speed: Any
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    with pytest.raises(RuntimeContractError, match="speed"):
++        adapter.infer([1], speed=speed)
++    assert created == []
++
++
++@pytest.mark.parametrize("variation", [True, -0.01, 1.01, float("inf"), float("nan")])
++def test_inflect_adapter_rejects_invalid_variation(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variation: Any
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    with pytest.raises(RuntimeContractError, match="variation"):
++        adapter.infer([1], variation=variation)
++    assert created == []
++
++
++def test_inflect_adapter_rejects_bool_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    with pytest.raises(RuntimeContractError, match="seed must be a Python integer"):
++        adapter.infer([1], seed=True)
++    assert created == []
++
++
++def test_inflect_adapter_rejects_unexpected_kwargs(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    with pytest.raises(TypeError, match="unexpected arguments: voice"):
++        adapter.infer([1], voice="default")
++    assert created == []
++
++
++def test_inflect_adapter_builds_expected_duration_feeds(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    adapter.infer([7, 8, 9], speed=2.0)
++    feeds = created[0].inputs_seen
++    assert feeds is not None
++    np.testing.assert_array_equal(feeds["tokens"], np.asarray([[7, 8, 9]], dtype=np.int64))
++    np.testing.assert_array_equal(feeds["lengths"], np.asarray([3], dtype=np.int64))
++    assert feeds["length_scale"].shape == ()
++    assert feeds["length_scale"].dtype == np.float32
++    assert feeds["length_scale"].item() == pytest.approx(0.5)
++
++
++def test_inflect_adapter_builds_expected_decode_feeds(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    adapter.infer([7, 8], variation=0.25)
++    feeds = created[1].inputs_seen
++    assert feeds is not None
++    assert set(feeds) == {"m_p_exp", "logs_p_exp", "y_mask", "zp_noise", "noise_scale"}
++    assert feeds["zp_noise"].shape == feeds["m_p_exp"].shape == (1, 1, 2)
++    assert feeds["noise_scale"].shape == ()
++    assert feeds["noise_scale"].dtype == np.float32
++    assert feeds["noise_scale"].item() == pytest.approx(0.25)
++
++
++def test_inflect_adapter_seed_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    adapter.infer([3, 4], seed=123)
++    first = created[1].inputs_seen["zp_noise"].copy()
++    adapter.infer([3, 4], seed=123)
++    second = created[1].inputs_seen["zp_noise"].copy()
++    np.testing.assert_array_equal(first, second)
++
++
++def test_inflect_adapter_different_seed_changes_noise(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    adapter.infer([3, 4], seed=123)
++    first = created[1].inputs_seen["zp_noise"].copy()
++    adapter.infer([3, 4], seed=124)
++    second = created[1].inputs_seen["zp_noise"].copy()
++    assert not np.array_equal(first, second)
++
++
++def test_inflect_adapter_returns_mono_float32_audio(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, _ = _adapter(tmp_path, monkeypatch)
++    result = adapter.infer([1, 2], speed=1.25, variation=0.4, seed=9)
++    assert result.audio.dtype == np.float32
++    assert result.audio.ndim == 1
++    np.testing.assert_allclose(result.audio, [0.1, -0.2, 0.3])
++    assert result.sample_rate == 24000
++    assert result.outputs == {}
++    assert result.metadata == {
++        "system": "inflect",
++        "speed": 1.25,
++        "variation": 0.4,
++        "seed": 9,
++    }
++
++
++def test_inflect_adapter_rejects_nonfinite_audio(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, _ = _adapter(tmp_path, monkeypatch, waveform=np.asarray([[[0.0, np.nan]]]))
++    with pytest.raises(RuntimeContractError, match="waveform must be a finite real"):
++        adapter.infer([1])
++
++
++def test_inflect_adapter_rejects_ambiguous_multichannel_audio(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, _ = _adapter(
++        tmp_path,
++        monkeypatch,
++        waveform=np.zeros((2, 3), dtype=np.float32),
++        decode_output_specs={"waveform": TensorSpec("waveform", "tensor(float)", (2, 3))},
++    )
++    with pytest.raises(RuntimeContractError, match="unambiguous mono"):
++        adapter.infer([1])
++
++
++def test_inflect_adapter_close_releases_both_sessions(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch)
++    adapter.infer([1, 2])
++    adapter.close()
++    assert [session.closed for session in created] == [True, True]
++    assert adapter._sessions == {}
++
++
++def test_inflect_adapter_diagnostics_reports_duration_and_decode(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, _ = _adapter(tmp_path, monkeypatch)
++    adapter.infer([1, 2])
++    diagnostic = adapter.diagnostics()
++    assert diagnostic.system == "inflect"
++    assert diagnostic.layout == "split"
++    assert [session.component for session in diagnostic.sessions] == ["duration", "decode"]
++
++
++def test_inflect_adapter_rejects_non_24000_sample_rate(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, created = _adapter(tmp_path, monkeypatch, sample_rate=22050)
++    with pytest.raises(RuntimeContractError, match="requires a 24000 Hz"):
++        adapter.infer([1])
++    assert created == []
++
++
++
++def test_inflect_adapter_maps_duration_outputs_by_name(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, created = _adapter(
++        tmp_path,
++        monkeypatch,
++        duration_output_names=("y_mask", "logs_p_exp", "m_p_exp"),
++    )
++    adapter.infer([1])
++    decode_inputs = created[1].inputs_seen
++    assert decode_inputs is not None
++    np.testing.assert_allclose(decode_inputs["m_p_exp"], [[[0.1, 0.2]]])
++    np.testing.assert_allclose(decode_inputs["logs_p_exp"], [[[0.3, 0.4]]])
++    np.testing.assert_allclose(decode_inputs["y_mask"], [[[1.0, 1.0]]])
++
++
++def test_inflect_adapter_rejects_non_fp32_graph_tensors(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    inputs = dict(_DURATION_INPUTS)
++    inputs["length_scale"] = TensorSpec("length_scale", "tensor(float16)", ())
++    adapter, created = _adapter(tmp_path, monkeypatch, duration_input_specs=inputs)
++    with pytest.raises(RuntimeContractError, match="must use fp32 precision"):
++        adapter.infer([1])
++    assert created[0].inputs_seen is None
++
++
++
++def test_inflect_adapter_accepts_dynamic_one_element_scale_shape(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    inputs = dict(_DURATION_INPUTS)
++    inputs["length_scale"] = TensorSpec("length_scale", "tensor(float)", ("scale",))
++    adapter, created = _adapter(tmp_path, monkeypatch, duration_input_specs=inputs)
++    adapter.infer([1], speed=2.0)
++    scale = created[0].inputs_seen["length_scale"]
++    assert scale.shape == (1,)
++    assert scale.item() == pytest.approx(0.5)
++
++
++def test_inflect_adapter_checks_runtime_duration_output_shape(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    outputs = {
++        name: TensorSpec(name, "tensor(float)", (1, 1, 3)) for name in _DURATION_OUTPUTS
++    }
++    adapter, created = _adapter(tmp_path, monkeypatch, duration_output_specs=outputs)
++    with pytest.raises(RuntimeContractError, match="axis 2 must have size 3"):
++        adapter.infer([1])
++    assert created[0].inputs_seen is not None
++    assert created[1].inputs_seen is None
++
++
++def test_inflect_adapter_checks_runtime_waveform_shape(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    outputs = {"waveform": TensorSpec("waveform", "tensor(float)", (1, 1, 2))}
++    adapter, created = _adapter(tmp_path, monkeypatch, decode_output_specs=outputs)
++    with pytest.raises(RuntimeContractError, match="waveform.*axis 2 must have size 2"):
++        adapter.infer([1])
++    assert created[1].inputs_seen is not None
+diff --git a/tests/test_inflect_catalog.py b/tests/test_inflect_catalog.py
+new file mode 100644
+index 0000000..e1766d2
+--- /dev/null
++++ b/tests/test_inflect_catalog.py
+@@ -0,0 +1,205 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++import pytest
++
++from onnxvoice.catalog import DEFAULT_SOURCES, CatalogClient, _parse_inflect
++from onnxvoice.errors import AssetNotFoundError, CatalogError
++
++_FIXTURE = Path(__file__).parent / "fixtures" / "inflect_models.json"
++
++
++def _catalog() -> dict[str, Any]:
++    return json.loads(_FIXTURE.read_text(encoding="utf-8"))
++
++
++def test_default_sources_contains_inflect() -> None:
++    assert DEFAULT_SOURCES["inflect"].endswith(
++        "inflect-onnx-bundles/main/catalog/models.json"
++    )
++
++
++def test_parse_inflect_nano_and_micro() -> None:
++    items = _parse_inflect(_catalog())
++
++    assert [item.id for item in items] == ["nano-v2", "micro-v2"]
++    for item in items:
++        assert (item.system, item.kind, item.sample_rate) == ("inflect", "model", 24000)
++        assert item.voices == ("default",)
++        assert item.default_voice == "default"
++        assert [artifact.role for artifact in item.artifacts] == ["duration", "decode"]
++        assert [artifact.filename for artifact in item.artifacts] == [
++            "duration.onnx",
++            "decode.onnx",
++        ]
++        assert item.artifact("duration").metadata["path"] == "onnx/duration.onnx"
++        assert item.artifact("decode").metadata["path"] == "onnx/decode.onnx"
++
++
++def test_inflect_aliases_resolve_to_canonical_ids(tmp_path: Path) -> None:
++    path = tmp_path / "models.json"
++    path.write_text(json.dumps(_catalog()), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"inflect": str(path)})
++
++    assert client.resolve("inflect:nano").id == "nano-v2"
++    assert client.resolve("inflect:Inflect-Nano-v2-ONNX").id == "nano-v2"
++    assert client.resolve("inflect:micro").id == "micro-v2"
++    assert client.resolve("inflect:Inflect-Micro-v2-ONNX").id == "micro-v2"
++    with pytest.raises(AssetNotFoundError):
++        client.resolve("inflect:missing")
++
++
++def test_inflect_catalog_preserves_provenance() -> None:
++    item = _parse_inflect(_catalog())[0]
++
++    assert item.metadata["source_repository"] == "owensong/Inflect-Nano-v2"
++    assert item.metadata["source_revision"] == "67fc9249e0bb8ab4b196d25cb09b6dd43f5e4f13"
++    assert item.metadata["license"] == "Apache-2.0"
++    assert item.metadata["upstream"]["repository"] == "owensong/Inflect-Nano-v2-ONNX"
++    assert item.metadata["runtime"] == {
++        "profile": "inflect-v2-split-v1",
++        "precision": "fp32",
++        "onnx_opset": 17,
++        "layout": "split",
++    }
++
++
++def test_inflect_catalog_preserves_controls() -> None:
++    item = _parse_inflect(_catalog())[0]
++
++    assert item.metadata["controls"] == {
++        "speed": {"default": 1.0, "minimum": 0.5, "maximum": 2.0},
++        "variation": {"default": 0.667, "minimum": 0.0, "maximum": 1.0},
++        "seed_default": 0,
++    }
++    assert item.metadata["source_model_sha256"] == (
++        "bfca468489c9069361d6b87b295a17eef611af8ff09854ce0b80305d9122f5b3"
++    )
++
++
++def test_inflect_catalog_marks_split_runtime_layout() -> None:
++    assert _parse_inflect(_catalog())[0].metadata["runtime"]["layout"] == "split"
++
++
++def test_inflect_catalog_has_duration_and_decode_roles() -> None:
++    item = _parse_inflect(_catalog())[0]
++    assert {artifact.role for artifact in item.artifacts} == {"duration", "decode"}
++    assert item.artifact("duration").metadata["source"]["path"] == "onnx/duration.onnx"
++    assert item.artifact("decode").metadata["source"]["path"] == "onnx/decode.onnx"
++
++
++def test_inflect_voice_details_are_catalog_derived() -> None:
++    item = _parse_inflect(_catalog())[0]
++    assert item.metadata["voice_details"]["default"] == {
++        "id": "default",
++        "name": "Default",
++        "language": "en",
++        "locale": "en-US",
++        "gender": "male",
++        "synthetic": True,
++    }
++    assert item.metadata["language_codes"] == ("en-US",)
++
++
++
++def test_inflect_catalog_preserves_unknown_voice_gender() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["voices"]["default"]["gender"] = "unknown"
++    item = _parse_inflect(catalog)[0]
++    assert item.metadata["voice_details"]["default"]["gender"] == "unknown"
++
++
++@pytest.mark.parametrize("field", ["unexpected", "source"])
++def test_inflect_catalog_rejects_unknown_top_level_fields(field: str) -> None:
++    catalog = _catalog()
++    catalog[field] = {}
++    with pytest.raises(CatalogError, match="exactly schema, kind, and models"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_unknown_model_fields() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["surprise"] = True
++    with pytest.raises(CatalogError, match="fields mismatch.*unexpected: surprise"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_duplicate_alias() -> None:
++    catalog = _catalog()
++    catalog["models"]["micro-v2"]["aliases"] = ["NANO"]
++    with pytest.raises(CatalogError, match="duplicate or conflicting alias"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_unpinned_huggingface_url() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["artifacts"][0]["url"] = (
++        "https://huggingface.co/owensong/Inflect-Nano-v2-ONNX/resolve/main/onnx/duration.onnx"
++    )
++    with pytest.raises(CatalogError, match="not pinned to upstream repository/revision"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_bad_sha256() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["artifacts"][0]["sha256"] = "A" * 64
++    with pytest.raises(CatalogError, match="lowercase 64-character hex"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_wrong_runtime_profile() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["runtime"]["profile"] = "inflect-v3"
++    with pytest.raises(CatalogError, match="unsupported runtime profile"):
++        _parse_inflect(catalog)
++
++
++@pytest.mark.parametrize(
++    ("control", "field", "value"),
++    [
++        ("speed", "default", True),
++        ("speed", "minimum", 2.1),
++        ("speed", "maximum", float("inf")),
++        ("variation", "default", -0.1),
++        ("variation", "minimum", 0.8),
++        ("variation", "maximum", 1.1),
++    ],
++)
++def test_inflect_catalog_rejects_invalid_control_bounds(
++    control: str, field: str, value: Any
++) -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["controls"][control][field] = value
++    with pytest.raises(CatalogError, match="control"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_boolean_seed_default() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["controls"]["seed_default"] = True
++    with pytest.raises(CatalogError, match="seed_default must be an integer"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_invalid_fixed_voice_contract() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["voices"]["default"]["gender"] = "robot"
++    with pytest.raises(CatalogError, match="voice gender"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_non_24000_sample_rate() -> None:
++    catalog = _catalog()
++    catalog["models"]["nano-v2"]["sample_rate"] = 22050
++    with pytest.raises(CatalogError, match="sample_rate must be 24000"):
++        _parse_inflect(catalog)
++
++
++def test_inflect_catalog_rejects_cross_model_casefold_id_collision() -> None:
++    catalog = _catalog()
++    catalog["models"]["micro-v2"]["aliases"] = ["NANO-V2"]
++    with pytest.raises(CatalogError, match="duplicate or conflicting alias"):
++        _parse_inflect(catalog)
+diff --git a/tests/test_inflect_local_open.py b/tests/test_inflect_local_open.py
+new file mode 100644
+index 0000000..5d9da9f
+--- /dev/null
++++ b/tests/test_inflect_local_open.py
+@@ -0,0 +1,145 @@
++from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++from typing import Any
++
++import pytest
++
++from onnxvoice import OnnxVoice, registered_systems
++from onnxvoice.systems import InflectAdapter
++
++
++def _model_files(tmp_path: Path) -> tuple[Path, Path]:
++    duration = tmp_path / "duration.onnx"
++    decode = tmp_path / "decode.onnx"
++    duration.write_bytes(b"duration graph")
++    decode.write_bytes(b"decode graph")
++    return duration, decode
++
++
++def test_inflect_adapter_is_registered() -> None:
++    assert "inflect" in registered_systems()
++    assert InflectAdapter.system == "inflect"
++
++
++def test_inflect_open_local_accepts_two_artifact_roles(tmp_path: Path) -> None:
++    duration, decode = _model_files(tmp_path)
++    runtime = OnnxVoice.open_local(
++        system="inflect",
++        artifacts={"duration": duration, "decode": decode},
++        sample_rate=24000,
++        metadata={"runtime": {"profile": "inflect-v2-split-v1", "layout": "split"}},
++    )
++
++    try:
++        assert isinstance(runtime, InflectAdapter)
++        assert runtime.installation.artifact("duration").path == duration.resolve()
++        assert runtime.installation.artifact("decode").path == decode.resolve()
++        assert runtime.installation.metadata["external"] is True
++        assert runtime.installation.metadata["managed"] is False
++    finally:
++        runtime.close()
++
++
++def test_inflect_open_local_preserves_split_runtime_metadata(tmp_path: Path) -> None:
++    duration, decode = _model_files(tmp_path)
++    metadata = {"default_voice": "default", "voices": ["default"]}
++    runtime = OnnxVoice.open_local(
++        system="inflect",
++        artifacts={"duration": duration, "decode": decode},
++        sample_rate=24000,
++        metadata=metadata,
++        runtime={"profile": "inflect-v2-split-v1", "layout": "split", "precision": "fp32"},
++    )
++
++    try:
++        assert runtime.installation.sample_rate == 24000
++        assert runtime.installation.metadata["runtime"] == {
++            "profile": "inflect-v2-split-v1",
++            "layout": "split",
++            "precision": "fp32",
++        }
++        assert runtime.installation.metadata["default_voice"] == "default"
++        assert runtime.installation.metadata["voices"] == ["default"]
++    finally:
++        runtime.close()
++
++
++def test_inflect_open_local_provider_options_reach_both_sessions(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    duration, decode = _model_files(tmp_path)
++    provider_options = [{"device_id": "3"}]
++    session_options = object()
++    created: list[tuple[Path, dict[str, Any]]] = []
++
++    def create_session(path: Path, **kwargs: Any) -> object:
++        created.append((path, kwargs))
++        return object()
++
++    monkeypatch.setattr("onnxvoice.systems.inflect.OnnxSession", create_session)
++    runtime = OnnxVoice.open_local(
++        system="inflect",
++        artifacts={"duration": duration, "decode": decode},
++        sample_rate=24000,
++        providers=["CPUExecutionProvider"],
++        provider_options=provider_options,
++        session_options=session_options,
++    )
++    try:
++        assert created == []
++        _ = runtime.duration_session
++        _ = runtime.decode_session
++        assert [path for path, _ in created] == [duration.resolve(), decode.resolve()]
++        for path, options in created:
++            assert options == {
++                "component": "duration" if path == duration.resolve() else "decode",
++                "providers": ["CPUExecutionProvider"],
++                "provider_options": provider_options,
++                "session_options": session_options,
++            }
++    finally:
++        runtime.close()
++
++
++
++def test_inflect_managed_install_verifies_both_artifact_roles(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    fixture = Path(__file__).parent / "fixtures" / "inflect_models.json"
++    catalog = json.loads(fixture.read_text(encoding="utf-8"))
++    payloads: dict[str, bytes] = {}
++    for model in catalog["models"].values():
++        for artifact in model["artifacts"]:
++            payload = f"fixture artifact: {artifact['role']}".encode()
++            payloads[artifact["filename"]] = payload
++            artifact["size"] = len(payload)
++            artifact["sha256"] = hashlib.sha256(payload).hexdigest()
++    catalog_path = tmp_path / "models.json"
++    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
++
++    def download(source: Any, *, local_dir: Path, offline: bool) -> Path:
++        assert not offline
++        destination = local_dir / Path(source.path).name
++        destination.write_bytes(payloads[destination.name])
++        return destination
++
++    monkeypatch.setattr("onnxvoice.store.download_huggingface_file", download)
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "cache",
++        catalog_sources={"inflect": str(catalog_path)},
++    )
++    installation = manager.install("inflect:nano-v2")
++    assert {artifact.role for artifact in installation.artifacts} == {"duration", "decode"}
++    assert installation.require_artifact("duration").path.read_bytes() == payloads["duration.onnx"]
++    assert installation.require_artifact("decode").path.read_bytes() == payloads["decode.onnx"]
++    manager.store.verify(installation)
++
++    runtime = manager.open(installation, providers="cpu")
++    try:
++        assert isinstance(runtime, InflectAdapter)
++        assert runtime.installation.ref == "inflect:nano-v2"
++    finally:
++        runtime.close()
+diff --git a/tests/test_inflect_voices.py b/tests/test_inflect_voices.py
+new file mode 100644
+index 0000000..5979d21
+--- /dev/null
++++ b/tests/test_inflect_voices.py
+@@ -0,0 +1,71 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from onnxvoice.manager import OnnxVoice
++
++_FIXTURE = Path(__file__).parent / "fixtures" / "inflect_models.json"
++
++
++def _catalog_file(tmp_path: Path, *, gender: str = "male") -> Path:
++    catalog = json.loads(_FIXTURE.read_text(encoding="utf-8"))
++    catalog["models"]["nano-v2"]["voices"]["default"]["gender"] = gender
++    path = tmp_path / "catalog.json"
++    path.write_text(json.dumps(catalog), encoding="utf-8")
++    return path
++
++
++def test_inflect_voice_inventory_lists_default_voice_per_model(tmp_path: Path) -> None:
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "cache",
++        catalog_sources={"inflect": str(_catalog_file(tmp_path))},
++    )
++
++    assert [item.id for item in manager.list("inflect")] == ["nano-v2", "micro-v2"]
++    records = manager.list_voices("inflect")
++    assert [record.ref for record in records] == [
++        "inflect:micro-v2/default",
++        "inflect:nano-v2/default",
++    ]
++
++
++def test_inflect_voice_language_filter(tmp_path: Path) -> None:
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "cache",
++        catalog_sources={"inflect": str(_catalog_file(tmp_path))},
++    )
++
++    records = manager.list_voices("inflect", language="en-US")
++    assert len(records) == 2
++    assert all(record.locale == "en-US" for record in records)
++    assert manager.list_voices("inflect", language="fr") == []
++    assert manager.list("inflect", language="en")[0].id == "nano-v2"
++
++
++def test_inflect_child_ref_resolves_default_voice(tmp_path: Path) -> None:
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "cache",
++        catalog_sources={"inflect": str(_catalog_file(tmp_path))},
++    )
++
++    resolved = manager.resolve_voice("inflect:nano/default")
++    assert resolved.ref == "inflect:nano-v2/default"
++    assert resolved.asset_id == "nano-v2"
++    assert resolved.voice_id == "default"
++
++
++def test_inflect_voice_metadata_preserves_gender_and_language(tmp_path: Path) -> None:
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "cache",
++        catalog_sources={"inflect": str(_catalog_file(tmp_path, gender="female"))},
++    )
++
++    record = manager.resolve_voice("inflect:nano-v2/default")
++    assert record.gender == "female"
++    assert record.language == "en"
++    assert record.locale == "en-US"
++    assert record.languages == ("en-US", "en")
++    details = record.catalog_item.metadata["voice_details"]["default"]
++    assert details["synthetic"] is True
++    assert details["gender"] == "female"

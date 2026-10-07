@@ -17,12 +17,12 @@ _DURATION_INPUTS = {
     "length_scale": TensorSpec("length_scale", "tensor(float)", ()),
 }
 _DURATION_OUTPUTS = {
-    "m_p_exp": TensorSpec("m_p_exp", "tensor(float)", (1, 1, 2)),
-    "logs_p_exp": TensorSpec("logs_p_exp", "tensor(float)", (1, 1, 2)),
+    "m_p_exp": TensorSpec("m_p_exp", "tensor(float)", (1, 2, 2)),
+    "logs_p_exp": TensorSpec("logs_p_exp", "tensor(float)", (1, 2, 2)),
     "y_mask": TensorSpec("y_mask", "tensor(float)", (1, 1, 2)),
 }
 _DECODE_INPUTS = {
-    name: TensorSpec(name, "tensor(float)", (1, 1, 2))
+    name: TensorSpec(name, "tensor(float)", (1, 1, 2) if name == "y_mask" else (1, 2, 2))
     for name in ("m_p_exp", "logs_p_exp", "y_mask", "zp_noise")
 }
 _DECODE_INPUTS["noise_scale"] = TensorSpec("noise_scale", "tensor(float)", ())
@@ -56,9 +56,7 @@ class FakeOnnxSession:
         self.input_names = input_names or tuple(spec.name for spec in self.input_specs)
         self.output_names = output_names or tuple(spec.name for spec in self.output_specs)
         self.waveform = (
-            np.asarray([[[0.1, -0.2, 0.3]]], dtype=np.float32)
-            if waveform is None
-            else waveform
+            np.asarray([[[0.1, -0.2, 0.3]]], dtype=np.float32) if waveform is None else waveform
         )
         self.inputs_seen: dict[str, Any] | None = None
         self.closed = False
@@ -67,8 +65,8 @@ class FakeOnnxSession:
         self.inputs_seen = inputs
         if self.component == "duration":
             outputs = {
-                "m_p_exp": np.asarray([[[0.1, 0.2]]], dtype=np.float32),
-                "logs_p_exp": np.asarray([[[0.3, 0.4]]], dtype=np.float32),
+                "m_p_exp": np.asarray([[[0.1, 0.2], [0.5, 0.6]]], dtype=np.float32),
+                "logs_p_exp": np.asarray([[[0.3, 0.4], [0.7, 0.8]]], dtype=np.float32),
                 "y_mask": np.asarray([[[1.0, 1.0]]], dtype=np.float32),
             }
         else:
@@ -89,7 +87,12 @@ class FakeOnnxSession:
         self.closed = True
 
 
-def _installation(tmp_path: Path, roles: tuple[str, ...] = ("duration", "decode"), *, sample_rate: int | None = 24000) -> Installation:
+def _installation(
+    tmp_path: Path,
+    roles: tuple[str, ...] = ("duration", "decode"),
+    *,
+    sample_rate: int | None = 24000,
+) -> Installation:
     artifacts = tuple(
         InstalledArtifact(
             role=role,
@@ -168,13 +171,17 @@ def _adapter(
     return adapter, created
 
 
-def test_inflect_adapter_requires_duration_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inflect_adapter_requires_duration_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     adapter, _ = _adapter(tmp_path, monkeypatch, roles=("decode",))
     with pytest.raises(CapabilityError, match="missing its 'duration' artifact"):
         _ = adapter.duration_session
 
 
-def test_inflect_adapter_requires_decode_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inflect_adapter_requires_decode_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     adapter, _ = _adapter(tmp_path, monkeypatch, roles=("duration",))
     with pytest.raises(CapabilityError, match="missing its 'decode' artifact"):
         _ = adapter.decode_session
@@ -244,14 +251,18 @@ def test_inflect_adapter_validates_graph_names(
         adapter.infer([1, 2])
 
 
-def test_inflect_adapter_rejects_empty_token_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inflect_adapter_rejects_empty_token_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     adapter, created = _adapter(tmp_path, monkeypatch)
     with pytest.raises(RuntimeContractError, match="non-empty integer sequence"):
         adapter.infer([])
     assert created == []
 
 
-def test_inflect_adapter_rejects_bool_token_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inflect_adapter_rejects_bool_token_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     adapter, _ = _adapter(tmp_path, monkeypatch)
     with pytest.raises(RuntimeContractError, match="integer sequence"):
         adapter.infer([True])
@@ -315,13 +326,15 @@ def test_inflect_adapter_builds_expected_decode_feeds(
     feeds = created[1].inputs_seen
     assert feeds is not None
     assert set(feeds) == {"m_p_exp", "logs_p_exp", "y_mask", "zp_noise", "noise_scale"}
-    assert feeds["zp_noise"].shape == feeds["m_p_exp"].shape == (1, 1, 2)
+    assert feeds["zp_noise"].shape == feeds["m_p_exp"].shape == (1, 2, 2)
     assert feeds["noise_scale"].shape == ()
     assert feeds["noise_scale"].dtype == np.float32
     assert feeds["noise_scale"].item() == pytest.approx(0.25)
 
 
-def test_inflect_adapter_seed_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inflect_adapter_seed_is_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     adapter, created = _adapter(tmp_path, monkeypatch)
     adapter.infer([3, 4], seed=123)
     first = created[1].inputs_seen["zp_noise"].copy()
@@ -410,7 +423,6 @@ def test_inflect_adapter_rejects_non_24000_sample_rate(
     assert created == []
 
 
-
 def test_inflect_adapter_maps_duration_outputs_by_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -422,8 +434,8 @@ def test_inflect_adapter_maps_duration_outputs_by_name(
     adapter.infer([1])
     decode_inputs = created[1].inputs_seen
     assert decode_inputs is not None
-    np.testing.assert_allclose(decode_inputs["m_p_exp"], [[[0.1, 0.2]]])
-    np.testing.assert_allclose(decode_inputs["logs_p_exp"], [[[0.3, 0.4]]])
+    np.testing.assert_allclose(decode_inputs["m_p_exp"], [[[0.1, 0.2], [0.5, 0.6]]])
+    np.testing.assert_allclose(decode_inputs["logs_p_exp"], [[[0.3, 0.4], [0.7, 0.8]]])
     np.testing.assert_allclose(decode_inputs["y_mask"], [[[1.0, 1.0]]])
 
 
@@ -438,7 +450,6 @@ def test_inflect_adapter_rejects_non_fp32_graph_tensors(
     assert created[0].inputs_seen is None
 
 
-
 def test_inflect_adapter_accepts_dynamic_one_element_scale_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -451,11 +462,22 @@ def test_inflect_adapter_accepts_dynamic_one_element_scale_shape(
     assert scale.item() == pytest.approx(0.5)
 
 
+def test_inflect_adapter_requires_singleton_y_mask_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outputs = dict(_DURATION_OUTPUTS)
+    outputs["y_mask"] = TensorSpec("y_mask", "tensor(float)", (1, 2, 2))
+    adapter, _ = _adapter(tmp_path, monkeypatch, duration_output_specs=outputs)
+    with pytest.raises(RuntimeContractError, match="y_mask must have a singleton channel"):
+        adapter.infer([1])
+
+
 def test_inflect_adapter_checks_runtime_duration_output_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     outputs = {
-        name: TensorSpec(name, "tensor(float)", (1, 1, 3)) for name in _DURATION_OUTPUTS
+        name: TensorSpec(name, "tensor(float)", (1, 1, 3) if name == "y_mask" else (1, 2, 3))
+        for name in _DURATION_OUTPUTS
     }
     adapter, created = _adapter(tmp_path, monkeypatch, duration_output_specs=outputs)
     with pytest.raises(RuntimeContractError, match="axis 2 must have size 3"):

@@ -1,0 +1,697 @@
+ onnxvoice/catalog.py      |  69 ++++++++--
+ onnxvoice/store.py        | 186 +++++++++++++++++++-------
+ tests/test_concurrency.py | 330 +++++++++++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 522 insertions(+), 63 deletions(-)
+
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index 6760a9b..ddc3673 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -113,6 +113,21 @@ class CatalogClient:
+         assert self.cache_dir is not None
+         return self.cache_dir / f"{system}.json"
+
++    @staticmethod
++    def _cache_generation(path: Path) -> tuple[int, int, int, int, int] | None:
++        """Return a stat fingerprint that changes when atomic cache publication replaces a file."""
++        try:
++            stat = path.stat()
++        except FileNotFoundError:
++            return None
++        return (
++            stat.st_dev,
++            stat.st_ino,
++            stat.st_size,
++            stat.st_mtime_ns,
++            stat.st_ctime_ns,
++        )
++
+     def _catalog_lock_path(self, system: str) -> Path:
+         assert self.cache_dir is not None
+         return self.cache_dir.parent / "locks" / "catalog" / f"{system}.lock"
+@@ -135,31 +150,59 @@ class CatalogClient:
+     ) -> dict[str, Any]:
+         """Load raw catalog data from cache or its configured source.
+
+-
+         Network access occurs when the cache cannot satisfy the request and offline
+-        mode is disabled. ``refresh=True`` bypasses the normal cache freshness check.
++        mode is disabled. ``refresh=True`` bypasses normal cache freshness, but callers
++        waiting behind an overlapping refresh reuse a cache generation published after
++        they began waiting. Calls that start after publication perform their own refresh.
+         """
+         system = system.lower()
+         if not self.sources or system not in self.sources:
+             raise CatalogError(f"No catalog source configured for system {system!r}")
+         self._emit(progress, AssetProgress("catalog_started", ref=system))
+         cache_path = self._cache_path(system)
+-        fresh = (
+-            cache_path.exists() and (time.time() - cache_path.stat().st_mtime) < self.ttl_seconds
+-        )
+-        if cache_path.exists() and (fresh or self.offline) and not refresh:
+-            data = json.loads(cache_path.read_text(encoding="utf-8"))
+-            self._emit(progress, AssetProgress("catalog_cached", ref=system))
++
++        def cached(
++            generation: tuple[int, int, int, int, int] | None,
++            *,
++            accept_refresh: bool = False,
++        ) -> dict[str, Any] | None:
++            fresh = (
++                generation is not None
++                and time.time_ns() - generation[3] < self.ttl_seconds * 1_000_000_000
++            )
++            if generation is not None and (
++                accept_refresh or ((fresh or self.offline) and not refresh)
++            ):
++                data = json.loads(cache_path.read_text(encoding="utf-8"))
++                self._emit(progress, AssetProgress("catalog_cached", ref=system))
++                return data
++            return None
++
++        # Snapshot before waiting. For refreshes, this distinguishes our own forced
++        # fetch from a newer cache another overlapping caller has already published.
++        cache_generation = self._cache_generation(cache_path)
++        data = cached(cache_generation)
++        if data is not None:
+             return data
+-        payload = self._read_source(self.sources[system])
+-        try:
+-            data = json.loads(payload)
+-        except json.JSONDecodeError as exc:
+-            raise CatalogError(f"Invalid JSON in {system} catalog") from exc
++
+         with FileLock(self._catalog_lock_path(system)):
++            current_generation = self._cache_generation(cache_path)
++            if refresh and not self.offline and current_generation != cache_generation:
++                data = cached(current_generation, accept_refresh=True)
++                if data is not None:
++                    return data
++            data = cached(current_generation)
++            if data is not None:
++                return data
++            payload = self._read_source(self.sources[system])
++            try:
++                data = json.loads(payload)
++            except json.JSONDecodeError as exc:
++                raise CatalogError(f"Invalid JSON in {system} catalog") from exc
+             tmp = cache_path.with_suffix(".json.tmp")
+             tmp.write_bytes(payload)
+             os.replace(tmp, cache_path)
++
+         self._emit(progress, AssetProgress("catalog_completed", ref=system))
+         return data
+
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index 797c144..90e3daf 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -1,12 +1,15 @@
+ from __future__ import annotations
+
++import errno
+ import json
+ import os
+ import re
+ import shutil
+ import tempfile
++import threading
+ import time
+ import urllib.request
++import weakref
+ from collections.abc import Callable, Mapping, Sequence
+ from contextlib import suppress
+ from pathlib import Path
+@@ -40,9 +43,91 @@ from .types import (
+
+ ProgressCallback = Callable[[AssetProgress], None]
+
++_LOCAL_LOCKS: dict[str, threading.Lock] = {}
++_LOCAL_LOCKS_GUARD = threading.Lock()
++_ACTIVE_FILE_LOCKS: weakref.WeakSet[Any] = weakref.WeakSet()
++
++
++def _local_lock_for(path: Path) -> threading.Lock:
++    key = os.path.normcase(os.path.abspath(os.fspath(path)))
++    with _LOCAL_LOCKS_GUARD:
++        return _LOCAL_LOCKS.setdefault(key, threading.Lock())
++
++
++def _reset_local_locks_after_fork() -> None:
++    """Discard inherited thread locks and close child copies of lock handles."""
++    global _LOCAL_LOCKS, _LOCAL_LOCKS_GUARD, _ACTIVE_FILE_LOCKS
++
++    for lock in tuple(_ACTIVE_FILE_LOCKS):
++        fd = lock._fd
++        lock._fd = None
++        lock._owned = False
++        lock._local_lock = None
++        if fd is not None:
++            with suppress(OSError):
++                os.close(fd)
++    _ACTIVE_FILE_LOCKS = weakref.WeakSet()
++    _LOCAL_LOCKS = {}
++    _LOCAL_LOCKS_GUARD = threading.Lock()
++
++
++if hasattr(os, "register_at_fork"):
++    os.register_at_fork(after_in_child=_reset_local_locks_after_fork)
++
++
++def _try_os_lock(fd: int) -> bool:
++    """Try an exclusive non-blocking platform lock; return False if contended."""
++    if os.name == "nt":
++        import msvcrt
++
++        if os.fstat(fd).st_size == 0:
++            os.lseek(fd, 0, os.SEEK_SET)
++            os.write(fd, b"\0")
++        os.lseek(fd, 0, os.SEEK_SET)
++        try:
++            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
++        except OSError as exc:
++            if exc.errno in (errno.EACCES, errno.EDEADLK):
++                return False
++            raise
++        return True
++
++    if os.name == "posix":
++        import fcntl
++
++        try:
++            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++        except OSError as exc:
++            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
++                return False
++            raise
++        return True
++
++    raise OSError(f"No advisory file-lock implementation for os.name={os.name!r}")
++
++
++def _unlock_os_lock(fd: int) -> None:
++    if os.name == "nt":
++        import msvcrt
++
++        os.lseek(fd, 0, os.SEEK_SET)
++        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
++        return
++    if os.name == "posix":
++        import fcntl
++
++        fcntl.flock(fd, fcntl.LOCK_UN)
++        return
++    raise OSError(f"No advisory file-lock implementation for os.name={os.name!r}")
++
+
+ class FileLock:
+-    """Small cross-process lock based on an atomically-created lock file."""
++    """Cross-process advisory lock held by an open OS-managed lock-file handle.
++
++    ``stale_after`` is retained as a source-compatible constructor argument. OS
++    locks are released by the operating system when their owning process exits,
++    so PID/timestamp based stale-lock reclamation is not needed.
++    """
+
+     def __init__(
+         self,
+@@ -57,37 +142,71 @@ class FileLock:
+         self.poll_interval = poll_interval
+         self.stale_after = stale_after
+         self._owned = False
++        self._fd: int | None = None
++        self._local_lock: threading.Lock | None = None
++        with _LOCAL_LOCKS_GUARD:
++            _ACTIVE_FILE_LOCKS.add(self)
+
+     def acquire(self) -> None:
+         self.path.parent.mkdir(parents=True, exist_ok=True)
+         deadline = time.monotonic() + self.timeout
+-        while True:
++        local_lock = _local_lock_for(self.path)
++        if not local_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
++            raise LockError(f"Timed out acquiring lock: {self.path}") from None
++        self._local_lock = local_lock
++        try:
+             try:
+-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+-            except FileExistsError:
+-                self._remove_stale()
+-                if time.monotonic() >= deadline:
+-                    raise LockError(f"Timed out acquiring lock: {self.path}") from None
+-                time.sleep(self.poll_interval)
+-                continue
++                self._fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+             except OSError as exc:
+                 raise LockError(f"Could not acquire lock {self.path}: {exc}") from exc
+-            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+-                lock_file.write(f"{os.getpid()} {time.time()}\n")
+-            self._owned = True
+-            return
++
++            while True:
++                try:
++                    if _try_os_lock(self._fd):
++                        self._owned = True
++                        return
++                except OSError as exc:
++                    raise LockError(f"Could not acquire lock {self.path}: {exc}") from exc
++                remaining = deadline - time.monotonic()
++                if remaining <= 0:
++                    raise LockError(f"Timed out acquiring lock: {self.path}") from None
++                time.sleep(min(max(0.0, self.poll_interval), remaining))
++        except BaseException:
++            fd = self._fd
++            self._fd = None
++            self._owned = False
++            self._local_lock = None
++            if fd is not None:
++                with suppress(OSError):
++                    os.close(fd)
++            local_lock.release()
++            raise
+
+     def release(self) -> None:
+         if not self._owned:
+             return
+-        try:
+-            self.path.unlink()
+-        except FileNotFoundError:
+-            pass
+-        except OSError as exc:
+-            raise LockError(f"Could not release lock {self.path}: {exc}") from exc
+-        finally:
+-            self._owned = False
++        fd = self._fd
++        local_lock = self._local_lock
++        self._fd = None
++        self._local_lock = None
++        self._owned = False
++        release_error: OSError | None = None
++        if fd is not None:
++            try:
++                _unlock_os_lock(fd)
++            except OSError as exc:
++                release_error = exc
++            try:
++                os.close(fd)
++            except OSError as exc:
++                if release_error is None:
++                    release_error = exc
++        if local_lock is not None:
++            local_lock.release()
++        if release_error is not None:
++            raise LockError(
++                f"Could not release lock {self.path}: {release_error}"
++            ) from release_error
+
+     def __enter__(self) -> FileLock:
+         self.acquire()
+@@ -96,31 +215,6 @@ class FileLock:
+     def __exit__(self, *_: object) -> None:
+         self.release()
+
+-    def _remove_stale(self) -> None:
+-        try:
+-            raw = self.path.read_text(encoding="utf-8").split()
+-            pid = int(raw[0])
+-            timestamp = float(raw[1])
+-        except (OSError, ValueError, IndexError):
+-            return
+-        if time.time() - timestamp < self.stale_after or _process_exists(pid):
+-            return
+-        with suppress(FileNotFoundError):
+-            self.path.unlink()
+-            pass
+-
+-
+-def _process_exists(pid: int) -> bool:
+-    if pid == os.getpid():
+-        return True
+-    try:
+-        os.kill(pid, 0)
+-    except ProcessLookupError:
+-        return False
+-    except PermissionError:
+-        return True
+-    return True
+-
+
+ class AssetStore:
+     """Content-addressed local store shared by all onnxvoice consumers."""
+diff --git a/tests/test_concurrency.py b/tests/test_concurrency.py
+index 068aa96..c9a25bf 100644
+--- a/tests/test_concurrency.py
++++ b/tests/test_concurrency.py
+@@ -2,12 +2,20 @@ from __future__ import annotations
+
+ import hashlib
+ import multiprocessing
++import os
++import threading
++import time
++from concurrent.futures import ThreadPoolExecutor
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
++from unittest.mock import patch
+
+ import pytest
+
+-from onnxvoice.errors import IntegrityError
+-from onnxvoice.store import AssetStore
++import onnxvoice.store as store_module
++from onnxvoice.catalog import CatalogClient
++from onnxvoice.errors import IntegrityError, LockError
++from onnxvoice.store import AssetStore, FileLock
+ from onnxvoice.types import Artifact, AssetProgress, CatalogItem
+
+
+@@ -37,8 +45,8 @@ def test_concurrent_installers_converge(tmp_path):
+     source = tmp_path / "voice.onnx"
+     source.write_bytes(b"same model")
+     cache = tmp_path / "cache"
+-    start_method = "fork" if "fork" in multiprocessing.get_all_start_methods() else "spawn"
+-    context = multiprocessing.get_context(start_method)
++    # Explicit spawn coverage also runs on POSIX, approximating Windows process startup.
++    context = multiprocessing.get_context("spawn")
+     result_queue = context.Queue()
+     processes = [
+         context.Process(target=_install_worker, args=(str(cache), str(source), result_queue))
+@@ -79,3 +87,317 @@ def test_progress_events_are_ordered_and_failure_cleans_staging(tmp_path):
+         "install_failed",
+     ]
+     assert list((tmp_path / "cache" / "installs" / "test").glob(".broken-*")) == []
++
++
++def _hold_lock_worker(path: str, acquired, release) -> None:
++    with FileLock(path, timeout=5, poll_interval=0.01):
++        acquired.set()
++        release.wait(timeout=5)
++
++
++def _crash_while_holding_lock(path: str, acquired) -> None:
++    lock = FileLock(path)
++    lock.acquire()
++    acquired.set()
++    os._exit(0)
++
++
++def _fork_lock_contender(path: str, started, acquired) -> None:
++    started.set()
++    with FileLock(path, timeout=3, poll_interval=0.01):
++        acquired.set()
++
++
++def test_file_lock_serializes_threads(tmp_path):
++    path = tmp_path / "thread.lock"
++    counter_lock = threading.Lock()
++    inside = 0
++    max_inside = 0
++
++    def worker():
++        nonlocal inside, max_inside
++        for _ in range(10):
++            with FileLock(path, timeout=3):
++                with counter_lock:
++                    inside += 1
++                    max_inside = max(max_inside, inside)
++                time.sleep(0.001)
++                with counter_lock:
++                    inside -= 1
++
++    with ThreadPoolExecutor(max_workers=6) as executor:
++        list(executor.map(lambda _: worker(), range(6)))
++
++    assert max_inside == 1
++    assert path.is_file()  # Advisory lock files are stable coordination files.
++
++
++def test_file_lock_releases_local_mutex_after_open_failure(tmp_path, monkeypatch):
++    path = tmp_path / "open-failure.lock"
++    real_open = os.open
++
++    def fail_lock_open(file, flags, *args, **kwargs):
++        if Path(file) == path:
++            raise PermissionError("synthetic lock-file open failure")
++        return real_open(file, flags, *args, **kwargs)
++
++    monkeypatch.setattr(store_module.os, "open", fail_lock_open)
++    with pytest.raises(LockError, match="Could not acquire lock"):
++        FileLock(path).acquire()
++    monkeypatch.undo()
++
++    with FileLock(path):
++        pass
++    assert path.is_file()
++
++
++def test_file_lock_timeout_uses_one_budget_across_local_and_os_wait(tmp_path):
++    context = multiprocessing.get_context("spawn")
++    path = str(tmp_path / "one-budget.lock")
++    owner_acquired, release_owner = context.Event(), context.Event()
++    owner = context.Process(target=_hold_lock_worker, args=(path, owner_acquired, release_owner))
++    owner.start()
++    assert owner_acquired.wait(3)
++
++    first_waiting = threading.Event()
++    original_try_os_lock = store_module._try_os_lock
++
++    def observe_first_wait(fd):
++        if threading.current_thread().name == "first-lock-contender":
++            first_waiting.set()
++        return original_try_os_lock(fd)
++
++    results: dict[str, float] = {}
++
++    def contender(name: str, timeout: float) -> None:
++        started = time.monotonic()
++        with pytest.raises(LockError):
++            FileLock(path, timeout=timeout, poll_interval=0.01).acquire()
++        results[name] = time.monotonic() - started
++
++    first = threading.Thread(name="first-lock-contender", target=contender, args=("first", 0.5))
++    second = threading.Thread(target=contender, args=("second", 0.9))
++    try:
++        with patch.object(store_module, "_try_os_lock", side_effect=observe_first_wait):
++            first.start()
++            assert first_waiting.wait(2)
++            second.start()
++            first.join(2)
++            second.join(2)
++        assert not first.is_alive()
++        assert not second.is_alive()
++        assert 0.45 <= results["first"] < 0.8
++        # The second thread spends the first contender's wait under the same
++        # timeout budget rather than receiving another full timeout afterward.
++        assert 0.75 <= results["second"] < 1.15
++    finally:
++        release_owner.set()
++        owner.join(3)
++        if owner.is_alive():
++            owner.terminate()
++            owner.join(2)
++    assert owner.exitcode == 0
++
++
++def test_file_lock_does_not_break_a_live_owner_after_stale_after(tmp_path):
++    context = multiprocessing.get_context("spawn")
++    path = str(tmp_path / "old-live-owner.lock")
++    owner_acquired, release_owner = context.Event(), context.Event()
++    owner = context.Process(target=_hold_lock_worker, args=(path, owner_acquired, release_owner))
++    owner.start()
++    assert owner_acquired.wait(3)
++    try:
++        with pytest.raises(LockError, match="Timed out"):
++            FileLock(path, timeout=0.15, poll_interval=0.01, stale_after=0).acquire()
++        assert owner.is_alive()
++    finally:
++        release_owner.set()
++        owner.join(3)
++        if owner.is_alive():
++            owner.terminate()
++            owner.join(2)
++    assert owner.exitcode == 0
++    with FileLock(path, timeout=1):
++        pass
++
++
++def test_file_lock_released_when_spawned_owner_exits(tmp_path):
++    context = multiprocessing.get_context("spawn")
++    path = str(tmp_path / "crashed-owner.lock")
++    acquired = context.Event()
++    owner = context.Process(target=_crash_while_holding_lock, args=(path, acquired))
++    owner.start()
++    assert acquired.wait(3)
++    owner.join(3)
++    assert owner.exitcode == 0
++
++    with FileLock(path, timeout=1):
++        pass
++
++
++def test_file_lock_fork_child_does_not_inherit_parent_lock_state(tmp_path):
++    if "fork" not in multiprocessing.get_all_start_methods():
++        pytest.skip("fork start method is unavailable")
++    context = multiprocessing.get_context("fork")
++    path = str(tmp_path / "fork.lock")
++    started, acquired = context.Event(), context.Event()
++    child = context.Process(target=_fork_lock_contender, args=(str(path), started, acquired))
++
++    with FileLock(path):
++        child.start()
++        assert started.wait(3)
++        time.sleep(0.1)
++        assert not acquired.is_set()
++    assert acquired.wait(3), "child inherited a local mutex or lock-file handle"
++    child.join(3)
++    assert child.exitcode == 0
++
++
++class _CountingCatalogHandler(BaseHTTPRequestHandler):
++    request_count = 0
++    request_lock = threading.Lock()
++    payload = b"{}"
++
++    def do_GET(self):
++        with type(self).request_lock:
++            type(self).request_count += 1
++        time.sleep(0.1)
++        self.send_response(200)
++        self.send_header("Content-Length", str(len(type(self).payload)))
++        self.end_headers()
++        self.wfile.write(type(self).payload)
++
++    def log_message(self, format, *args):
++        pass
++
++
++def _catalog_spawn_worker(cache_root, source, refresh, barrier, result_queue):
++    client = CatalogClient(
++        cache_dir=cache_root,
++        sources={"test": source},
++        ttl_seconds=3600,
++    )
++    original_generation = CatalogClient._cache_generation
++    initial_snapshot = True
++
++    def synchronized_generation(path):
++        nonlocal initial_snapshot
++        generation = original_generation(path)
++        if initial_snapshot:
++            initial_snapshot = False
++            barrier.wait(timeout=15)
++        return generation
++
++    try:
++        with patch.object(
++            CatalogClient, "_cache_generation", staticmethod(synchronized_generation)
++        ):
++            result_queue.put(("ok", client.load_raw("test", refresh=refresh)))
++    except Exception as exc:  # pragma: no cover - surfaced by the parent assertion
++        result_queue.put(("error", repr(exc)))
++        raise
++
++
++@pytest.mark.parametrize("refresh", [False, True], ids=["cache-miss", "refresh"])
++def test_catalog_concurrent_loads_coalesce_across_threads(tmp_path, refresh):
++    cache_root = tmp_path / "thread-catalog-cache"
++    client = CatalogClient(cache_dir=cache_root, sources={"test": "counted-source"})
++    cache_path = client._cache_path("test")
++    original_payload = b'{"generation":"old"}'
++    expected_payload = b'{"generation":"new"}'
++    if refresh:
++        cache_path.write_bytes(original_payload)
++        os.utime(cache_path, ns=(1_000_000_000, 1_000_000_000))
++
++    count = 0
++    count_lock = threading.Lock()
++    source_started = threading.Event()
++    allow_source = threading.Event()
++
++    def read_source(_client, _source):
++        nonlocal count
++        with count_lock:
++            count += 1
++        source_started.set()
++        assert allow_source.wait(5)
++        return expected_payload
++
++    original_generation = CatalogClient._cache_generation
++    barrier = threading.Barrier(6)
++    thread_state = threading.local()
++
++    def synchronized_generation(path):
++        generation = original_generation(path)
++        if not getattr(thread_state, "snapshotted", False):
++            thread_state.snapshotted = True
++            barrier.wait(timeout=5)
++        return generation
++
++    with (
++        patch.object(CatalogClient, "_read_source", read_source),
++        patch.object(CatalogClient, "_cache_generation", staticmethod(synchronized_generation)),
++        ThreadPoolExecutor(max_workers=6) as executor,
++    ):
++        futures = [executor.submit(client.load_raw, "test", refresh=refresh) for _ in range(6)]
++        assert source_started.wait(5)
++        if refresh:
++            assert cache_path.read_bytes() == original_payload
++        else:
++            assert not cache_path.exists()
++        allow_source.set()
++        results = [future.result(timeout=5) for future in futures]
++    assert count == 1
++    assert results == [{"generation": "new"}] * 6
++    assert cache_path.read_bytes() == expected_payload
++    assert not cache_path.with_suffix(".json.tmp").exists()
++
++
++@pytest.mark.parametrize("refresh", [False, True], ids=["cache-miss", "refresh"])
++def test_catalog_concurrent_loads_coalesce_across_spawned_processes(tmp_path, refresh):
++    cache_root = tmp_path / "spawn-catalog-cache"
++    cache_path = cache_root / "catalogs" / "test.json"
++    original_payload = b'{"generation":"old"}'
++    expected_payload = b'{"generation":"new"}'
++    if refresh:
++        cache_path.parent.mkdir(parents=True)
++        cache_path.write_bytes(original_payload)
++        os.utime(cache_path, ns=(1_000_000_000, 1_000_000_000))
++
++    _CountingCatalogHandler.request_count = 0
++    _CountingCatalogHandler.payload = expected_payload
++    server = ThreadingHTTPServer(("127.0.0.1", 0), _CountingCatalogHandler)
++    server.daemon_threads = True
++    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
++    server_thread.start()
++    source = f"http://127.0.0.1:{server.server_port}/catalog.json"
++
++    context = multiprocessing.get_context("spawn")
++    barrier = context.Barrier(4)
++    result_queue = context.Queue()
++    processes = [
++        context.Process(
++            target=_catalog_spawn_worker,
++            args=(str(cache_root), source, refresh, barrier, result_queue),
++        )
++        for _ in range(4)
++    ]
++    try:
++        for process in processes:
++            process.start()
++        results = [result_queue.get(timeout=20) for _ in processes]
++        for process in processes:
++            process.join(timeout=20)
++            assert process.exitcode == 0
++    finally:
++        for process in processes:
++            if process.is_alive():
++                process.terminate()
++                process.join(timeout=2)
++        server.shutdown()
++        server.server_close()
++        server_thread.join(timeout=2)
++
++    assert results == [("ok", {"generation": "new"})] * 4
++    assert _CountingCatalogHandler.request_count == 1
++    assert cache_path.read_bytes() == expected_payload
++    assert not cache_path.with_suffix(".json.tmp").exists()

@@ -1467,7 +1467,9 @@ def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
 
         if raw_model["voice_mode"] != "fixed":
             raise CatalogError(f"{model_id}: voice_mode must be 'fixed'")
-        default_voice = _require_inflect_safe_id(raw_model["default_voice"], f"{model_id} default_voice")
+        default_voice = _require_inflect_safe_id(
+            raw_model["default_voice"], f"{model_id} default_voice"
+        )
         if default_voice != "default":
             raise CatalogError(f"{model_id}: fixed voice default_voice must be 'default'")
         raw_voices = raw_model["voices"]
@@ -1508,7 +1510,9 @@ def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
         controls = raw_model["controls"]
         if not isinstance(controls, Mapping):
             raise CatalogError(f"{model_id}: controls must be an object")
-        _require_inflect_fields(controls, {"speed", "variation", "seed_default"}, f"{model_id} controls")
+        _require_inflect_fields(
+            controls, {"speed", "variation", "seed_default"}, f"{model_id} controls"
+        )
         normalized_controls: dict[str, Any] = {}
         for control_name, lower_limit, upper_limit in (
             ("speed", 0.5, 2.0),
@@ -1523,7 +1527,9 @@ def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
                 f"{model_id} {control_name} control",
             )
             control_values = {
-                field: _inflect_number(raw_control[field], f"{model_id} {control_name} control {field}")
+                field: _inflect_number(
+                    raw_control[field], f"{model_id} {control_name} control {field}"
+                )
                 for field in ("default", "minimum", "maximum")
             }
             minimum = control_values["minimum"]
@@ -1560,17 +1566,29 @@ def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
             raise CatalogError(f"{model_id}: upstream must be an object")
         _require_inflect_fields(
             upstream,
-            {"provider", "repository", "revision", "license", "source_repository", "source_revision"},
+            {
+                "provider",
+                "repository",
+                "revision",
+                "license",
+                "source_repository",
+                "source_revision",
+            },
             f"{model_id} upstream",
         )
         if upstream["provider"] != "huggingface":
             raise CatalogError(f"{model_id}: upstream provider must be huggingface")
         repository = upstream["repository"]
-        if not isinstance(repository, str) or _INFLECT_HF_REPOSITORY_RE.fullmatch(repository) is None:
+        if (
+            not isinstance(repository, str)
+            or _INFLECT_HF_REPOSITORY_RE.fullmatch(repository) is None
+        ):
             raise CatalogError(f"{model_id}: upstream repository must have owner/name form")
         revision = upstream["revision"]
         if not isinstance(revision, str) or _INFLECT_HF_REVISION_RE.fullmatch(revision) is None:
-            raise CatalogError(f"{model_id}: upstream revision must be a lowercase 40-character SHA")
+            raise CatalogError(
+                f"{model_id}: upstream revision must be a lowercase 40-character SHA"
+            )
         source_repository = upstream["source_repository"]
         if (
             not isinstance(source_repository, str)
@@ -1582,9 +1600,7 @@ def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
             not isinstance(source_revision, str)
             or _INFLECT_HF_REVISION_RE.fullmatch(source_revision) is None
         ):
-            raise CatalogError(
-                f"{model_id}: source_revision must be a lowercase 40-character SHA"
-            )
+            raise CatalogError(f"{model_id}: source_revision must be a lowercase 40-character SHA")
         license_name = _require_inflect_text(upstream["license"], f"{model_id} upstream license")
 
         raw_artifacts = raw_model["artifacts"]
@@ -1615,9 +1631,7 @@ def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
             )
             if filename != _INFLECT_ARTIFACT_FILENAMES[role]:
                 raise CatalogError(f"{model_id}/{role}: filename must be {role}.onnx")
-            expected_url = (
-                f"https://huggingface.co/{repository}/resolve/{revision}/onnx/{filename}"
-            )
+            expected_url = f"https://huggingface.co/{repository}/resolve/{revision}/onnx/{filename}"
             url = raw_artifact["url"]
             if not isinstance(url, str) or url != expected_url:
                 raise CatalogError(
@@ -1628,9 +1642,7 @@ def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
                 raise CatalogError(f"{model_id}/{role}: size must be a positive integer")
             sha256 = raw_artifact["sha256"]
             if not isinstance(sha256, str) or _INFLECT_SHA256_RE.fullmatch(sha256) is None:
-                raise CatalogError(
-                    f"{model_id}/{role}: sha256 must be lowercase 64-character hex"
-                )
+                raise CatalogError(f"{model_id}/{role}: sha256 must be lowercase 64-character hex")
             source_path = f"onnx/{filename}"
             artifacts.append(
                 Artifact(

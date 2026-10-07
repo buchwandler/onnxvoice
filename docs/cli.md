@@ -42,16 +42,16 @@ onnxvoice list --system piper --format json
 onnxvoice installed --format tsv
 ```
 
-| Flag                   | Accepted values or meaning                          |
-| ---------------------- | --------------------------------------------------- |
+| Flag                   | Accepted values or meaning                                     |
+| ---------------------- | -------------------------------------------------------------- |
 | `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect` |
-| `--kind`               | `voice`, `model`, `bundle`                          |
-| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`      |
-| `--gender`             | `male`, `female`, `neutral`, `unknown`              |
-| `--quality`            | Quality selection                                   |
-| `--distribution`       | Distribution identifier                             |
-| `--status`             | `installed`, `available`, `local`                   |
-| `--format`             | `table`, `plain`, `json`, `tsv`                     |
+| `--kind`               | `voice`, `model`, `bundle`                                     |
+| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`                 |
+| `--gender`             | `male`, `female`, `neutral`, `unknown`                         |
+| `--quality`            | Quality selection                                              |
+| `--distribution`       | Distribution identifier                                        |
+| `--status`             | `installed`, `available`, `local`                              |
+| `--format`             | `table`, `plain`, `json`, `tsv`                                |
 
 Generic language tags match compatible specific locales. An `en` filter matches English locales such as `en-US` and `en-GB`. An `en-US` filter matches a generic `en` capability, but not a conflicting specific locale such as `en-GB`. Case and hyphen normalization are supported.
 

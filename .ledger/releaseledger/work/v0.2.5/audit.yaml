@@ -1,0 +1,63 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.5
+git_base_ref: v0.2.4
+git_base_sha: 5512aea4113b52c2ff4963e60a8cb454fd7257b3
+git_head_ref: HEAD
+git_head_sha: 61a10912b71732b9917c4886298b4e1822ee6ec6
+git_range: 5512aea4113b52c2ff4963e60a8cb454fd7257b3..61a10912b71732b9917c4886298b4e1822ee6ec6
+commit_count: 2
+rows:
+  - sha: e01f3b37ff07d24b13d373dce59ff0376df9bfd8
+    source_ref: git:e01f3b37ff07d24b13d373dce59ff0376df9bfd8
+    short_sha: e01f3b3
+    changed_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/store.py
+      - tests/test_concurrency.py
+    stats:
+      files_changed: 3
+      insertions: 522
+      deletions: 63
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: better windows lock mechanism"
+  - sha: 61a10912b71732b9917c4886298b4e1822ee6ec6
+    source_ref: git:61a10912b71732b9917c4886298b4e1822ee6ec6
+    short_sha: 61a1091
+    changed_paths:
+      - MANIFEST.in
+      - README.md
+      - docs/cli.md
+      - docs/concepts.md
+      - docs/index.md
+      - docs/systems/index.md
+      - docs/systems/inflect.md
+      - onnxvoice/catalog.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/inflect.py
+      - pyproject.toml
+      - tests/fixtures/inflect_models.json
+      - tests/test_inflect_adapter.py
+      - tests/test_inflect_catalog.py
+      - tests/test_inflect_local_open.py
+      - tests/test_inflect_voices.py
+    stats:
+      files_changed: 17
+      insertions: 1887
+      deletions: 8
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: include inflect tts"

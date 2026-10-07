@@ -4,10 +4,10 @@ ONNXVoice provides a low-level runtime adapter for Inflect Nano v2 and Inflect M
 
 Inflect v2 is a two-graph runtime:
 
-| Artifact role | File |
-| --- | --- |
-| `duration` | `duration.onnx` |
-| `decode` | `decode.onnx` |
+| Artifact role | File            |
+| ------------- | --------------- |
+| `duration`    | `duration.onnx` |
+| `decode`      | `decode.onnx`   |
 
 The adapter creates and owns one lazy ONNX Runtime session per graph. ONNXVoice handles catalog discovery, pinned artifact downloads and SHA-256 verification, provider selection, session options, and runtime diagnostics. Model discovery and voice listing use catalog metadata and do not require installing the ONNX files.
 
@@ -17,11 +17,11 @@ The adapter creates and owns one lazy ONNX Runtime session per graph. ONNXVoice 
 
 Supported controls:
 
-| Control | Default | Range | Effect |
-| --- | ---: | ---: | --- |
-| `speed` | `1.0` | `0.5`–`2.0` | Scales duration as `1 / speed` |
-| `variation` | `0.667` | `0.0`–`1.0` | Decoder noise scale |
-| `seed` | `0` | Python integer | Seeds request-local decoder noise |
+| Control     | Default |          Range | Effect                            |
+| ----------- | ------: | -------------: | --------------------------------- |
+| `speed`     |   `1.0` |    `0.5`–`2.0` | Scales duration as `1 / speed`    |
+| `variation` | `0.667` |    `0.0`–`1.0` | Decoder noise scale               |
+| `seed`      |     `0` | Python integer | Seeds request-local decoder noise |
 
 A repeated request with the same tokens, controls, model, runtime stack, and seed produces the same decoder-noise tensor. The result is finite mono `float32` PCM at 24 kHz. ONNXVoice returns raw model audio: it does not clip, normalize loudness, fade edges, split text, concatenate chunks, or insert pauses.
 
@@ -35,6 +35,10 @@ onnxvoice voices show inflect:nano-v2/default
 ```
 
 The catalog can be overridden with `ONNXVOICE_INFLECT_CATALOG`, set to a local JSON path or an HTTP(S) URL. The default source is the Inflect ONNX bundles catalog. Catalog aliases such as `inflect:nano` and `inflect:Inflect-Nano-v2-ONNX` resolve to the canonical `inflect:nano-v2` item.
+
+## Catalog schema compatibility
+
+The default catalog URL tracks the bundle repository's `main` branch, so schema 1 is kept backward compatible for the lifetime of ONNXVoice 0.2.x. If an incompatible schema is introduced, publish it at a separately versioned catalog endpoint and add explicit client support rather than changing the schema behind the existing URL.
 
 ## Managed Python usage
 
