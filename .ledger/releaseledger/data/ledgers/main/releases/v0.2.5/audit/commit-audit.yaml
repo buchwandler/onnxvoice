@@ -2,14 +2,14 @@ schema_version: 1
 object_type: commit_audit_sheet
 versioning:
   schema_version: 1
-  revision: 3
+  revision: 5
 release_version: v0.2.5
 git_base_ref: v0.2.4
 git_base_sha: 5512aea4113b52c2ff4963e60a8cb454fd7257b3
 git_head_ref: HEAD
-git_head_sha: 61a10912b71732b9917c4886298b4e1822ee6ec6
-git_range: 5512aea4113b52c2ff4963e60a8cb454fd7257b3..61a10912b71732b9917c4886298b4e1822ee6ec6
-commit_count: 2
+git_head_sha: 187d5b270995a6a6ad489b68bd22ea465938506d
+git_range: 5512aea4113b52c2ff4963e60a8cb454fd7257b3..187d5b270995a6a6ad489b68bd22ea465938506d
+commit_count: 4
 rows:
   - sha: e01f3b37ff07d24b13d373dce59ff0376df9bfd8
     source_ref: git:e01f3b37ff07d24b13d373dce59ff0376df9bfd8
@@ -99,3 +99,87 @@ rows:
     notes:
       Create a separate Inflect v2 release entry and keep it draft until external
       release gates and shipment.
+  - sha: 8a21a3ae4141950861d114b5cf0e2987a8bd2f8f
+    source_ref: git:8a21a3ae4141950861d114b5cf0e2987a8bd2f8f
+    short_sha: 8a21a3a
+    changed_paths:
+      - .ledger/releaseledger/data/ledgers/main/events/events.jsonl
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.5/audit/commit-audit.yaml
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.5/entries/entry-0001.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.5/entries/entry-0002.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.5/release.md
+      - .ledger/releaseledger/work/v0.2.5/audit-decisions.yaml
+      - .ledger/releaseledger/work/v0.2.5/audit.yaml
+      - .ledger/releaseledger/work/v0.2.5/entries.yaml
+      - .ledger/releaseledger/work/v0.2.5/evidence/61a1091.patch
+      - .ledger/releaseledger/work/v0.2.5/evidence/e01f3b3.patch
+      - .ledger/releaseledger/work/v0.2.5/evidence/manifest.json
+      - .ledger/releaseledger/work/v0.2.5/range.json
+      - README.md
+      - docs/cli.md
+      - docs/systems/index.md
+      - docs/systems/inflect.md
+      - onnxvoice/catalog.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/inflect.py
+      - pyproject.toml
+      - tests/fixtures/inflect_models.json
+      - tests/test_inflect_adapter.py
+      - tests/test_inflect_catalog.py
+      - tests/test_inflect_local_open.py
+    stats:
+      files_changed: 24
+      insertions: 3460
+      deletions: 95
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/cli.md
+      - docs/concepts.md
+      - docs/index.md
+      - docs/systems/index.md
+      - docs/systems/inflect.md
+      - onnxvoice/catalog.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/inflect.py
+      - pyproject.toml
+      - tests/fixtures/inflect_models.json
+      - tests/test_inflect_adapter.py
+      - tests/test_inflect_catalog.py
+      - tests/test_inflect_local_open.py
+    observed_behavior:
+      Refined the Inflect v2 runtime contract and catalog compatibility,
+      including singleton-mask handling, graph-rank validation, and release metadata
+      and documentation updates.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: prepare release"
+    target_entry_id: entry-0002
+    notes:
+      Keep the Inflect runtime corrections and compatibility documentation with
+      the Inflect release entry.
+  - sha: 187d5b270995a6a6ad489b68bd22ea465938506d
+    source_ref: git:187d5b270995a6a6ad489b68bd22ea465938506d
+    short_sha: 187d5b2
+    changed_paths:
+      - onnxvoice/store.py
+    stats:
+      files_changed: 1
+      insertions: 116
+      deletions: 18
+    inspected: true
+    inspected_paths:
+      - onnxvoice/store.py
+    observed_behavior:
+      Strengthened Windows model-store locking with share-compatible
+      lock-file opening and Win32 byte-range locks so competing processes can coordinate
+      reliably without CRT sharing failures.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "fix: store"
+    target_entry_id: entry-0001
+    notes:
+      Keep the Windows locking correction with the cross-process model-store locking
+      entry.

@@ -3,18 +3,19 @@ schema_version: 2
 object_type: release_entry
 versioning:
   schema_version: 1
-  revision: 1
+  revision: 2
 entry_id: entry-0001
 release_version: v0.2.5
 kind: fixed
 summary:
   Fixed cross-process model-store locking and coalesced concurrent catalog
   refreshes
-status: draft
+status: accepted
 audience: null
 scopes: []
 source_refs:
   - git:e01f3b37ff07d24b13d373dce59ff0376df9bfd8
+  - git:187d5b270995a6a6ad489b68bd22ea465938506d
 paths:
   - onnxvoice/catalog.py
   - onnxvoice/store.py

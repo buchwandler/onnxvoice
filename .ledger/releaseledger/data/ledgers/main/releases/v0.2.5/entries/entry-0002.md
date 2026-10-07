@@ -3,16 +3,17 @@ schema_version: 2
 object_type: release_entry
 versioning:
   schema_version: 1
-  revision: 2
+  revision: 3
 entry_id: entry-0002
 release_version: v0.2.5
 kind: added
 summary: Added native ONNXVoice runtime support for Inflect v2 Nano and Micro models
-status: draft
+status: accepted
 audience: null
 scopes: []
 source_refs:
   - git:61a10912b71732b9917c4886298b4e1822ee6ec6
+  - git:8a21a3ae4141950861d114b5cf0e2987a8bd2f8f
 paths:
   - MANIFEST.in
   - README.md
