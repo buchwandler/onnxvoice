@@ -75,24 +75,120 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_reset_local_locks_after_fork)
 
 
+def _platform_attr(module: Any, name: str, default: Any = None) -> Any:
+    """Read an attribute that exists only on one supported platform."""
+    return getattr(module, name, default)
+
+
+def _windows_lock_api() -> Any:
+    """Return the Win32 kernel API used for byte-range lock operations."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("internal", ctypes.c_void_p),
+            ("internal_high", ctypes.c_void_p),
+            ("offset", wintypes.DWORD),
+            ("offset_high", wintypes.DWORD),
+            ("event", wintypes.HANDLE),
+        ]
+
+    kernel32 = _platform_attr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    lock_file_ex = kernel32.LockFileEx
+    lock_file_ex.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(Overlapped),
+    ]
+    lock_file_ex.restype = wintypes.BOOL
+    unlock_file_ex = kernel32.UnlockFileEx
+    unlock_file_ex.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(Overlapped),
+    ]
+    unlock_file_ex.restype = wintypes.BOOL
+    return lock_file_ex, unlock_file_ex, Overlapped
+
+
+def _open_windows_lock_file(path: Path) -> int:
+    """Open a lock file with sharing flags that permit contending processes."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = _platform_attr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        os.fspath(path),
+        0xC0000000,  # GENERIC_READ | GENERIC_WRITE
+        0x00000007,  # FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        None,
+        4,  # OPEN_ALWAYS
+        0x00000080,  # FILE_ATTRIBUTE_NORMAL
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        raise _platform_attr(ctypes, "WinError")(_platform_attr(ctypes, "get_last_error")())
+    try:
+        return _platform_attr(msvcrt, "open_osfhandle")(
+            handle, os.O_RDWR | _platform_attr(os, "O_BINARY", 0)
+        )
+    except BaseException:
+        kernel32.CloseHandle(handle)
+        raise
+
+
+def _open_lock_file(path: Path) -> int:
+    """Open a lock file, working around Windows byte-lock sharing semantics."""
+    flags = os.O_CREAT | os.O_RDWR
+    if os.name == "nt":
+        flags |= getattr(os, "O_BINARY", 0)
+    try:
+        return os.open(path, flags, 0o644)
+    except OSError as exc:
+        # The CRT may reject opening a file that another process has locked,
+        # even though CreateFileW can open it with explicit sharing flags.
+        # Preserve other open failures (including test-injected failures).
+        if os.name == "nt" and (
+            exc.errno == errno.EACCES or getattr(exc, "winerror", None) in (5, 32)
+        ):
+            return _open_windows_lock_file(path)
+        raise
+
+
 def _try_os_lock(fd: int) -> bool:
     """Try an exclusive non-blocking platform lock; return False if contended."""
     if os.name == "nt":
+        import ctypes
         import msvcrt
 
-        msvcrt_api: Any = msvcrt
-
-        if os.fstat(fd).st_size == 0:
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, b"\0")
-        os.lseek(fd, 0, os.SEEK_SET)
-        try:
-            msvcrt_api.locking(fd, msvcrt_api.LK_NBLCK, 1)
-        except OSError as exc:
-            if exc.errno in (errno.EACCES, errno.EDEADLK):
-                return False
-            raise
-        return True
+        lock_file_ex, _, overlapped_type = _windows_lock_api()
+        overlapped = overlapped_type()
+        flags = 0x00000002 | 0x00000001  # LOCKFILE_EXCLUSIVE_LOCK | FAIL_IMMEDIATELY
+        handle = _platform_attr(msvcrt, "get_osfhandle")(fd)
+        if lock_file_ex(handle, flags, 0, 1, 0, ctypes.byref(overlapped)):
+            return True
+        error = _platform_attr(ctypes, "get_last_error")()
+        if error in (33, 158, 212):  # lock violation / already locked
+            return False
+        raise _platform_attr(ctypes, "WinError")(error)
 
     if os.name == "posix":
         import fcntl
@@ -110,12 +206,14 @@ def _try_os_lock(fd: int) -> bool:
 
 def _unlock_os_lock(fd: int) -> None:
     if os.name == "nt":
+        import ctypes
         import msvcrt
 
-        msvcrt_api: Any = msvcrt
-
-        os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt_api.locking(fd, msvcrt_api.LK_UNLCK, 1)
+        _, unlock_file_ex, overlapped_type = _windows_lock_api()
+        overlapped = overlapped_type()
+        handle = _platform_attr(msvcrt, "get_osfhandle")(fd)
+        if not unlock_file_ex(handle, 0, 1, 0, ctypes.byref(overlapped)):
+            raise _platform_attr(ctypes, "WinError")(_platform_attr(ctypes, "get_last_error")())
         return
     if os.name == "posix":
         import fcntl
@@ -160,7 +258,7 @@ class FileLock:
         self._local_lock = local_lock
         try:
             try:
-                self._fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+                self._fd = _open_lock_file(self.path)
             except OSError as exc:
                 raise LockError(f"Could not acquire lock {self.path}: {exc}") from exc
 
