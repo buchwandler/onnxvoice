@@ -26,6 +26,8 @@ keywords = [
   "pocket",
   "kitten",
   "kitten-tts",
+  "inflect",
+  "inflect-tts",
   "asset-cache",
 ]
 dependencies = [

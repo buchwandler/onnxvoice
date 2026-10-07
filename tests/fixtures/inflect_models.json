@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "kind": "inflect-onnx-model-catalog",
+  "models": {
+    "nano-v2": {
+      "id": "nano-v2",
+      "aliases": ["nano", "Inflect-Nano-v2-ONNX"],
+      "name": "Inflect Nano v2",
+      "version": "2",
+      "language": "en-US",
+      "sample_rate": 24000,
+      "voice_mode": "fixed",
+      "default_voice": "default",
+      "voices": {
+        "default": {
+          "id": "default",
+          "name": "Default",
+          "language": "en-US",
+          "gender": "male",
+          "synthetic": true
+        }
+      },
+      "controls": {
+        "speed": {"default": 1.0, "minimum": 0.5, "maximum": 2.0},
+        "variation": {"default": 0.667, "minimum": 0.0, "maximum": 1.0},
+        "seed_default": 0
+      },
+      "runtime": {"profile": "inflect-v2-split-v1", "precision": "fp32", "onnx_opset": 17},
+      "upstream": {
+        "provider": "huggingface",
+        "repository": "owensong/Inflect-Nano-v2-ONNX",
+        "revision": "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9",
+        "license": "Apache-2.0",
+        "source_repository": "owensong/Inflect-Nano-v2",
+        "source_revision": "67fc9249e0bb8ab4b196d25cb09b6dd43f5e4f13"
+      },
+      "artifacts": [
+        {
+          "role": "duration",
+          "format": "onnx",
+          "filename": "duration.onnx",
+          "url": "https://huggingface.co/owensong/Inflect-Nano-v2-ONNX/resolve/df3627e44c26192714c9dcba6b8e9b47e7a6e3d9/onnx/duration.onnx",
+          "size": 3636541,
+          "sha256": "6e5fe09584f979dcd2da4f89d5274385ad5197efcd5ddcaa5ac03db637d7451e"
+        },
+        {
+          "role": "decode",
+          "format": "onnx",
+          "filename": "decode.onnx",
+          "url": "https://huggingface.co/owensong/Inflect-Nano-v2-ONNX/resolve/df3627e44c26192714c9dcba6b8e9b47e7a6e3d9/onnx/decode.onnx",
+          "size": 12570009,
+          "sha256": "f98b1ba21f3d5306ee6cf96a02ba9783082ef99314e77f1ee0c03954dc7de2b8"
+        }
+      ],
+      "metadata": {"source_model_sha256": "bfca468489c9069361d6b87b295a17eef611af8ff09854ce0b80305d9122f5b3", "fixed_voice": true}
+    },
+    "micro-v2": {
+      "id": "micro-v2",
+      "aliases": ["micro", "Inflect-Micro-v2-ONNX"],
+      "name": "Inflect Micro v2",
+      "version": "2",
+      "language": "en-US",
+      "sample_rate": 24000,
+      "voice_mode": "fixed",
+      "default_voice": "default",
+      "voices": {
+        "default": {
+          "id": "default",
+          "name": "Default",
+          "language": "en-US",
+          "gender": "male",
+          "synthetic": true
+        }
+      },
+      "controls": {
+        "speed": {"default": 1.0, "minimum": 0.5, "maximum": 2.0},
+        "variation": {"default": 0.667, "minimum": 0.0, "maximum": 1.0},
+        "seed_default": 0
+      },
+      "runtime": {"profile": "inflect-v2-split-v1", "precision": "fp32", "onnx_opset": 17},
+      "upstream": {
+        "provider": "huggingface",
+        "repository": "owensong/Inflect-Micro-v2-ONNX",
+        "revision": "91b1ab6432323064ec0e8e9704d92fcecd24855f",
+        "license": "Apache-2.0",
+        "source_repository": "owensong/Inflect-Micro-v2",
+        "source_revision": "3e8c567f9bce1a309eea12d38ca9fbf7050df72e"
+      },
+      "artifacts": [
+        {
+          "role": "duration",
+          "format": "onnx",
+          "filename": "duration.onnx",
+          "url": "https://huggingface.co/owensong/Inflect-Micro-v2-ONNX/resolve/91b1ab6432323064ec0e8e9704d92fcecd24855f/onnx/duration.onnx",
+          "size": 7322687,
+          "sha256": "b728ca2564b9e5b7d6cf5e446f65e02a6fe2f1880ba281466fec93a667dd2388"
+        },
+        {
+          "role": "decode",
+          "format": "onnx",
+          "filename": "decode.onnx",
+          "url": "https://huggingface.co/owensong/Inflect-Micro-v2-ONNX/resolve/91b1ab6432323064ec0e8e9704d92fcecd24855f/onnx/decode.onnx",
+          "size": 30427790,
+          "sha256": "7940923add86f76e7fa78d910b0632ca1779f8cc9a2ca2b49236381a9ca77183"
+        }
+      ],
+      "metadata": {"source_model_sha256": "3eede065c9ccfa88ade0a5a9a5c23de34afcbbb32213e59aad44d5cf100fdee8", "fixed_voice": true}
+    }
+  }
+}

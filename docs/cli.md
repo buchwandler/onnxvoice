@@ -44,7 +44,7 @@ onnxvoice installed --format tsv
 
 | Flag                   | Accepted values or meaning                          |
 | ---------------------- | --------------------------------------------------- |
-| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten` |
+| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect` |
 | `--kind`               | `voice`, `model`, `bundle`                          |
 | `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`      |
 | `--gender`             | `male`, `female`, `neutral`, `unknown`              |
@@ -62,6 +62,7 @@ Gender is source metadata and is never inferred from a voice name or ID. When th
 ```bash
 onnxvoice install piper:en_US-lessac-medium
 onnxvoice install kokoro:v1.0 --quality fp16
+onnxvoice install inflect:nano-v2
 onnxvoice info piper:en_US-lessac-medium
 onnxvoice path piper:en_US-lessac-medium
 onnxvoice show piper:en_US-lessac-medium
@@ -117,9 +118,11 @@ onnxvoice voices list --system supertonic --lang de
 onnxvoice voices show supertonic:supertonic-3/F1
 onnxvoice voices list --system kitten --lang en-US
 onnxvoice voices show kitten:nano-0.8-int8/Bella
+onnxvoice voices list --system inflect
+onnxvoice voices show inflect:nano-v2/default
 ```
 
-`voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`. See [KittenTTS](systems/kitten.md) for the runtime boundary. See [Catalog voices](voices.md) for reference forms and record fields.
+`voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`; Inflect models expose a fixed `default` voice such as `inflect:nano-v2/default`. See [Inflect v2](systems/inflect.md) for its token-ID runtime boundary and [KittenTTS](systems/kitten.md) for the Kitten boundary. See [Catalog voices](voices.md) for reference forms and record fields.
 
 ## Pocket diagnostics and offline use
 

@@ -65,6 +65,7 @@ DEFAULT_SOURCES = {
     "pocket": "https://raw.githubusercontent.com/buchwandler/pocket-onnx-bundles/main/catalog/bundles.json",
     "supertonic": "https://raw.githubusercontent.com/buchwandler/supertonic-onnx-bundles/main/catalog/bundles.json",
     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
+    "inflect": "https://raw.githubusercontent.com/buchwandler/inflect-onnx-bundles/main/catalog/models.json",
 }
 _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
     {
@@ -226,6 +227,8 @@ class CatalogClient:
             return _parse_supertonic(raw)
         if system == "kitten":
             return _parse_kitten(raw)
+        if system == "inflect":
+            return _parse_inflect(raw)
         raise CatalogError(f"No parser for system {system!r}")
 
     def resolve(
@@ -1335,6 +1338,350 @@ def _parse_kitten(data: Mapping[str, Any]) -> list[CatalogItem]:
                 sample_rate=sample_rate,
                 voices=tuple(voice_aliases),
                 default_voice=None,
+                metadata=metadata,
+            )
+        )
+    return result
+
+
+_INFLECT_MODEL_FIELDS = frozenset(
+    {
+        "id",
+        "aliases",
+        "name",
+        "version",
+        "language",
+        "sample_rate",
+        "voice_mode",
+        "default_voice",
+        "voices",
+        "controls",
+        "runtime",
+        "upstream",
+        "artifacts",
+        "metadata",
+    }
+)
+_INFLECT_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_INFLECT_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_INFLECT_HF_REPOSITORY_RE = re.compile(r"^[^/\\\\\s]+/[^/\\\\\s]+$")
+_INFLECT_HF_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+_INFLECT_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+_INFLECT_ARTIFACT_FILENAMES = {"duration": "duration.onnx", "decode": "decode.onnx"}
+
+
+def _require_inflect_fields(
+    value: Mapping[str, Any], expected: set[str] | frozenset[str], label: str
+) -> None:
+    if set(value) == set(expected):
+        return
+    missing = sorted(set(expected) - set(value))
+    unexpected = sorted(set(value) - set(expected))
+    details = []
+    if missing:
+        details.append(f"missing: {', '.join(missing)}")
+    if unexpected:
+        details.append(f"unexpected: {', '.join(unexpected)}")
+    raise CatalogError(f"{label} fields mismatch ({'; '.join(details)})")
+
+
+def _require_inflect_safe_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _INFLECT_SAFE_ID_RE.fullmatch(value) is None:
+        raise CatalogError(f"{label} is unsafe: {value!r}")
+    return value
+
+
+def _require_inflect_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise CatalogError(f"{label} must be a non-empty string")
+    return value
+
+
+def _require_inflect_language(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _INFLECT_LANGUAGE_RE.fullmatch(value) is None:
+        raise CatalogError(f"{label} must be a valid language tag")
+    return normalize_language_tag(value)
+
+
+def _inflect_number(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CatalogError(f"{label} must be a finite real number")
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        raise CatalogError(f"{label} must be a finite real number") from None
+    if not math.isfinite(number):
+        raise CatalogError(f"{label} must be a finite real number")
+    return number
+
+
+def _parse_inflect(data: Mapping[str, Any]) -> list[CatalogItem]:
+    """Parse and validate the pinned schema-1 Inflect v2 model catalog."""
+    if not isinstance(data, Mapping):
+        raise CatalogError("Inflect catalog must be an object")
+    if set(data) != {"schema", "kind", "models"}:
+        raise CatalogError("Inflect catalog must contain exactly schema, kind, and models")
+    if type(data.get("schema")) is not int or data["schema"] != 1:
+        raise CatalogError("Inflect catalog schema must be 1")
+    if data.get("kind") != "inflect-onnx-model-catalog":
+        raise CatalogError(f"Unexpected Inflect catalog kind: {data.get('kind')!r}")
+
+    models = data.get("models")
+    if not isinstance(models, Mapping) or not models:
+        raise CatalogError("Inflect catalog models must be a non-empty mapping")
+    model_ids: dict[str, str] = {}
+    for model_id in models:
+        safe_id = _require_inflect_safe_id(model_id, "Inflect model ID")
+        folded_id = safe_id.casefold()
+        if folded_id in model_ids:
+            raise CatalogError(f"Inflect model IDs collide after normalization: {safe_id!r}")
+        model_ids[folded_id] = safe_id
+
+    result: list[CatalogItem] = []
+    normalized_names = dict(model_ids)
+    for model_id, raw_model in models.items():
+        if not isinstance(raw_model, Mapping):
+            raise CatalogError(f"{model_id}: model entry must be an object")
+        _require_inflect_fields(raw_model, _INFLECT_MODEL_FIELDS, f"{model_id} model")
+        if raw_model.get("id") != model_id:
+            raise CatalogError(f"Inflect model map key {model_id!r} does not match id")
+
+        raw_aliases = raw_model["aliases"]
+        if not isinstance(raw_aliases, Sequence) or isinstance(raw_aliases, (str, bytes)):
+            raise CatalogError(f"{model_id}: aliases must be a sequence")
+        aliases: list[str] = []
+        for raw_alias in raw_aliases:
+            alias = _require_inflect_safe_id(raw_alias, f"{model_id} alias")
+            folded_alias = alias.casefold()
+            if folded_alias in normalized_names:
+                raise CatalogError(f"{model_id}: duplicate or conflicting alias {alias!r}")
+            normalized_names[folded_alias] = alias
+            aliases.append(alias)
+
+        name = _require_inflect_text(raw_model["name"], f"{model_id} name")
+        version = _require_inflect_text(raw_model["version"], f"{model_id} version")
+        language = _require_inflect_language(raw_model["language"], f"{model_id} language")
+        sample_rate = raw_model["sample_rate"]
+        if type(sample_rate) is not int or sample_rate != 24000:
+            raise CatalogError(f"{model_id}: sample_rate must be 24000 for Inflect v2")
+
+        if raw_model["voice_mode"] != "fixed":
+            raise CatalogError(f"{model_id}: voice_mode must be 'fixed'")
+        default_voice = _require_inflect_safe_id(raw_model["default_voice"], f"{model_id} default_voice")
+        if default_voice != "default":
+            raise CatalogError(f"{model_id}: fixed voice default_voice must be 'default'")
+        raw_voices = raw_model["voices"]
+        if not isinstance(raw_voices, Mapping) or set(raw_voices) != {default_voice}:
+            raise CatalogError(f"{model_id}: fixed voice catalog must contain exactly 'default'")
+        raw_voice = raw_voices[default_voice]
+        if not isinstance(raw_voice, Mapping):
+            raise CatalogError(f"{model_id}: fixed voice entry must be an object")
+        _require_inflect_fields(
+            raw_voice, {"id", "name", "language", "gender", "synthetic"}, f"{model_id} voice"
+        )
+        voice_id = _require_inflect_safe_id(raw_voice["id"], f"{model_id} voice id")
+        if voice_id != default_voice:
+            raise CatalogError(f"{model_id}: fixed voice id must match default_voice")
+        voice_name = _require_inflect_text(raw_voice["name"], f"{model_id} voice name")
+        voice_language = _require_inflect_language(
+            raw_voice["language"], f"{model_id} voice language"
+        )
+        if voice_language != language:
+            raise CatalogError(f"{model_id}: fixed voice language must match model language")
+        gender = raw_voice["gender"]
+        if not isinstance(gender, str) or gender not in VALID_GENDERS:
+            raise CatalogError(f"{model_id}: voice gender is not a supported descriptive value")
+        synthetic = raw_voice["synthetic"]
+        if not isinstance(synthetic, bool):
+            raise CatalogError(f"{model_id}: voice synthetic flag must be boolean")
+        voice_details = {
+            default_voice: {
+                "id": voice_id,
+                "name": voice_name,
+                "language": language_base(voice_language),
+                "locale": voice_language,
+                "gender": gender,
+                "synthetic": synthetic,
+            }
+        }
+
+        controls = raw_model["controls"]
+        if not isinstance(controls, Mapping):
+            raise CatalogError(f"{model_id}: controls must be an object")
+        _require_inflect_fields(controls, {"speed", "variation", "seed_default"}, f"{model_id} controls")
+        normalized_controls: dict[str, Any] = {}
+        for control_name, lower_limit, upper_limit in (
+            ("speed", 0.5, 2.0),
+            ("variation", 0.0, 1.0),
+        ):
+            raw_control = controls[control_name]
+            if not isinstance(raw_control, Mapping):
+                raise CatalogError(f"{model_id}: {control_name} control must be an object")
+            _require_inflect_fields(
+                raw_control,
+                {"default", "minimum", "maximum"},
+                f"{model_id} {control_name} control",
+            )
+            control_values = {
+                field: _inflect_number(raw_control[field], f"{model_id} {control_name} control {field}")
+                for field in ("default", "minimum", "maximum")
+            }
+            minimum = control_values["minimum"]
+            maximum = control_values["maximum"]
+            if (
+                minimum > control_values["default"]
+                or control_values["default"] > maximum
+                or minimum < lower_limit
+                or maximum > upper_limit
+            ):
+                raise CatalogError(f"{model_id}: {control_name} control has incoherent bounds")
+            normalized_controls[control_name] = control_values
+        seed_default = controls["seed_default"]
+        if isinstance(seed_default, bool) or not isinstance(seed_default, int):
+            raise CatalogError(f"{model_id}: seed_default must be an integer, not bool")
+        normalized_controls["seed_default"] = seed_default
+
+        runtime = raw_model["runtime"]
+        if not isinstance(runtime, Mapping):
+            raise CatalogError(f"{model_id}: runtime must be an object")
+        _require_inflect_fields(
+            runtime, {"profile", "precision", "onnx_opset"}, f"{model_id} runtime"
+        )
+        if runtime["profile"] != "inflect-v2-split-v1":
+            raise CatalogError(f"{model_id}: unsupported runtime profile {runtime['profile']!r}")
+        if runtime["precision"] != "fp32":
+            raise CatalogError(f"{model_id}: Inflect v2 runtime precision must be 'fp32'")
+        if type(runtime["onnx_opset"]) is not int or runtime["onnx_opset"] <= 0:
+            raise CatalogError(f"{model_id}: runtime onnx_opset must be a positive integer")
+        normalized_runtime = {**runtime, "layout": "split"}
+
+        upstream = raw_model["upstream"]
+        if not isinstance(upstream, Mapping):
+            raise CatalogError(f"{model_id}: upstream must be an object")
+        _require_inflect_fields(
+            upstream,
+            {"provider", "repository", "revision", "license", "source_repository", "source_revision"},
+            f"{model_id} upstream",
+        )
+        if upstream["provider"] != "huggingface":
+            raise CatalogError(f"{model_id}: upstream provider must be huggingface")
+        repository = upstream["repository"]
+        if not isinstance(repository, str) or _INFLECT_HF_REPOSITORY_RE.fullmatch(repository) is None:
+            raise CatalogError(f"{model_id}: upstream repository must have owner/name form")
+        revision = upstream["revision"]
+        if not isinstance(revision, str) or _INFLECT_HF_REVISION_RE.fullmatch(revision) is None:
+            raise CatalogError(f"{model_id}: upstream revision must be a lowercase 40-character SHA")
+        source_repository = upstream["source_repository"]
+        if (
+            not isinstance(source_repository, str)
+            or _INFLECT_HF_REPOSITORY_RE.fullmatch(source_repository) is None
+        ):
+            raise CatalogError(f"{model_id}: source_repository must have owner/name form")
+        source_revision = upstream["source_revision"]
+        if (
+            not isinstance(source_revision, str)
+            or _INFLECT_HF_REVISION_RE.fullmatch(source_revision) is None
+        ):
+            raise CatalogError(
+                f"{model_id}: source_revision must be a lowercase 40-character SHA"
+            )
+        license_name = _require_inflect_text(upstream["license"], f"{model_id} upstream license")
+
+        raw_artifacts = raw_model["artifacts"]
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{model_id}: artifacts must be a sequence")
+        if len(raw_artifacts) != 2:
+            raise CatalogError(f"{model_id}: artifacts must contain exactly duration and decode")
+        artifacts: list[Artifact] = []
+        seen_roles: set[str] = set()
+        for raw_artifact in raw_artifacts:
+            if not isinstance(raw_artifact, Mapping):
+                raise CatalogError(f"{model_id}: artifact must be an object")
+            _require_inflect_fields(
+                raw_artifact,
+                {"role", "format", "filename", "url", "size", "sha256"},
+                f"{model_id} artifact",
+            )
+            role = raw_artifact["role"]
+            if not isinstance(role, str) or role not in _INFLECT_ARTIFACT_FILENAMES:
+                raise CatalogError(f"{model_id}: unknown Inflect artifact role {role!r}")
+            if role in seen_roles:
+                raise CatalogError(f"{model_id}: duplicate {role!r} artifact")
+            seen_roles.add(role)
+            if raw_artifact["format"] != "onnx":
+                raise CatalogError(f"{model_id}/{role}: format must be 'onnx'")
+            filename = _require_inflect_safe_id(
+                raw_artifact["filename"], f"{model_id}/{role} filename"
+            )
+            if filename != _INFLECT_ARTIFACT_FILENAMES[role]:
+                raise CatalogError(f"{model_id}/{role}: filename must be {role}.onnx")
+            expected_url = (
+                f"https://huggingface.co/{repository}/resolve/{revision}/onnx/{filename}"
+            )
+            url = raw_artifact["url"]
+            if not isinstance(url, str) or url != expected_url:
+                raise CatalogError(
+                    f"{model_id}/{role}: URL is not pinned to upstream repository/revision"
+                )
+            size = raw_artifact["size"]
+            if type(size) is not int or size <= 0:
+                raise CatalogError(f"{model_id}/{role}: size must be a positive integer")
+            sha256 = raw_artifact["sha256"]
+            if not isinstance(sha256, str) or _INFLECT_SHA256_RE.fullmatch(sha256) is None:
+                raise CatalogError(
+                    f"{model_id}/{role}: sha256 must be lowercase 64-character hex"
+                )
+            source_path = f"onnx/{filename}"
+            artifacts.append(
+                Artifact(
+                    role=role,
+                    filename=filename,
+                    url=url,
+                    size=size,
+                    sha256=sha256,
+                    format="onnx",
+                    metadata={
+                        "path": source_path,
+                        "source": {
+                            "provider": "huggingface",
+                            "repository": repository,
+                            "revision": revision,
+                            "path": source_path,
+                        },
+                    },
+                )
+            )
+        if seen_roles != set(_INFLECT_ARTIFACT_FILENAMES):
+            raise CatalogError(f"{model_id}: artifacts must contain exactly duration and decode")
+
+        raw_metadata = raw_model["metadata"]
+        if not isinstance(raw_metadata, Mapping):
+            raise CatalogError(f"{model_id}: metadata must be an object")
+        metadata = {
+            **raw_metadata,
+            "name": name,
+            "version": version,
+            "language": language,
+            "language_codes": (language,),
+            "voice_mode": "fixed",
+            "controls": normalized_controls,
+            "runtime": normalized_runtime,
+            "upstream": dict(upstream),
+            "source_repository": source_repository,
+            "source_revision": source_revision,
+            "license": license_name,
+            "voice_details": voice_details,
+        }
+        result.append(
+            CatalogItem(
+                system="inflect",
+                id=model_id,
+                kind="model",
+                artifacts=tuple(artifacts),
+                aliases=tuple(aliases),
+                sample_rate=sample_rate,
+                voices=(default_voice,),
+                default_voice=default_voice,
                 metadata=metadata,
             )
         )

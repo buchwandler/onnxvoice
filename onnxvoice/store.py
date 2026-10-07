@@ -79,13 +79,14 @@ def _try_os_lock(fd: int) -> bool:
     """Try an exclusive non-blocking platform lock; return False if contended."""
     if os.name == "nt":
         import msvcrt
+        msvcrt_api: Any = msvcrt
 
         if os.fstat(fd).st_size == 0:
             os.lseek(fd, 0, os.SEEK_SET)
             os.write(fd, b"\0")
         os.lseek(fd, 0, os.SEEK_SET)
         try:
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            msvcrt_api.locking(fd, msvcrt_api.LK_NBLCK, 1)
         except OSError as exc:
             if exc.errno in (errno.EACCES, errno.EDEADLK):
                 return False
@@ -109,9 +110,10 @@ def _try_os_lock(fd: int) -> bool:
 def _unlock_os_lock(fd: int) -> None:
     if os.name == "nt":
         import msvcrt
+        msvcrt_api: Any = msvcrt
 
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        msvcrt_api.locking(fd, msvcrt_api.LK_UNLCK, 1)
         return
     if os.name == "posix":
         import fcntl

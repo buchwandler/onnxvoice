@@ -62,6 +62,7 @@ finally:
 | Pocket     | Yes              | Yes     | Catalog-dependent |
 | Supertonic | Yes              | Yes     | Yes               |
 | Kitten     | Yes              | Yes     | Yes               |
+| Inflect    | Yes              | Yes     | Fixed `default` voice |
 
 Catalog contents determine which named voices are available. Discovery does not depend on a separate capability list. Adapters execute system-specific model contracts and do not imply text normalization or phonemization support.
 

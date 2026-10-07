@@ -2,7 +2,7 @@
 
 ## System
 
-A system identifies an adapter and catalog format. The built-in systems are Piper, Kokoro, Pocket, Supertonic, and Kitten. Normalized catalog items determine which voices are exposed for each system.
+A system identifies an adapter and catalog format. The built-in systems are Piper, Kokoro, Pocket, Supertonic, Kitten, and Inflect. Normalized catalog items determine which voices are exposed for each system.
 
 ## Catalog item and artifact
 
@@ -12,13 +12,13 @@ For Kokoro, selecting a quality chooses a model variant rather than installing e
 
 ## Reference and installation
 
-A reference is the canonical `system:id` name used to identify a catalog item, such as `piper:en_US-lessac-medium`, `kokoro:v1.0`, `pocket:english_2026-04`, and `kitten:nano-0.8-int8`. An installation is the verified managed local representation of a selected catalog item or imported model.
+A reference is the canonical `system:id` name used to identify a catalog item, such as `piper:en_US-lessac-medium`, `kokoro:v1.0`, `pocket:english_2026-04`, `kitten:nano-0.8-int8`, and `inflect:nano-v2`. An installation is the verified managed local representation of a selected catalog item or imported model.
 
 An installation manifest records the artifacts and selected metadata. An installation may share immutable content-addressed blobs with other installations.
 
 ## Voice record and semantic reference
 
-A voice record identifies a normalized catalog voice with `(system, asset_id, voice_id)`. Its semantic reference has the form `<system>:<asset-id>[/<voice-id>]`. For example, `piper:en_US-lessac-medium` identifies an asset that is itself a voice, while `kokoro:v1.0/af_heart`, `supertonic:supertonic-3/F1`, and `kitten:nano-0.8-int8/Bella` identify child voices in model or bundle catalog items. See [Catalog voices](voices.md).
+A voice record identifies a normalized catalog voice with `(system, asset_id, voice_id)`. Its semantic reference has the form `<system>:<asset-id>[/<voice-id>]`. For example, `piper:en_US-lessac-medium` identifies an asset that is itself a voice, while `kokoro:v1.0/af_heart`, `supertonic:supertonic-3/F1`, `kitten:nano-0.8-int8/Bella`, and `inflect:nano-v2/default` identify child voices in model or bundle catalog items. Inflect v2 models expose one fixed `default` voice. See [Catalog voices](voices.md).
 
 ## Managed and local runtime opening
 
@@ -36,4 +36,4 @@ The cache can contain catalog data, installed assets, content-addressed blobs, a
 
 ## Catalog sources
 
-The default catalog client has sources for Piper, Kokoro, Pocket, Supertonic, and Kitten. Catalogs and model artifacts are external data and are not bundled with the package. Override a system source with `ONNXVOICE_PIPER_CATALOG`, `ONNXVOICE_KOKORO_CATALOG`, `ONNXVOICE_POCKET_CATALOG`, `ONNXVOICE_SUPERTONIC_CATALOG`, or `ONNXVOICE_KITTEN_CATALOG`. Each value may be a local path or an HTTP(S) URL. Python callers can use `catalog_sources` when constructing `OnnxVoice`.
+The default catalog client has sources for Piper, Kokoro, Pocket, Supertonic, Kitten, and Inflect. Catalogs and model artifacts are external data and are not bundled with the package. Override a system source with `ONNXVOICE_PIPER_CATALOG`, `ONNXVOICE_KOKORO_CATALOG`, `ONNXVOICE_POCKET_CATALOG`, `ONNXVOICE_SUPERTONIC_CATALOG`, `ONNXVOICE_KITTEN_CATALOG`, or `ONNXVOICE_INFLECT_CATALOG`. Each value may be a local path or an HTTP(S) URL. Python callers can use `catalog_sources` when constructing `OnnxVoice`.

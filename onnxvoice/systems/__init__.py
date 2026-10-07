@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..errors import UnsupportedSystemError
 from .base import SystemAdapter
+from .inflect import InflectAdapter
 from .kitten import KittenAdapter
 from .kokoro import KokoroAdapter
 from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
@@ -17,6 +18,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
     PocketAdapter.system: PocketAdapter,
     SupertonicAdapter.system: SupertonicAdapter,
     KittenAdapter.system: KittenAdapter,
+    InflectAdapter.system: InflectAdapter,
 }
 
 
@@ -42,6 +44,7 @@ __all__ = [
     "PocketAdapter",
     "SupertonicAdapter",
     "KittenAdapter",
+    "InflectAdapter",
     "SplitKokoroRuntime",
     "KokoroCloningRuntime",
     "KokoroReferenceState",

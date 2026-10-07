@@ -20,6 +20,7 @@ It deliberately does not own text normalization, G2P/phonemization, sentence pla
 - [Getting started](getting-started.md)
 - [CLI reference and common workflows](cli.md)
 - [Catalog voices and semantic references](voices.md)
+- [Inflect v2 runtime](systems/inflect.md)
 - [Python usage](python-api.md)
 - [Storage and cache management](storage.md)
 - [ONNX Runtime providers](providers.md)
