@@ -1221,7 +1221,9 @@ def _parse_sopro(data: Mapping[str, Any]) -> list[CatalogItem]:
                     try:
                         validate_relative_path(raw_path, field_name="Sopro profile artifact path")
                     except ValueError as exc:
-                        raise CatalogError(f"{bundle_id}/{profile_name}/{path_role}: {exc}") from exc
+                        raise CatalogError(
+                            f"{bundle_id}/{profile_name}/{path_role}: {exc}"
+                        ) from exc
                     paths[path_role] = raw_path
                 normalized_profile[category] = paths
             profiles[profile_name] = normalized_profile
