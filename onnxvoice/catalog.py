@@ -49,6 +49,12 @@ ST_MODEL_COMPONENTS = frozenset(
 )
 ST_ARTIFACT_ROLES = frozenset({"config", "unicode_indexer", "model", "voice_style"})
 
+_SOPRO_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SOPRO_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+_SOPRO_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SOPRO_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+_SOPRO_ARTIFACT_ROLES = frozenset({"manifest", "tokenizer", "graph", "shard"})
+
 POCKET_QUALIFIED_ROLES = frozenset(
     {
         "flow_lm_main",
@@ -66,6 +72,7 @@ DEFAULT_SOURCES = {
     "supertonic": "https://raw.githubusercontent.com/buchwandler/supertonic-onnx-bundles/main/catalog/bundles.json",
     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
     "inflect": "https://raw.githubusercontent.com/buchwandler/inflect-onnx-bundles/main/catalog/models.json",
+    "sopro": "https://raw.githubusercontent.com/buchwandler/sopro-onnx-bundles/main/catalog/bundles.json",
 }
 _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
     {
@@ -227,6 +234,8 @@ class CatalogClient:
             return _parse_supertonic(raw)
         if system == "kitten":
             return _parse_kitten(raw)
+        if system == "sopro":
+            return _parse_sopro(raw)
         if system == "inflect":
             return _parse_inflect(raw)
         raise CatalogError(f"No parser for system {system!r}")
@@ -274,6 +283,8 @@ class CatalogClient:
         assert item is not None
         if item.system == "supertonic" and quality is not None:
             raise AssetNotFoundError("Supertonic has no quality profiles")
+        if item.system == "sopro":
+            return _select_sopro_profile(item, quality)
         if item.system == "pocket":
             return _select_pocket_profile(item, quality)
         selected_quality = quality
@@ -1077,6 +1088,368 @@ def _parse_supertonic(data: dict[str, Any]) -> list[CatalogItem]:
             )
         )
     return result
+
+
+def _require_sopro_safe_id(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or value in {".", ".."}
+        or _SOPRO_SAFE_ID_RE.fullmatch(value) is None
+    ):
+        raise CatalogError(f"{label} is unsafe: {value!r}")
+    return value
+
+
+def _sopro_artifact_url(repository: str, commit: str, path: str) -> str:
+    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
+    encoded_path = urllib.parse.quote(path, safe="/")
+    return f"https://huggingface.co/{repo}/resolve/{commit}/{encoded_path}?download=true"
+
+
+def _parse_sopro(data: Mapping[str, Any]) -> list[CatalogItem]:
+    """Parse a pinned Sopro ONNX export catalog without losing bundle layout."""
+    if not isinstance(data, Mapping):
+        raise CatalogError("Sopro catalog must be an object")
+    if type(data.get("schema")) is not int or data.get("schema") != 1:
+        raise CatalogError("Sopro catalog schema must be 1")
+    if data.get("kind") != "sopro-onnx-bundle-catalog":
+        raise CatalogError(f"Unexpected Sopro catalog kind: {data.get('kind')!r}")
+    if data.get("status") != "pinned":
+        raise CatalogError(
+            "Sopro catalog status must be 'pinned'; bootstrap catalogs are not installable"
+        )
+
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Mapping) or not bundles:
+        raise CatalogError("Sopro catalog bundles must be a non-empty mapping")
+    bundle_ids: set[str] = set()
+    for bundle_id in bundles:
+        bundle_ids.add(_require_sopro_safe_id(bundle_id, "Sopro bundle ID"))
+
+    all_names = set(bundle_ids)
+    result: list[CatalogItem] = []
+    for bundle_id, raw_entry in bundles.items():
+        if not isinstance(raw_entry, Mapping):
+            raise CatalogError(f"{bundle_id}: bundle entry must be an object")
+        entry = raw_entry
+        if entry.get("id") != bundle_id:
+            raise CatalogError(f"Sopro bundle map key {bundle_id!r} does not match id")
+        if entry.get("ref") != f"sopro:{bundle_id}":
+            raise CatalogError(f"{bundle_id}: canonical ref must be 'sopro:{bundle_id}'")
+
+        aliases_raw = entry.get("aliases", [])
+        if not isinstance(aliases_raw, Sequence) or isinstance(aliases_raw, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: aliases must be a sequence")
+        aliases: list[str] = []
+        for raw_alias in aliases_raw:
+            alias = _require_sopro_safe_id(raw_alias, f"{bundle_id} alias")
+            if alias in all_names:
+                raise CatalogError(f"{bundle_id}: duplicate or conflicting alias {alias!r}")
+            all_names.add(alias)
+            aliases.append(alias)
+
+        repository = entry.get("model")
+        repo_parts = repository.split("/") if isinstance(repository, str) else []
+        if len(repo_parts) != 2 or any(
+            part in {".", ".."} or re.fullmatch(r"[A-Za-z0-9_.-]+", part) is None
+            for part in repo_parts
+        ):
+            raise CatalogError(f"{bundle_id}: model must be an owner/name repository identifier")
+        source_commit = entry.get("source_commit")
+        if not isinstance(source_commit, str) or _SOPRO_COMMIT_RE.fullmatch(source_commit) is None:
+            raise CatalogError(f"{bundle_id}: source_commit must be a lowercase 40-character SHA")
+        revision = entry.get("revision")
+        if revision is not None and (
+            not isinstance(revision, str)
+            or not revision
+            or re.fullmatch(r"[A-Za-z0-9_.-]+", revision) is None
+        ):
+            raise CatalogError(f"{bundle_id}: upstream manifest revision is invalid")
+
+        sample_rate = entry.get("sample_rate")
+        if type(sample_rate) is not int or sample_rate <= 0:
+            raise CatalogError(f"{bundle_id}: sample_rate must be a positive integer")
+        raw_languages = entry.get("languages")
+        if (
+            not isinstance(raw_languages, Sequence)
+            or isinstance(raw_languages, (str, bytes))
+            or not raw_languages
+        ):
+            raise CatalogError(f"{bundle_id}: languages must be a non-empty sequence")
+        languages: list[str] = []
+        for language in raw_languages:
+            if not isinstance(language, str) or _SOPRO_LANGUAGE_RE.fullmatch(language) is None:
+                raise CatalogError(f"{bundle_id}: languages must contain valid language tags")
+            if language in languages:
+                raise CatalogError(f"{bundle_id}: duplicate language {language!r}")
+            languages.append(language)
+
+        raw_profiles = entry.get("profiles")
+        if not isinstance(raw_profiles, Mapping) or not raw_profiles:
+            raise CatalogError(f"{bundle_id}: profiles must be a non-empty mapping")
+        profiles: dict[str, dict[str, Any]] = {}
+        for raw_profile, raw_profile_data in raw_profiles.items():
+            profile = _require_sopro_safe_id(raw_profile, f"{bundle_id} profile")
+            if re.fullmatch(r"[a-z0-9][a-z0-9-]*", profile) is None:
+                raise CatalogError(f"{bundle_id}: invalid profile name {profile!r}")
+            if not isinstance(raw_profile_data, Mapping):
+                raise CatalogError(f"{bundle_id}/{profile}: profile must be an object")
+            provider = raw_profile_data.get("provider")
+            dtype = raw_profile_data.get("dtype")
+            if not isinstance(provider, str) or not provider:
+                raise CatalogError(f"{bundle_id}/{profile}: provider is required")
+            if not isinstance(dtype, str) or not dtype:
+                raise CatalogError(f"{bundle_id}/{profile}: dtype is required")
+            normalized_profile: dict[str, Any] = {"provider": provider, "dtype": dtype}
+            for category in ("graphs", "shards"):
+                raw_paths = raw_profile_data.get(category)
+                if not isinstance(raw_paths, Mapping) or not raw_paths:
+                    raise CatalogError(
+                        f"{bundle_id}/{profile}: {category} must be a non-empty mapping"
+                    )
+                paths: dict[str, str] = {}
+                for raw_role, raw_path in raw_paths.items():
+                    role = _require_sopro_safe_id(
+                        raw_role, f"{bundle_id}/{profile} {category} role"
+                    )
+                    if not isinstance(raw_path, str):
+                        raise CatalogError(
+                            f"{bundle_id}/{profile}/{role}: artifact path must be a string"
+                        )
+                    try:
+                        validate_relative_path(raw_path, field_name="Sopro profile artifact path")
+                    except ValueError as exc:
+                        raise CatalogError(f"{bundle_id}/{profile}/{role}: {exc}") from exc
+                    paths[role] = raw_path
+                normalized_profile[category] = paths
+            profiles[profile] = normalized_profile
+
+        raw_artifacts = entry.get("artifacts")
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: artifacts must be a sequence")
+        artifacts: list[Artifact] = []
+        seen_artifact_keys: set[tuple[str, str | None, str | None]] = set()
+        path_pins: dict[str, tuple[str, str | None, str | None, int | None, str | None]] = {}
+        profile_artifacts: dict[str, dict[str, dict[str, str]]] = {
+            profile: {"graphs": {}, "shards": {}} for profile in profiles
+        }
+        static_roles: set[str] = set()
+        for raw_artifact in raw_artifacts:
+            if not isinstance(raw_artifact, Mapping):
+                raise CatalogError(f"{bundle_id}: artifact must be an object")
+            role = raw_artifact.get("role")
+            if not isinstance(role, str) or role not in _SOPRO_ARTIFACT_ROLES:
+                raise CatalogError(f"{bundle_id}: unknown artifact role {role!r}")
+            component = raw_artifact.get("component")
+            profile = raw_artifact.get("profile")
+            if role in {"manifest", "tokenizer"}:
+                if component is not None or profile is not None:
+                    raise CatalogError(
+                        f"{bundle_id}/{role}: static artifacts cannot have component/profile"
+                    )
+                if role in static_roles:
+                    raise CatalogError(f"{bundle_id}: duplicate {role!r} artifact")
+                static_roles.add(role)
+            else:
+                component = _require_sopro_safe_id(component, f"{bundle_id}/{role} component")
+                if not isinstance(profile, str) or profile not in profiles:
+                    raise CatalogError(
+                        f"{bundle_id}/{role}/{component}: unknown profile {profile!r}"
+                    )
+                category = "graphs" if role == "graph" else "shards"
+                expected_path = profiles[profile][category].get(component)
+                if expected_path is None:
+                    raise CatalogError(
+                        f"{bundle_id}/{profile}: undeclared {role} component {component!r}"
+                    )
+            key = (role, component, profile)
+            if key in seen_artifact_keys:
+                raise CatalogError(f"{bundle_id}: duplicate artifact declaration {key!r}")
+            seen_artifact_keys.add(key)
+
+            path = raw_artifact.get("path")
+            if not isinstance(path, str):
+                raise CatalogError(f"{bundle_id}/{role}: artifact path is required")
+            try:
+                validate_relative_path(path, field_name="Sopro artifact path")
+            except ValueError as exc:
+                raise CatalogError(f"{bundle_id}/{role}: {exc}") from exc
+            filename = raw_artifact.get("filename")
+            if not isinstance(filename, str):
+                raise CatalogError(f"{bundle_id}/{role}: artifact filename is required")
+            try:
+                validate_safe_component(filename, field_name="Sopro artifact filename")
+            except ValueError as exc:
+                raise CatalogError(f"{bundle_id}/{role}: {exc}") from exc
+            if filename != Path(path).name:
+                raise CatalogError(
+                    f"{bundle_id}/{role}: filename must match the final path component"
+                )
+            if role in {"graph", "shard"} and path != expected_path:
+                raise CatalogError(
+                    f"{bundle_id}/{profile}/{component}: artifact path disagrees with profile manifest"
+                )
+
+            expected_url = _sopro_artifact_url(repository, source_commit, path)
+            url = raw_artifact.get("url")
+            if not isinstance(url, str) or url != expected_url:
+                raise CatalogError(
+                    f"{bundle_id}/{role}: artifact URL is not pinned to source commit"
+                )
+            size = raw_artifact.get("bytes")
+            if size is not None and (type(size) is not int or size <= 0):
+                raise CatalogError(
+                    f"{bundle_id}/{role}: bytes must be a positive integer when supplied"
+                )
+            sha256 = raw_artifact.get("sha256")
+            if sha256 is not None and (
+                not isinstance(sha256, str) or _SOPRO_SHA256_RE.fullmatch(sha256) is None
+            ):
+                raise CatalogError(f"{bundle_id}/{role}: sha256 must be lowercase 64-character hex")
+            if role in {"graph", "shard"} and (size is None or sha256 is None):
+                raise CatalogError(
+                    f"{bundle_id}/{role}/{component}: pinned size and sha256 are required"
+                )
+            pin = (role, component, url, size, sha256)
+            if path in path_pins and path_pins[path] != pin:
+                raise CatalogError(f"{bundle_id}: conflicting duplicate artifact path {path!r}")
+            path_pins[path] = pin
+            if role in {"graph", "shard"}:
+                category = "graphs" if role == "graph" else "shards"
+                profile_artifacts[profile][category][component] = path
+
+            raw_provider = raw_artifact.get("provider")
+            raw_dtype = raw_artifact.get("dtype")
+            for field_name, value in (("provider", raw_provider), ("dtype", raw_dtype)):
+                if value is not None and (not isinstance(value, str) or not value):
+                    raise CatalogError(
+                        f"{bundle_id}/{role}: {field_name} must be a non-empty string"
+                    )
+            metadata = {
+                "path": path,
+                "profile": profile,
+                "source_commit": source_commit,
+                "source_repository": repository,
+            }
+            if raw_provider is not None:
+                metadata["provider"] = raw_provider
+            if raw_dtype is not None:
+                metadata["dtype"] = raw_dtype
+            artifacts.append(
+                Artifact(
+                    role=role,
+                    component=component,
+                    filename=path,
+                    url=url,
+                    size=size,
+                    sha256=sha256,
+                    quality=profile,
+                    format={
+                        "manifest": "json",
+                        "tokenizer": "json",
+                        "graph": "onnx",
+                        "shard": "external-data",
+                    }[role],
+                    metadata=metadata,
+                )
+            )
+
+        if static_roles != {"manifest", "tokenizer"}:
+            missing = {"manifest", "tokenizer"} - static_roles
+            raise CatalogError(
+                f"{bundle_id}: missing required static artifacts: {', '.join(sorted(missing))}"
+            )
+        for profile, declarations in profiles.items():
+            for category in ("graphs", "shards"):
+                if profile_artifacts[profile][category] != declarations[category]:
+                    raise CatalogError(
+                        f"{bundle_id}/{profile}: {category} artifacts do not match profile declarations"
+                    )
+
+        result.append(
+            CatalogItem(
+                system="sopro",
+                id=bundle_id,
+                kind="bundle",
+                artifacts=tuple(artifacts),
+                aliases=tuple(aliases),
+                sample_rate=sample_rate,
+                metadata={
+                    "language_codes": tuple(languages),
+                    "source_repository": repository,
+                    "source_commit": source_commit,
+                    "source_revision": revision,
+                    "manifest_revision": revision,
+                    "profiles": profiles,
+                    "steps": entry.get("steps"),
+                    "catalog_status": "pinned",
+                    "runtime": {"layout": "multi", "profile": None, "revision": revision},
+                },
+            )
+        )
+    return result
+
+
+def _select_sopro_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
+    profiles = item.metadata.get("profiles") or {}
+    if not isinstance(profiles, Mapping) or not profiles:
+        raise CatalogError(f"Sopro bundle {item.id!r} has invalid profiles metadata")
+    choices = ", ".join(sorted(str(profile) for profile in profiles))
+    if quality is None:
+        if len(profiles) == 1:
+            quality = next(iter(profiles))
+        else:
+            raise AssetNotFoundError(
+                f"Sopro profile must be selected with quality=; available profiles: {choices}"
+            )
+    profile = profiles.get(quality)
+    if not isinstance(profile, Mapping):
+        raise AssetNotFoundError(
+            f"Unknown Sopro profile {quality!r}; available profiles: {choices}"
+        )
+
+    static = [artifact for artifact in item.artifacts if artifact.role in {"manifest", "tokenizer"}]
+    if {artifact.role for artifact in static} != {"manifest", "tokenizer"} or len(static) != 2:
+        raise CatalogError(f"Sopro bundle {item.id!r} must contain one manifest and tokenizer")
+    selected = list(static)
+    for role, category in (("graph", "graphs"), ("shard", "shards")):
+        declarations = profile.get(category)
+        if not isinstance(declarations, Mapping) or not declarations:
+            raise CatalogError(f"Sopro profile {quality!r} has invalid {category} metadata")
+        for component, path in declarations.items():
+            matches = [
+                artifact
+                for artifact in item.artifacts
+                if artifact.role == role
+                and artifact.component == component
+                and artifact.quality == quality
+                and artifact.filename == path
+            ]
+            if len(matches) != 1:
+                raise CatalogError(
+                    f"Sopro profile {quality!r} requires exactly one {role}:{component} artifact; "
+                    f"found {len(matches)}"
+                )
+            selected.append(matches[0])
+    return CatalogItem(
+        system=item.system,
+        id=item.id,
+        kind=item.kind,
+        artifacts=tuple(selected),
+        aliases=item.aliases,
+        sample_rate=item.sample_rate,
+        voices=item.voices,
+        default_voice=item.default_voice,
+        metadata={
+            **item.metadata,
+            "selected_quality": quality,
+            "runtime": {
+                **(item.metadata.get("runtime") or {}),
+                "layout": "multi",
+                "profile": quality,
+            },
+        },
+    )
 
 
 _KITTEN_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -1915,7 +2288,7 @@ def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogIte
 
 
 def _item_supports_quality(item: CatalogItem, quality: str) -> bool:
-    if item.system == "pocket":
+    if item.system in {"pocket", "sopro"}:
         profiles = item.metadata.get("profiles") or {}
         return isinstance(profiles, Mapping) and quality in profiles
     return bool(

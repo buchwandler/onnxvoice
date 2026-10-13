@@ -52,5 +52,6 @@ Supertonic uses named model components, a config, a Unicode indexer, and one or 
 
 Pocket local opening requires a complete bundle and its contract metadata. See [Pocket](systems/pocket.md).
 Kitten uses a model ONNX file and `voices.npz`. Supply both through the `model=` and `voices=` parameters to `open_local()`; style extraction and selection stay with the caller. See [KittenTTS](systems/kitten.md).
+Sopro uses a manifest-driven bundle with a tokenizer, selected profile, ONNX graphs, and external-data shards; native one-segment inference is currently supported only for the parity-tested `wasm-uint8` profile with `CPUExecutionProvider`. See [Sopro](systems/sopro.md).
 
 The simple CLI `onnxvoice import --model ...` is not a generic multi-component bundle importer.

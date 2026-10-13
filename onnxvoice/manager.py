@@ -375,6 +375,10 @@ class OnnxVoice:
             model_artifact = next(
                 (artifact for artifact in local_artifacts if artifact.role == "model"), None
             )
+        if system.lower() == "sopro" and model_artifact is None:
+            model_artifact = next(
+                (artifact for artifact in local_artifacts if artifact.role == "manifest"), None
+            )
         if model_artifact is None:
             model_artifact = local_artifacts[0]
         merged_metadata: dict[str, Any] = {

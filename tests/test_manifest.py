@@ -43,7 +43,25 @@ def test_manifest_round_trip_preserves_runtime_metadata(tmp_path):
     assert artifact.metadata == {"layout": "single", "version": 3}
     assert installation.metadata["source_revision"] == "a" * 40
     assert artifact.path.read_bytes() == b"model"
-    assert json.loads((installation.path / "manifest.json").read_text())["schema"] == 3
+    assert (
+        json.loads(
+            (store.manifest_path("test", installation.storage_id or installation.id)).read_text()
+        )["schema"]
+        == 3
+    )
+
+
+def test_legacy_in_tree_install_manifest_remains_readable(tmp_path):
+    source = tmp_path / "voice.onnx"
+    source.write_bytes(b"model")
+    store = AssetStore(tmp_path / "cache")
+    installation = store.install(_item(source))
+    internal_path = store.manifest_path("test", installation.storage_id or installation.id)
+    internal_path.rename(installation.path / "manifest.json")
+
+    assert store.is_installed("test", "voice")
+    assert store.get("test", "voice").path == installation.path
+    assert [item.id for item in store.installed("test")] == ["voice"]
 
 
 def test_schema_one_manifest_remains_readable(tmp_path):
@@ -51,7 +69,7 @@ def test_schema_one_manifest_remains_readable(tmp_path):
     source.write_bytes(b"model")
     store = AssetStore(tmp_path / "cache")
     installation = store.install(_item(source))
-    manifest_path = installation.path / "manifest.json"
+    manifest_path = store.manifest_path("test", installation.storage_id or installation.id)
     data = json.loads(manifest_path.read_text())
     data["schema"] = 1
     for artifact in data["artifacts"]:
@@ -72,7 +90,7 @@ def test_schema_two_still_loads(tmp_path):
     source.write_bytes(b"model")
     store = AssetStore(tmp_path / "cache")
     installation = store.install(_item(source))
-    manifest_path = installation.path / "manifest.json"
+    manifest_path = store.manifest_path("test", installation.storage_id or installation.id)
     data = json.loads(manifest_path.read_text())
     # Downgrade to schema 2 by removing storage_id
     data["schema"] = 2
@@ -104,7 +122,9 @@ def test_schema_three_round_trip_separates_id_and_storage_id(tmp_path):
     # storage_id is set because cache_id was provided
     assert installation.storage_id == "voice--sel-abcd1234"
     # Verify manifest has both fields
-    manifest = json.loads((installation.path / "manifest.json").read_text())
+    manifest = json.loads(
+        (store.manifest_path("test", installation.storage_id or installation.id)).read_text()
+    )
     assert manifest["id"] == "voice"
     assert "storage_id" in manifest
 
@@ -115,7 +135,7 @@ def test_legacy_distribution_cache_manifest_recovers_canonical_id(tmp_path):
     source.write_bytes(b"model")
     store = AssetStore(tmp_path / "cache")
     installation = store.install(_item(source))
-    manifest_path = installation.path / "manifest.json"
+    manifest_path = store.manifest_path("test", installation.storage_id or installation.id)
     data = json.loads(manifest_path.read_text())
     # Simulate legacy schema 2 with hashed storage id as canonical id
     data["schema"] = 2

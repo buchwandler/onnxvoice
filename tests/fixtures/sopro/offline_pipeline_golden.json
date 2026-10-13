@@ -1,0 +1,56 @@
+{
+  "source_runtime_commit": "7bfcf9a0539d274f6593959a21da948f506ceee1",
+  "model_revision": "7a645ef2aaecfea9",
+  "source_bundle_commit": "9fe97bddf52ed785af3634db86a032bb7e07bf18",
+  "profile": "wasm-uint8",
+  "graphs": {
+    "reference": "fb6f3def33e918a590d0a2d66697a5c8178cb5b252eb013f122a696959a2a0b3",
+    "semantic_prefix": "2f0feabb47c3af038c1ed0127d907be674996e64c7a159265ffe181823f009dd",
+    "semantic_core": "352443a2217f730fc08bad3e29c0d6683dcedde568dfe0f8fa58a8b46ef15fd1",
+    "acoustic_condition": "51c6da2a7b3813b7d0d64aef1ef9cc28cdb41064ed5044877f54d4fcb8b6eede",
+    "acoustic_offline_2": "93efe76b3ec7619071b8cee242fa77d81db91896317f2603af4cdeb0ce745764",
+    "vocoder": "dfa4793d1f8a00b2950df821c25813860826b1bcfb6f49fdb1b6c28c5627a1be"
+  },
+  "shards": {
+    "reference": "5ae19423d496681eed622c9ae372cdf60df9a5be106964c1f483eecd6cbe3ca1",
+    "semantic": "91308fb72a6cc5a452f47e6cb5f3156970e39ef8a54690bbf98e116f11c1c75d",
+    "condition": "a4fb7fdc67246d7638d84c72b5b5d4888cc4bbda43944f2405d50fe9c806c359",
+    "acoustic": "66a12561ea7d3a451d4e70be4713cbc03787566804bb137c6f07ccb22c1aceb0",
+    "vocoder": "9d8dea8079be0ef36e5a33de233a9144d060afab4a959b73fdfaee166a5fb235"
+  },
+  "text": "hello, world!",
+  "language": "en",
+  "text_ids": [1, 276, 4, 6393, 264, 1670, 702, 2],
+  "semantic_tokens": [757, 793, 4254, 1448],
+  "seed": 1,
+  "max_seconds": 0.13,
+  "min_seconds": 0.04,
+  "condition_mu_samples": [
+    -8.933302879333496, -4.947371959686279, -2.4012796878814697
+  ],
+  "noise_samples": [
+    -0.3359616696834564, -0.27266544103622437, 0.6300815343856812,
+    0.8215842843055725
+  ],
+  "acoustic_mel_samples": [
+    1.8766779899597168, -4.047323226928711, 3.106018304824829
+  ],
+  "vocoder_feature_samples": [
+    [
+      -9.641244888305664, -10.038093566894531, -18.657670974731445,
+      -10.968358993530273, -0.4771595001220703
+    ],
+    [
+      -10.529050827026367, -11.033928871154785, -19.235258102416992,
+      -10.012084007263184, -0.6827751994132996
+    ]
+  ],
+  "audio_length": 3840,
+  "audio_min": -1.37100350856781,
+  "audio_max": 1.379094123840332,
+  "audio_samples": [
+    -0.0030071388464421034, -0.0029959382954984903, -0.0029184867162257433,
+    0.0002643833286128938, 0.004237641580402851, 0.00040883381734602153,
+    0.010023201815783978, 0.04937973618507385
+  ]
+}

@@ -48,6 +48,9 @@ _LOCAL_LOCKS_GUARD = threading.Lock()
 _ACTIVE_FILE_LOCKS: weakref.WeakSet[Any] = weakref.WeakSet()
 
 
+_INSTALL_MANIFEST_FILENAME = ".onnxvoice-install.json"
+
+
 def _local_lock_for(path: Path) -> threading.Lock:
     key = os.path.normcase(os.path.abspath(os.fspath(path)))
     with _LOCAL_LOCKS_GUARD:
@@ -349,12 +352,19 @@ class AssetStore:
         return self.installs / system / item_id
 
     def manifest_path(self, system: str, item_id: str) -> Path:
-        """Return the manifest path for a managed installation."""
+        """Return the internal installation-record path for a managed installation."""
+        return self.install_path(system, item_id) / _INSTALL_MANIFEST_FILENAME
+
+    def _find_manifest_path(self, system: str, item_id: str) -> Path:
+        """Find the current record or a legacy in-tree manifest."""
+        current = self.manifest_path(system, item_id)
+        if current.is_file():
+            return current
         return self.install_path(system, item_id) / "manifest.json"
 
     def is_installed(self, system: str, item_id: str) -> bool:
         """Return whether the requested installation has a manifest."""
-        return self.manifest_path(system, item_id).is_file()
+        return self._find_manifest_path(system, item_id).is_file()
 
     def installed(self, system: str | None = None) -> list[Installation]:
         """List managed installations, optionally filtered by system."""
@@ -368,14 +378,14 @@ class AssetStore:
             if not root.exists():
                 continue
             for item_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-                manifest = item_dir / "manifest.json"
+                manifest = self._find_manifest_path(root.name, item_dir.name)
                 if manifest.is_file():
                     result.append(self._load_manifest(manifest))
         return result
 
     def get(self, system: str, item_id: str) -> Installation:
         """Load one managed installation from its manifest."""
-        manifest = self.manifest_path(system, item_id)
+        manifest = self._find_manifest_path(system, item_id)
         if not manifest.is_file():
             raise AssetNotFoundError(f"Not installed: {system}:{item_id}")
         return self._load_manifest(manifest)
@@ -440,6 +450,10 @@ class AssetStore:
                 validate_relative_path(artifact.filename, field_name="artifact filename")
             except ValueError as exc:
                 raise UnsafePathError(str(exc)) from exc
+        if any(artifact.filename == _INSTALL_MANIFEST_FILENAME for artifact in item.artifacts):
+            raise UnsafePathError(
+                f"Artifact path {_INSTALL_MANIFEST_FILENAME!r} is reserved for installation metadata"
+            )
         if self.is_installed(item.system, storage_id) and not force:
             installation = self.get(item.system, storage_id)
             target = self.install_path(item.system, storage_id)
@@ -522,7 +536,7 @@ class AssetStore:
                         for artifact in installed
                     ],
                 }
-                (staging / "manifest.json").write_text(
+                (staging / _INSTALL_MANIFEST_FILENAME).write_text(
                     json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
                 )
                 if target.exists():
@@ -973,7 +987,7 @@ class AssetStore:
                             for a in installed
                         ],
                     }
-                    (staging_path / "manifest.json").write_text(
+                    (staging_path / _INSTALL_MANIFEST_FILENAME).write_text(
                         json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
                     )
                     # Atomic replace

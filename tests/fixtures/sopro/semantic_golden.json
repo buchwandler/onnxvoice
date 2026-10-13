@@ -1,0 +1,17 @@
+{
+  "source_runtime_commit": "7bfcf9a0539d274f6593959a21da948f506ceee1",
+  "semantic_prefix_sha256": "2f0feabb47c3af038c1ed0127d907be674996e64c7a159265ffe181823f009dd",
+  "semantic_core_sha256": "352443a2217f730fc08bad3e29c0d6683dcedde568dfe0f8fa58a8b46ef15fd1",
+  "semantic_weights_sha256": "91308fb72a6cc5a452f47e6cb5f3156970e39ef8a54690bbf98e116f11c1c75d",
+  "text": "hello, world!",
+  "language": "en",
+  "text_ids": [1, 276, 4, 6393, 264, 1670, 702, 2],
+  "temperature": 0.0,
+  "top_p": 1.0,
+  "top_k": 0,
+  "max_seconds": 0.13,
+  "min_seconds": 0.04,
+  "seed": 1,
+  "tokens": [757, 793, 4254, 1448],
+  "sampled_steps": 4
+}
