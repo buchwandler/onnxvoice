@@ -1,0 +1,45 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 5181,
+      "deletions": 29,
+      "patch_file": "102ef95.patch",
+      "patch_sha256": "d7085b8f0eb6187b2632689bc8039a469b2b4f9cd98854e234c3702250b53104",
+      "paths": [
+        "README.md",
+        "docs/local-models.md",
+        "docs/systems/index.md",
+        "docs/systems/sopro.md",
+        "onnxvoice/__init__.py",
+        "onnxvoice/catalog.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/store.py",
+        "onnxvoice/systems/__init__.py",
+        "onnxvoice/systems/sopro.py",
+        "onnxvoice/systems/sopro_frontend.py",
+        "tests/fixtures/sopro/offline_pipeline_golden.json",
+        "tests/fixtures/sopro/reference_golden.json",
+        "tests/fixtures/sopro/semantic_golden.json",
+        "tests/fixtures/sopro/tokenizer-v2-turbo.json.gz",
+        "tests/test_manifest.py",
+        "tests/test_sopro_adapter.py",
+        "tests/test_sopro_catalog.py",
+        "tests/test_sopro_frontend.py",
+        "tests/test_sopro_local_open.py",
+        "tests/test_sopro_real_bundle.py"
+      ],
+      "sha": "102ef950b0b3eb78f8ae1f55024a2f94954ce9c2",
+      "short_sha": "102ef95",
+      "source_ref": "git:102ef950b0b3eb78f8ae1f55024a2f94954ce9c2"
+    }
+  ],
+  "git_base_ref": "b412cfda3dff52d47a959289f15b61f641f8de83",
+  "git_base_sha": "b412cfda3dff52d47a959289f15b61f641f8de83",
+  "git_head_ref": "102ef950b0b3eb78f8ae1f55024a2f94954ce9c2",
+  "git_head_sha": "102ef950b0b3eb78f8ae1f55024a2f94954ce9c2",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.6",
+  "schema_version": 1
+}

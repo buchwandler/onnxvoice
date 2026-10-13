@@ -1,0 +1,32 @@
+rows:
+  - sha: 102ef950b0b3eb78f8ae1f55024a2f94954ce9c2
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/local-models.md
+      - docs/systems/index.md
+      - docs/systems/sopro.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/sopro.py
+      - onnxvoice/systems/sopro_frontend.py
+      - tests/fixtures/sopro/offline_pipeline_golden.json
+      - tests/fixtures/sopro/reference_golden.json
+      - tests/fixtures/sopro/semantic_golden.json
+      - tests/fixtures/sopro/tokenizer-v2-turbo.json.gz
+      - tests/test_manifest.py
+      - tests/test_sopro_adapter.py
+      - tests/test_sopro_catalog.py
+      - tests/test_sopro_frontend.py
+      - tests/test_sopro_local_open.py
+      - tests/test_sopro_real_bundle.py
+    observed_behavior: "Adds manifest-backed Sopro zero-shot voice support, including catalog/local bundle handling, reference preparation, token preparation, and parity-gated native one-segment CPU synthesis; expands public docs and automated coverage."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

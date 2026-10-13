@@ -1,0 +1,49 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.6
+git_base_ref: v0.2.5
+git_base_sha: b412cfda3dff52d47a959289f15b61f641f8de83
+git_head_ref: HEAD
+git_head_sha: 102ef950b0b3eb78f8ae1f55024a2f94954ce9c2
+git_range: b412cfda3dff52d47a959289f15b61f641f8de83..102ef950b0b3eb78f8ae1f55024a2f94954ce9c2
+commit_count: 1
+rows:
+  - sha: 102ef950b0b3eb78f8ae1f55024a2f94954ce9c2
+    source_ref: git:102ef950b0b3eb78f8ae1f55024a2f94954ce9c2
+    short_sha: 102ef95
+    changed_paths:
+      - README.md
+      - docs/local-models.md
+      - docs/systems/index.md
+      - docs/systems/sopro.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/sopro.py
+      - onnxvoice/systems/sopro_frontend.py
+      - tests/fixtures/sopro/offline_pipeline_golden.json
+      - tests/fixtures/sopro/reference_golden.json
+      - tests/fixtures/sopro/semantic_golden.json
+      - tests/fixtures/sopro/tokenizer-v2-turbo.json.gz
+      - tests/test_manifest.py
+      - tests/test_sopro_adapter.py
+      - tests/test_sopro_catalog.py
+      - tests/test_sopro_frontend.py
+      - tests/test_sopro_local_open.py
+      - tests/test_sopro_real_bundle.py
+    stats:
+      files_changed: 21
+      insertions: 5181
+      deletions: 29
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add sopro tts"

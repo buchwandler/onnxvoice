@@ -205,9 +205,11 @@ class SoproTokenizer:
         for start in range(count):
             if not math.isfinite(best[start]):
                 continue
-            node = self.root
+            node: _TrieNode | None = self.root
             matched = False
             for end in range(start, count):
+                if node is None:
+                    break
                 node = node.next.get(chars[end])
                 if node is None:
                     break

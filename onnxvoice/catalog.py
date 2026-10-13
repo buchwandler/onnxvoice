@@ -1149,7 +1149,9 @@ def _parse_sopro(data: Mapping[str, Any]) -> list[CatalogItem]:
             aliases.append(alias)
 
         repository = entry.get("model")
-        repo_parts = repository.split("/") if isinstance(repository, str) else []
+        if not isinstance(repository, str):
+            raise CatalogError(f"{bundle_id}: model must be an owner/name repository identifier")
+        repo_parts = repository.split("/")
         if len(repo_parts) != 2 or any(
             part in {".", ".."} or re.fullmatch(r"[A-Za-z0-9_.-]+", part) is None
             for part in repo_parts
@@ -1189,40 +1191,40 @@ def _parse_sopro(data: Mapping[str, Any]) -> list[CatalogItem]:
             raise CatalogError(f"{bundle_id}: profiles must be a non-empty mapping")
         profiles: dict[str, dict[str, Any]] = {}
         for raw_profile, raw_profile_data in raw_profiles.items():
-            profile = _require_sopro_safe_id(raw_profile, f"{bundle_id} profile")
-            if re.fullmatch(r"[a-z0-9][a-z0-9-]*", profile) is None:
-                raise CatalogError(f"{bundle_id}: invalid profile name {profile!r}")
+            profile_name = _require_sopro_safe_id(raw_profile, f"{bundle_id} profile")
+            if re.fullmatch(r"[a-z0-9][a-z0-9-]*", profile_name) is None:
+                raise CatalogError(f"{bundle_id}: invalid profile name {profile_name!r}")
             if not isinstance(raw_profile_data, Mapping):
-                raise CatalogError(f"{bundle_id}/{profile}: profile must be an object")
+                raise CatalogError(f"{bundle_id}/{profile_name}: profile must be an object")
             provider = raw_profile_data.get("provider")
             dtype = raw_profile_data.get("dtype")
             if not isinstance(provider, str) or not provider:
-                raise CatalogError(f"{bundle_id}/{profile}: provider is required")
+                raise CatalogError(f"{bundle_id}/{profile_name}: provider is required")
             if not isinstance(dtype, str) or not dtype:
-                raise CatalogError(f"{bundle_id}/{profile}: dtype is required")
+                raise CatalogError(f"{bundle_id}/{profile_name}: dtype is required")
             normalized_profile: dict[str, Any] = {"provider": provider, "dtype": dtype}
             for category in ("graphs", "shards"):
                 raw_paths = raw_profile_data.get(category)
                 if not isinstance(raw_paths, Mapping) or not raw_paths:
                     raise CatalogError(
-                        f"{bundle_id}/{profile}: {category} must be a non-empty mapping"
+                        f"{bundle_id}/{profile_name}: {category} must be a non-empty mapping"
                     )
                 paths: dict[str, str] = {}
                 for raw_role, raw_path in raw_paths.items():
-                    role = _require_sopro_safe_id(
-                        raw_role, f"{bundle_id}/{profile} {category} role"
+                    path_role = _require_sopro_safe_id(
+                        raw_role, f"{bundle_id}/{profile_name} {category} role"
                     )
                     if not isinstance(raw_path, str):
                         raise CatalogError(
-                            f"{bundle_id}/{profile}/{role}: artifact path must be a string"
+                            f"{bundle_id}/{profile_name}/{path_role}: artifact path must be a string"
                         )
                     try:
                         validate_relative_path(raw_path, field_name="Sopro profile artifact path")
                     except ValueError as exc:
-                        raise CatalogError(f"{bundle_id}/{profile}/{role}: {exc}") from exc
-                    paths[role] = raw_path
+                        raise CatalogError(f"{bundle_id}/{profile_name}/{path_role}: {exc}") from exc
+                    paths[path_role] = raw_path
                 normalized_profile[category] = paths
-            profiles[profile] = normalized_profile
+            profiles[profile_name] = normalized_profile
 
         raw_artifacts = entry.get("artifacts")
         if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
@@ -1237,11 +1239,11 @@ def _parse_sopro(data: Mapping[str, Any]) -> list[CatalogItem]:
         for raw_artifact in raw_artifacts:
             if not isinstance(raw_artifact, Mapping):
                 raise CatalogError(f"{bundle_id}: artifact must be an object")
-            role = raw_artifact.get("role")
+            role: Any = raw_artifact.get("role")
             if not isinstance(role, str) or role not in _SOPRO_ARTIFACT_ROLES:
                 raise CatalogError(f"{bundle_id}: unknown artifact role {role!r}")
-            component = raw_artifact.get("component")
-            profile = raw_artifact.get("profile")
+            component: Any = raw_artifact.get("component")
+            profile: Any = raw_artifact.get("profile")
             if role in {"manifest", "tokenizer"}:
                 if component is not None or profile is not None:
                     raise CatalogError(

@@ -8,7 +8,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -457,13 +457,13 @@ class SoproAdapter(SystemAdapter):
             if not isinstance(shard_name, str) or not shard_name:
                 raise ManifestError(f"Sopro graph {name!r} has no external-data shard")
             self._component_name(shard_name, "graph shard")
-            shard_path = self._shard_aliases.get(shard_name)
-            if shard_path is None:
+            resolved_shard_path = self._shard_aliases.get(shard_name)
+            if resolved_shard_path is None:
                 raise ManifestError(
                     f"Sopro graph {name!r} references undeclared shard {shard_name!r}"
                 )
             self._graph_paths[name] = graph_path
-            self._graph_shards[name] = shard_path
+            self._graph_shards[name] = resolved_shard_path
 
         self._validate_supplied_artifacts(installation)
 
@@ -730,13 +730,13 @@ class SoproAdapter(SystemAdapter):
             name: np.ascontiguousarray(value, dtype=dtypes[name]) for name, value in inputs.items()
         }
         values = session.run(graph_inputs)
-        names = tuple(getattr(session, "output_names", ()))
-        if names:
-            if len(names) != len(values):
+        output_names = tuple(getattr(session, "output_names", ()))
+        if output_names:
+            if len(output_names) != len(values):
                 raise RuntimeContractError(
                     f"Sopro {graph} graph output inventory does not match its results"
                 )
-            outputs = dict(zip(names, values, strict=True))
+            outputs = dict(zip(output_names, values, strict=True))
         elif len(values) == len(expected_outputs):
             outputs = dict(zip(expected_outputs, values, strict=True))
         else:
@@ -794,6 +794,14 @@ class SoproAdapter(SystemAdapter):
         )
         if any(type(value) is not int or value <= 0 for value in required_ints):
             raise ManifestError("Sopro semantic model dimensions must be positive integers")
+        vocab_size = cast(int, vocab_size)
+        text_vocab_size = cast(int, text_vocab_size)
+        max_text_len = cast(int, max_text_len)
+        model_dim = cast(int, model_dim)
+        ar_blocks = cast(int, ar_blocks)
+        ar_heads = cast(int, ar_heads)
+        kv_heads = cast(int, kv_heads)
+        style_prefix = cast(int, style_prefix)
         if model_dim % ar_heads or model_dim % 2 or (model_dim // ar_heads) % 2:
             raise ManifestError("Sopro autoregressive model dimensions are inconsistent")
         head_dim = model_dim // ar_heads
@@ -1115,6 +1123,12 @@ class SoproAdapter(SystemAdapter):
             for value in (sample_rate, n_fft, hop, n_mels, dimension, layers)
         ):
             raise ManifestError("Sopro vocoder dimensions must be positive integers")
+        sample_rate = cast(int, sample_rate)
+        n_fft = cast(int, n_fft)
+        hop = cast(int, hop)
+        n_mels = cast(int, n_mels)
+        dimension = cast(int, dimension)
+        layers = cast(int, layers)
         if sample_rate != self.sample_rate or n_mels != 100:
             raise CapabilityError(
                 "Sopro vocoder profile is not compatible with 24-kHz, 100-mel inference"
@@ -1127,6 +1141,7 @@ class SoproAdapter(SystemAdapter):
             or len(set(lookaheads)) != 1
         ):
             raise CapabilityError("Sopro offline vocoder requires uniform per-layer lookahead")
+        lookaheads = [int(value) for value in lookaheads]
         mel = np.asarray(mel)
         if mel.ndim != 2:
             raise RuntimeContractError("Sopro vocoder mel input must be a rank-two matrix")
@@ -1135,7 +1150,7 @@ class SoproAdapter(SystemAdapter):
             raise RuntimeContractError("Sopro vocoder mel input has an invalid shape or values")
         name = "vocoder"
         lookahead = lookaheads[0]
-        initial_state = {
+        initial_state: dict[str, np.ndarray] = {
             "embed_state": np.zeros((1, n_mels, 6), dtype=np.float32),
             "conv_state": np.zeros((layers, 1, dimension, 6), dtype=np.float32),
             "pending": np.zeros((layers, 1, dimension, lookahead), dtype=np.float32),
