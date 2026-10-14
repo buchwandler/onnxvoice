@@ -34,6 +34,16 @@ class PiperAdapter(SystemAdapter):
     def requires_speaker_id(self) -> bool:
         return "sid" in self.session.input_names
 
+    @property
+    def max_phonemes(self) -> int | None:
+        """Return the graph-declared Piper input sequence bound, if static."""
+        spec = self._input_spec("input")
+        if spec is None or not isinstance(spec.shape, tuple) or len(spec.shape) < 2:
+            return None
+        value = spec.shape[1]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return None
+        return value
     def _config(self) -> dict[str, Any]:
         if self._config_cache is not None:
             return self._config_cache

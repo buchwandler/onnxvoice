@@ -105,3 +105,73 @@ def test_piper_passes_provider_and_session_options(tmp_path, monkeypatch):
     assert captured["providers"] == ("cpu",)
     assert captured["provider_options"] == {"cpu": {"arena_extend_strategy": "kNextPowerOfTwo"}}
     assert captured["session_options"] is options
+
+
+class NoInferencePiperSession:
+    def __init__(self, input_specs):
+        self.input_specs = tuple(input_specs)
+        self.run_called = False
+
+    def run(self, inputs):
+        self.run_called = True
+        raise AssertionError("capacity inspection must not execute inference")
+
+
+def _capacity_adapter(tmp_path, input_specs):
+    adapter = PiperAdapter(_installation(tmp_path))
+    fake = NoInferencePiperSession(input_specs)
+    adapter._session = fake  # type: ignore[assignment]
+    return adapter, fake
+
+
+def test_piper_max_phonemes_returns_none_for_dynamic_sequence_dimension(tmp_path):
+    adapter = PiperAdapter(_installation(tmp_path))
+    adapter._session = PiperSession()  # type: ignore[assignment]
+
+    assert adapter.max_phonemes is None
+
+
+def test_piper_max_phonemes_exposes_static_sequence_dimension(tmp_path):
+    adapter, fake = _capacity_adapter(
+        tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),)
+    )
+
+    assert adapter.max_phonemes == 256
+    assert fake.run_called is False
+
+
+@pytest.mark.parametrize("dimension", [None, "N", "256", 0, -1, True])
+def test_piper_max_phonemes_rejects_invalid_dimensions(tmp_path, dimension):
+    adapter, fake = _capacity_adapter(
+        tmp_path, (TensorSpec("input", "tensor(int32)", (1, dimension)),)
+    )
+
+    assert adapter.max_phonemes is None
+    assert fake.run_called is False
+
+
+@pytest.mark.parametrize(
+    "input_specs",
+    [
+        (),
+        (TensorSpec("input", "tensor(int32)", ()),),
+        (TensorSpec("input", "tensor(int32)", (256,)),),
+        (TensorSpec("input", "tensor(int32)", None),),  # type: ignore[arg-type]
+    ],
+)
+def test_piper_max_phonemes_returns_none_for_missing_or_malformed_input_spec(
+    tmp_path, input_specs
+):
+    adapter, fake = _capacity_adapter(tmp_path, input_specs)
+
+    assert adapter.max_phonemes is None
+    assert fake.run_called is False
+
+
+def test_piper_max_phonemes_never_runs_inference(tmp_path):
+    adapter, fake = _capacity_adapter(
+        tmp_path, (TensorSpec("input", "tensor(int32)", (1, 64)),)
+    )
+
+    assert adapter.max_phonemes == 64
+    assert fake.run_called is False
