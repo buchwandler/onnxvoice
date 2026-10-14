@@ -5,7 +5,10 @@ import json
 import math
 import posixpath
 import re
-from collections.abc import Mapping, Sequence
+import time
+import weakref
+from collections import OrderedDict
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -30,6 +33,20 @@ from .sopro_frontend import (
     reference_features,
     resample_sopro,
 )
+from .sopro_generation import SoproGenerationDefaults
+from .sopro_streaming import (
+    SoproStreamChunk,
+    _chunk_attention_bias,
+    _select_stream_graph_mode,
+    _SoproAcousticState,
+    _SoproNoise,
+    _SoproPromptState,
+    _SoproVocoderPromptState,
+    _SoproVocoderState,
+    _stable_prompt_frames,
+    _stream_target_frames,
+    _StreamingISTFT,
+)
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
@@ -47,6 +64,23 @@ class _SemanticOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class _SoproRuntimeConfig:
+    sample_rate: int
+    token_samples: int
+    hop_ratio: int
+    fixed_steps: int
+    position_context: int | None
+    stream_chunk_frames: int
+    acoustic_pre_lookahead_frames: int | None
+    acoustic_dim_head: int | None
+    vocoder_n_fft: int | None
+    vocoder_hop_length: int | None
+    vocoder_dim: int | None
+    vocoder_layers: int | None
+    vocoder_lookahead: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class _SemanticResult:
     tokens: np.ndarray
     sampled_steps: int
@@ -54,6 +88,89 @@ class _SemanticResult:
     max_steps: int
     min_steps: int
     prompt_token_limit: int
+
+
+class _SoproSemanticDecoder:
+    """Incremental semantic token decoder over one prepared ONNX prefix/KV state."""
+
+    def __init__(
+        self,
+        step: Callable[[], tuple[int | None, bool]],
+        *,
+        max_steps: int,
+        min_steps: int,
+        prompt_token_limit: int,
+    ) -> None:
+        self._step = step
+        self._max_steps = max_steps
+        self._min_steps = min_steps
+        self._prompt_token_limit = prompt_token_limit
+        self._generated: list[int] = []
+        self._sampled_steps = 0
+        self._stopped_on_eos = False
+        self._done = False
+        self._closed = False
+
+    def next_token(self) -> int | None:
+        if self._closed:
+            raise RuntimeContractError("Sopro semantic decoder is closed")
+        if self._done:
+            return None
+        token, stopped_on_eos = self._step()
+        self._sampled_steps += 1
+        if stopped_on_eos:
+            self._stopped_on_eos = True
+            self._done = True
+            return None
+        if token is None:
+            self._done = True
+            return None
+        self._generated.append(token)
+        if len(self._generated) >= self._max_steps:
+            self._done = True
+        return token
+
+    @property
+    def generated(self) -> np.ndarray:
+        tokens = np.asarray(self._generated, dtype=np.uint32)
+        tokens.flags.writeable = False
+        return tokens
+
+    @property
+    def stopped_on_eos(self) -> bool:
+        return self._stopped_on_eos
+
+    @property
+    def result(self) -> _SemanticResult:
+        return _SemanticResult(
+            tokens=self.generated,
+            sampled_steps=self._sampled_steps,
+            stopped_on_eos=self._stopped_on_eos,
+            max_steps=self._max_steps,
+            min_steps=self._min_steps,
+            prompt_token_limit=self._prompt_token_limit,
+        )
+
+    def iter_chunks(self, chunk_tokens: int) -> Iterator[np.ndarray]:
+        if type(chunk_tokens) is not int or chunk_tokens <= 0:
+            raise RuntimeContractError("Sopro semantic chunk size must be a positive integer")
+        chunk: list[int] = []
+        while (token := self.next_token()) is not None:
+            chunk.append(token)
+            if len(chunk) == chunk_tokens:
+                values = np.asarray(chunk, dtype=np.uint32)
+                values.flags.writeable = False
+                yield values
+                chunk = []
+        if chunk:
+            values = np.asarray(chunk, dtype=np.uint32)
+            values.flags.writeable = False
+            yield values
+
+    def close(self) -> None:
+        self._closed = True
+        self._step = lambda: (None, False)
+        self._generated.clear()
 
 
 class _SoproRandom:
@@ -352,6 +469,13 @@ class SoproAdapter(SystemAdapter):
             session_options=session_options,
         )
         self._sessions: dict[str, OnnxSession] = {}
+        self._stream_cache_capacity = 1
+        self._prompt_state_cache: OrderedDict[tuple[Any, ...], _SoproPromptState] = OrderedDict()
+        self._vocoder_prompt_cache: OrderedDict[tuple[Any, ...], _SoproVocoderPromptState] = (
+            OrderedDict()
+        )
+        self._generation_token = 0
+        self._runtime_shape_config: _SoproRuntimeConfig | None = None
         self.profile = self._selected_profile(installation)
         manifest_artifacts = [
             artifact for artifact in installation.artifacts if artifact.role == "manifest"
@@ -524,6 +648,137 @@ class SoproAdapter(SystemAdapter):
                         f"Sopro {role} artifact {component!r} does not match the manifest path"
                     )
 
+    def _generation_integer(
+        self, config: Mapping[str, Any], name: str, default: int | None = None
+    ) -> int:
+        value = config.get(name, default)
+        if type(value) is not int or value < 0:
+            raise ManifestError(f"Sopro generation {name} must be a non-negative integer")
+        return value
+
+    @property
+    def generation_defaults(self) -> SoproGenerationDefaults:
+        config = self._frontend_config()
+        generation = config.get("generation")
+        if not isinstance(generation, Mapping):
+            raise ManifestError("Sopro manifest is missing generation settings")
+
+        def finite(name: str, *, positive: bool = False) -> float:
+            value = generation.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ManifestError(f"Sopro generation {name} must be a finite number")
+            result = float(value)
+            if not math.isfinite(result) or (positive and result <= 0):
+                raise ManifestError(f"Sopro generation {name} must be finite and valid")
+            return result
+
+        temperature = finite("temperature")
+        top_p = finite("top_p")
+        max_seconds = finite("max_seconds", positive=True)
+        min_seconds = finite("min_seconds")
+        if temperature < 0 or not 0 <= top_p <= 1 or min_seconds < 0 or min_seconds > max_seconds:
+            raise ManifestError("Sopro generation defaults are outside their supported ranges")
+        return SoproGenerationDefaults(
+            temperature=temperature,
+            top_p=top_p,
+            top_k=self._generation_integer(generation, "top_k"),
+            steps=self.fixed_steps,
+            max_seconds=max_seconds,
+            min_seconds=min_seconds,
+            ref_seconds=finite("ref_seconds", positive=True),
+            max_segment_chars=self._generation_integer(generation, "max_segment_chars", 500),
+            style_tokens=self._generation_integer(generation, "style_tokens"),
+            prompt_tokens=self._generation_integer(generation, "prompt_tokens"),
+            stream_chunk_frames=self._generation_integer(generation, "stream_chunk_frames", 8),
+        )
+
+    @property
+    def _runtime_config(self) -> _SoproRuntimeConfig:
+        cached = self._runtime_shape_config
+        if cached is not None:
+            return cached
+        position_context = self.manifest.get("positionContext")
+        if position_context is not None and (
+            type(position_context) is not int or position_context <= 0
+        ):
+            raise ManifestError("Sopro positionContext must be a positive integer")
+        frontend = self._frontend_config()
+        model = frontend.get("model")
+        vocoder = frontend.get("vocoder")
+        if not isinstance(model, Mapping) or not isinstance(vocoder, Mapping):
+            raise ManifestError("Sopro manifest is missing acoustic/vocoder shape settings")
+
+        def optional_int(values: Mapping[str, Any], name: str, *, minimum: int = 1) -> int | None:
+            value = values.get(name)
+            if value is None:
+                return None
+            if type(value) is not int or value < minimum:
+                raise ManifestError(f"Sopro model shape {name} is invalid")
+            return value
+
+        vocoder_layers = optional_int(vocoder, "num_layers")
+        lookaheads = vocoder.get("block_lookaheads")
+        if lookaheads is None:
+            vocoder_lookahead = None
+        elif (
+            not isinstance(lookaheads, Sequence)
+            or isinstance(lookaheads, (str, bytes))
+            or not lookaheads
+            or any(type(value) is not int or value < 0 for value in lookaheads)
+            or len(set(lookaheads)) != 1
+            or (vocoder_layers is not None and len(lookaheads) != vocoder_layers)
+        ):
+            raise ManifestError("Sopro vocoder lookahead dimensions are invalid")
+        else:
+            vocoder_lookahead = int(lookaheads[0])
+        cached = _SoproRuntimeConfig(
+            sample_rate=self.sample_rate,
+            token_samples=self.token_samples,
+            hop_ratio=self.hop_ratio,
+            fixed_steps=self.fixed_steps,
+            position_context=position_context,
+            stream_chunk_frames=self.generation_defaults.stream_chunk_frames,
+            acoustic_pre_lookahead_frames=optional_int(
+                model, "acoustic_pre_lookahead_frames", minimum=0
+            ),
+            acoustic_dim_head=optional_int(model, "acoustic_dit_dim_head"),
+            vocoder_n_fft=optional_int(vocoder, "n_fft"),
+            vocoder_hop_length=optional_int(vocoder, "hop_length"),
+            vocoder_dim=optional_int(vocoder, "dim"),
+            vocoder_layers=vocoder_layers,
+            vocoder_lookahead=vocoder_lookahead,
+        )
+        self._runtime_shape_config = cached
+        return cached
+
+    @property
+    def fixed_steps(self) -> int:
+        config = self._frontend_config().get("generation")
+        if not isinstance(config, Mapping):
+            raise ManifestError("Sopro manifest is missing generation settings")
+        value = self.manifest.get("steps", config.get("steps"))
+        if type(value) is not int or value <= 0:
+            raise ManifestError("Sopro manifest must declare a positive fixed acoustic step count")
+        return value
+
+    @property
+    def max_segment_chars(self) -> int:
+        return self.generation_defaults.max_segment_chars
+
+    @property
+    def token_samples(self) -> int:
+        value = self.manifest.get("tokenSamples")
+        if type(value) is not int or value <= 0:
+            raise ManifestError("Sopro manifest tokenSamples must be a positive integer")
+        return value
+
+    @property
+    def hop_ratio(self) -> int:
+        value = self.manifest.get("hopRatio")
+        if type(value) is not int or value <= 0:
+            raise ManifestError("Sopro manifest hopRatio must be a positive integer")
+        return value
+
     @property
     def graphs(self) -> tuple[str, ...]:
         """Graph names declared by the selected upstream profile."""
@@ -612,8 +867,10 @@ class SoproAdapter(SystemAdapter):
             ) from exc
 
     def _semantic_generation_options(
-        self, options: Mapping[str, Any] | None = None
+        self, options: _SemanticOptions | Mapping[str, Any] | None = None
     ) -> _SemanticOptions:
+        if isinstance(options, _SemanticOptions):
+            return options
         if options is None:
             options = {}
         if not isinstance(options, Mapping):
@@ -655,8 +912,8 @@ class SoproAdapter(SystemAdapter):
         min_seconds = number("min_seconds", "min_seconds")
         if temperature < 0.0:
             raise RuntimeContractError("Sopro temperature must be non-negative")
-        if not 0.0 < top_p <= 1.0:
-            raise RuntimeContractError("Sopro top_p must be in (0, 1]")
+        if not 0.0 <= top_p <= 1.0:
+            raise RuntimeContractError("Sopro top_p must be in [0, 1]")
         if max_seconds <= 0.0 or min_seconds < 0.0 or min_seconds > max_seconds:
             raise RuntimeContractError(
                 "Sopro duration controls require 0 <= min_seconds <= max_seconds"
@@ -755,9 +1012,31 @@ class SoproAdapter(SystemAdapter):
         text_input: SoproTextInput,
         voice_state: SoproVoiceState,
         *,
-        options: Mapping[str, Any] | None = None,
+        options: _SemanticOptions | Mapping[str, Any] | None = None,
         prompt_token_override: Sequence[int] | np.ndarray | None = None,
     ) -> _SemanticResult:
+        """Drain the incremental decoder for the compatibility offline API."""
+        decoder = self._create_semantic_decoder(
+            text_input,
+            voice_state,
+            options=options,
+            prompt_token_override=prompt_token_override,
+        )
+        try:
+            for _chunk in decoder.iter_chunks(32):
+                pass
+            return decoder.result
+        finally:
+            decoder.close()
+
+    def _create_semantic_decoder(
+        self,
+        text_input: SoproTextInput,
+        voice_state: SoproVoiceState,
+        *,
+        options: _SemanticOptions | Mapping[str, Any] | None = None,
+        prompt_token_override: Sequence[int] | np.ndarray | None = None,
+    ) -> _SoproSemanticDecoder:
         if not isinstance(text_input, SoproTextInput):
             raise RuntimeContractError("Sopro semantic generation requires a SoproTextInput")
         if not isinstance(voice_state, SoproVoiceState):
@@ -860,10 +1139,7 @@ class SoproAdapter(SystemAdapter):
             if (
                 prompt_values.ndim != 1
                 or prompt_values.size > prompt_length
-                or (
-                    prompt_values.size > 0
-                    and not np.issubdtype(prompt_values.dtype, np.integer)
-                )
+                or (prompt_values.size > 0 and not np.issubdtype(prompt_values.dtype, np.integer))
             ):
                 raise RuntimeContractError(
                     "Sopro prompt_tokens override has an invalid rank, length, or dtype"
@@ -944,51 +1220,51 @@ class SoproAdapter(SystemAdapter):
 
         logits, past_k, past_v = validate_core_outputs(core, prefix_length)
         random = _SoproRandom(settings.seed)
-        generated: list[int] = []
-        stopped_on_eos = False
+        stopped = False
+        sampled_steps = 0
         position = prefix_length
         empty_hidden = np.empty((1, 0, model_dim), dtype=np.float32)
         eos_id = vocab_size + 1
-        for index in range(settings.max_steps):
-            sampled_step = index + 1
+        previous_token: int | None = None
+
+        def next_step() -> tuple[int | None, bool]:
+            nonlocal logits, past_k, past_v, position, previous_token, sampled_steps, stopped
+            if stopped:
+                return None, False
+            if previous_token is not None:
+                step_cosine, step_sine = _rotary(1, head_dim, offset=position)
+                present_length = position + 1
+                step_outputs = self._run_contract_graph(
+                    "semantic_core",
+                    {
+                        "hidden": empty_hidden,
+                        "token": np.asarray([[previous_token]], dtype=np.int64),
+                        "past_k": past_k,
+                        "past_v": past_v,
+                        "cos": step_cosine,
+                        "sin": step_sine,
+                        "attention_bias": np.zeros((1, 1, 1, present_length), dtype=np.float32),
+                    },
+                    ("logits", "present_k", "present_v"),
+                )
+                logits, past_k, past_v = validate_core_outputs(step_outputs, present_length)
+                position += 1
+            sampled_steps += 1
             token = _sample_semantic_token(
                 logits,
                 settings,
                 random,
                 vocab_size=vocab_size,
-                allow_eos=sampled_step >= settings.min_steps,
+                allow_eos=sampled_steps >= settings.min_steps,
             )
-            if sampled_step >= settings.min_steps and token == eos_id:
-                stopped_on_eos = True
-                break
-            generated.append(min(vocab_size - 1, max(0, token)))
-            if sampled_step >= settings.max_steps:
-                break
+            if sampled_steps >= settings.min_steps and token == eos_id:
+                stopped = True
+                return None, True
+            previous_token = min(vocab_size - 1, max(0, token))
+            return previous_token, False
 
-            step_cosine, step_sine = _rotary(1, head_dim, offset=position)
-            present_length = position + 1
-            position += 1
-            step_outputs = self._run_contract_graph(
-                "semantic_core",
-                {
-                    "hidden": empty_hidden,
-                    "token": np.asarray([[token]], dtype=np.int64),
-                    "past_k": past_k,
-                    "past_v": past_v,
-                    "cos": step_cosine,
-                    "sin": step_sine,
-                    "attention_bias": np.zeros((1, 1, 1, present_length), dtype=np.float32),
-                },
-                ("logits", "present_k", "present_v"),
-            )
-            logits, past_k, past_v = validate_core_outputs(step_outputs, present_length)
-
-        tokens = np.asarray(generated, dtype=np.uint32)
-        tokens.flags.writeable = False
-        return _SemanticResult(
-            tokens=tokens,
-            sampled_steps=min(settings.max_steps, len(generated) + int(stopped_on_eos)),
-            stopped_on_eos=stopped_on_eos,
+        return _SoproSemanticDecoder(
+            next_step,
             max_steps=settings.max_steps,
             min_steps=settings.min_steps,
             prompt_token_limit=prompt_length,
@@ -1002,6 +1278,7 @@ class SoproAdapter(SystemAdapter):
         seconds: float | None = None,
     ) -> SoproVoiceState:
         """Prepare reusable reference state through Sopro's DSP and reference graph."""
+        started = time.perf_counter()
         if type(sample_rate) is not int or sample_rate <= 0:
             raise RuntimeContractError("Sopro reference sample rate must be a positive integer")
         audio = np.asarray(waveform)
@@ -1130,12 +1407,23 @@ class SoproAdapter(SystemAdapter):
             raise RuntimeContractError(
                 "Sopro reference semantic-token output has an invalid shape or value"
             )
+        cache_hasher = hashlib.sha256()
+        cache_hasher.update(str(self.manifest.get("revision")).encode("utf-8"))
+        cache_hasher.update(b"\0")
+        cache_hasher.update(self.profile.encode("utf-8"))
+        cache_hasher.update(b"\0")
+        cache_hasher.update(float(duration).hex().encode("ascii"))
+        cache_hasher.update(b"\0")
+        cache_hasher.update(np.ascontiguousarray(normalized, dtype=np.float32).tobytes())
+        cache_key = cache_hasher.hexdigest()
         return SoproVoiceState(
             cond_vec=condition,
             semantic_tokens=semantic_tokens,
             mel=normalized_mel,
             sample_rate=self.sample_rate,
             level_db=level_db,
+            cache_key=cache_key,
+            reference_prepare_ms=(time.perf_counter() - started) * 1000.0,
         )
 
     def _decode_vocoder(self, mel: np.ndarray) -> np.ndarray:
@@ -1251,33 +1539,850 @@ class SoproAdapter(SystemAdapter):
         features = np.concatenate((first_features, tail_features))
         return _sopro_istft(features, first_frames + tail_frames, n_fft=n_fft, hop=hop)
 
-    def _synthesize_one_segment(
+    def _stream_condition(
+        self, reference_tokens: np.ndarray, generated_tokens: np.ndarray, reference_frames: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        hop_ratio = self._runtime_config.hop_ratio
+        tokens = np.concatenate((reference_tokens, generated_tokens.astype(np.int64, copy=False)))
+        frames = reference_frames + generated_tokens.size * hop_ratio
+        if tokens.size == 0 or frames <= 0:
+            raise RuntimeContractError(
+                "Sopro streaming condition requires non-empty tokens and frames"
+            )
+        frame_to_token = np.fromiter(
+            (min(tokens.size - 1, (frame * tokens.size) // frames) for frame in range(frames)),
+            dtype=np.int64,
+            count=frames,
+        )
+        condition = self._run_contract_graph(
+            "acoustic_condition",
+            {
+                "semantic_tokens": np.ascontiguousarray(tokens[None, :], dtype=np.int64),
+                "frame_to_token": frame_to_token,
+            },
+            ("mu",),
+        )["mu"]
+        if condition.shape != (1, 100, frames) or not np.isfinite(condition).all():
+            raise RuntimeContractError(
+                "Sopro streaming condition output has an invalid shape or values"
+            )
+        return np.ascontiguousarray(condition, dtype=np.float32), tokens
+
+    def _stream_prefill(
+        self,
+        *,
+        steps: int,
+        split: bool,
+        frames: int,
+        x_init: np.ndarray,
+        mu: np.ndarray,
+        cond_vec: np.ndarray,
+        cond_mel: np.ndarray,
+        cond_mask: np.ndarray,
+        cosine: np.ndarray,
+        sine: np.ndarray,
+        chunk_bias: np.ndarray,
+    ) -> _SoproAcousticState:
+        shared = {
+            "x_init": x_init,
+            "mu": mu,
+            "cond_vec": cond_vec,
+            "cond_mel": cond_mel,
+            "cond_mask": cond_mask,
+            "cos": cosine,
+            "sin": sine,
+            "chunk_bias": chunk_bias,
+        }
+        output = self._run_contract_graph(
+            f"acoustic_stream_prefill_{steps}",
+            shared,
+            ("mel", "x_context", "present_k", "present_v"),
+        )
+        if split:
+            cache_context: list[np.ndarray] = []
+            cache_k: list[np.ndarray] = []
+            cache_v: list[np.ndarray] = []
+            x = output["mel"]
+            for index in range(steps):
+                ode = self._run_contract_graph(
+                    f"acoustic_stream_prefill_ode_{steps}_{index}",
+                    {"x": x, **shared},
+                    ("x_out", "mel", "x_context_out", "present_k", "present_v"),
+                )
+                x = ode["x_out"]
+                cache_context.append(ode["x_context_out"])
+                cache_k.append(ode["present_k"])
+                cache_v.append(ode["present_v"])
+            state = _SoproAcousticState(
+                cached_frames=frames,
+                x_context=np.ascontiguousarray(np.stack(cache_context), dtype=np.float32),
+                past_k=np.ascontiguousarray(np.stack(cache_k)),
+                past_v=np.ascontiguousarray(np.stack(cache_v)),
+            )
+        else:
+            state = _SoproAcousticState(
+                cached_frames=frames,
+                x_context=np.ascontiguousarray(output["x_context"], dtype=np.float32),
+                past_k=np.ascontiguousarray(output["present_k"]),
+                past_v=np.ascontiguousarray(output["present_v"]),
+            )
+        self._validate_stream_acoustic_state(state, frames)
+        return state
+
+    def _validate_stream_acoustic_state(self, state: _SoproAcousticState, past_frames: int) -> None:
+        context = self._runtime_config.position_context
+        steps = self._runtime_config.fixed_steps
+        if (
+            context is None
+            or steps <= 0
+            or state.cached_frames < 0
+            or state.x_context.shape != (steps, 1, 100, context)
+            or state.past_k.ndim != 6
+            or state.past_v.shape != state.past_k.shape
+            or state.past_k.shape[0] != steps
+            or state.past_k.shape[-2] < past_frames
+            or not np.isfinite(state.x_context).all()
+            or not np.isfinite(state.past_k).all()
+            or not np.isfinite(state.past_v).all()
+        ):
+            raise RuntimeContractError(
+                "Sopro acoustic streaming cache has invalid dimensions or values"
+            )
+
+    def _stream_acoustic_step(
+        self,
+        *,
+        steps: int,
+        split: bool,
+        state: _SoproAcousticState,
+        x_init: np.ndarray,
+        mu_window: np.ndarray,
+        cond_vec: np.ndarray,
+        cond_mel_window: np.ndarray,
+        cond_mask_window: np.ndarray,
+        cosine: np.ndarray,
+        sine: np.ndarray,
+    ) -> tuple[np.ndarray, _SoproAcousticState]:
+        new_frames = x_init.shape[-1]
+        output = self._run_contract_graph(
+            f"acoustic_stream_step_{steps}",
+            {
+                "x_init": x_init,
+                "mu_window": mu_window,
+                "cond_vec": cond_vec,
+                "cond_mel_window": cond_mel_window,
+                "cond_mask_window": cond_mask_window,
+                "cos": cosine,
+                "sin": sine,
+                "x_context": state.x_context,
+                "past_k": state.past_k,
+                "past_v": state.past_v,
+            },
+            ("mel", "x_context_out", "present_k", "present_v"),
+        )
+        if output["mel"].shape != (1, 100, new_frames):
+            raise RuntimeContractError(
+                "Sopro acoustic streaming step returned invalid mel dimensions"
+            )
+        if not split:
+            next_state = _SoproAcousticState(
+                cached_frames=state.cached_frames + new_frames,
+                x_context=np.ascontiguousarray(output["x_context_out"], dtype=np.float32),
+                past_k=np.ascontiguousarray(output["present_k"]),
+                past_v=np.ascontiguousarray(output["present_v"]),
+            )
+            self._validate_stream_acoustic_state(next_state, next_state.cached_frames)
+            mel = np.asarray(output["mel"])
+            if not np.isfinite(mel).all():
+                raise RuntimeContractError(
+                    "Sopro acoustic streaming output contains non-finite values"
+                )
+            return np.ascontiguousarray(mel, dtype=np.float32), next_state
+        cache_context: list[np.ndarray] = []
+        cache_k: list[np.ndarray] = []
+        cache_v: list[np.ndarray] = []
+        x = output["mel"]
+        for index in range(steps):
+            ode = self._run_contract_graph(
+                f"acoustic_stream_ode_{steps}_{index}",
+                {
+                    "x": x,
+                    "x_init": x_init,
+                    "mu_window": mu_window,
+                    "cond_vec": cond_vec,
+                    "cond_mel_window": cond_mel_window,
+                    "cond_mask_window": cond_mask_window,
+                    "cos": cosine,
+                    "sin": sine,
+                    "x_context": output["x_context_out"][index],
+                    "past_k": output["present_k"][index],
+                    "past_v": output["present_v"][index],
+                },
+                ("x_out", "mel", "x_context_out", "present_k", "present_v"),
+            )
+            x = ode["x_out"]
+            if ode["mel"].shape != (1, 100, new_frames):
+                raise RuntimeContractError(
+                    "Sopro acoustic streaming ODE returned invalid mel dimensions"
+                )
+            cache_context.append(ode["x_context_out"])
+            cache_k.append(ode["present_k"])
+            cache_v.append(ode["present_v"])
+        next_state = _SoproAcousticState(
+            cached_frames=state.cached_frames + new_frames,
+            x_context=np.ascontiguousarray(np.stack(cache_context), dtype=np.float32),
+            past_k=np.ascontiguousarray(np.stack(cache_k)),
+            past_v=np.ascontiguousarray(np.stack(cache_v)),
+        )
+        self._validate_stream_acoustic_state(next_state, next_state.cached_frames)
+        mel = np.asarray(ode["mel"])
+        if not np.isfinite(mel).all():
+            raise RuntimeContractError("Sopro acoustic streaming output contains non-finite values")
+        return np.ascontiguousarray(mel, dtype=np.float32), next_state
+
+    @property
+    def stream_cache_capacity(self) -> int:
+        return self._stream_cache_capacity
+
+    @stream_cache_capacity.setter
+    def stream_cache_capacity(self, value: int) -> None:
+        if type(value) is not int or value < 0:
+            raise RuntimeContractError("Sopro stream cache capacity must be a non-negative integer")
+        self._stream_cache_capacity = value
+        if value == 0:
+            self._prompt_state_cache.clear()
+            self._vocoder_prompt_cache.clear()
+        else:
+            while len(self._prompt_state_cache) > value:
+                self._prompt_state_cache.popitem(last=False)
+            while len(self._vocoder_prompt_cache) > value:
+                self._vocoder_prompt_cache.popitem(last=False)
+
+    @staticmethod
+    def _readonly_cache_array(value: np.ndarray) -> np.ndarray:
+        result = np.ascontiguousarray(value).copy()
+        result.flags.writeable = False
+        return result
+
+    def _store_stream_cache(
+        self, cache: OrderedDict[tuple[Any, ...], Any], key: tuple[Any, ...], value: Any
+    ) -> None:
+        if self._stream_cache_capacity == 0:
+            return
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > self._stream_cache_capacity:
+            cache.popitem(last=False)
+
+    def _voice_stream_cache_key(self, voice_state: SoproVoiceState) -> str:
+        if voice_state.cache_key:
+            return voice_state.cache_key
+        digest = hashlib.sha256()
+        for value in (str(self.manifest.get("revision")), self.profile):
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
+        for array in (voice_state.cond_vec, voice_state.semantic_tokens, voice_state.mel):
+            digest.update(np.ascontiguousarray(array).tobytes())
+        return digest.hexdigest()
+
+    def _get_prompt_state(
+        self,
+        voice_state: SoproVoiceState,
+        reference_tokens: np.ndarray,
+        reference_frames: int,
+        reference_mel: np.ndarray,
+        stable_prompt: int,
+        seed: int,
+        mode: str,
+    ) -> tuple[_SoproPromptState, bool]:
+        config = self._runtime_config
+        steps = config.fixed_steps
+        dim_head = config.acoustic_dim_head
+        if dim_head is None:
+            raise ManifestError("Sopro acoustic rotary dimension is missing from the manifest")
+        key = (
+            self._voice_stream_cache_key(voice_state),
+            seed,
+            steps,
+            stable_prompt,
+            config.stream_chunk_frames,
+        )
+        if self._stream_cache_capacity:
+            cached = self._prompt_state_cache.get(key)
+            if cached is not None:
+                self._prompt_state_cache.move_to_end(key)
+                return cached, True
+        condition, _ = self._stream_condition(
+            reference_tokens, np.empty(0, dtype=np.int64), reference_frames
+        )
+        noise = _SoproNoise(seed)
+        noise.ensure(stable_prompt)
+        cond_mel = np.zeros((1, 100, stable_prompt), dtype=np.float32)
+        cond_mel[0] = reference_mel[:, :stable_prompt]
+        state = self._stream_prefill(
+            steps=steps,
+            split=mode == "split",
+            frames=stable_prompt,
+            x_init=noise.slice(0, stable_prompt),
+            mu=np.ascontiguousarray(condition[:, :, :stable_prompt]),
+            cond_vec=np.ascontiguousarray(voice_state.cond_vec[None, :]),
+            cond_mel=cond_mel,
+            cond_mask=np.ones((1, 1, stable_prompt), dtype=np.float32),
+            cosine=_rotary(stable_prompt, dim_head)[0],
+            sine=_rotary(stable_prompt, dim_head)[1],
+            chunk_bias=_chunk_attention_bias(stable_prompt, config.stream_chunk_frames),
+        )
+        prompt = _SoproPromptState(
+            cached_frames=state.cached_frames,
+            x_context=self._readonly_cache_array(state.x_context),
+            past_k=self._readonly_cache_array(state.past_k),
+            past_v=self._readonly_cache_array(state.past_v),
+            split_ode=mode == "split",
+            mu=self._readonly_cache_array(condition),
+            mu_frames=reference_frames,
+        )
+        self._store_stream_cache(self._prompt_state_cache, key, prompt)
+        return prompt, False
+
+    def _get_vocoder_prompt_state(
+        self, voice_state: SoproVoiceState, reference_mel: np.ndarray
+    ) -> tuple[_SoproVocoderPromptState, bool]:
+        config = self._runtime_config
+        if any(
+            value is None
+            for value in (
+                config.vocoder_n_fft,
+                config.vocoder_dim,
+                config.vocoder_layers,
+                config.vocoder_lookahead,
+            )
+        ):
+            raise ManifestError("Sopro vocoder streaming dimensions are missing from the manifest")
+        n_fft = cast(int, config.vocoder_n_fft)
+        dimension = cast(int, config.vocoder_dim)
+        layers = cast(int, config.vocoder_layers)
+        lookahead = cast(int, config.vocoder_lookahead)
+        warm_frames = min(32, reference_mel.shape[1])
+        key = (self._voice_stream_cache_key(voice_state), self.profile, warm_frames)
+        if self._stream_cache_capacity:
+            cached = self._vocoder_prompt_cache.get(key)
+            if cached is not None:
+                self._vocoder_prompt_cache.move_to_end(key)
+                return cached, True
+        model = self._frontend_config().get("model")
+        if not isinstance(model, Mapping):
+            raise ManifestError("Sopro manifest is missing acoustic mel statistics")
+        mean = np.asarray(model.get("acoustic_mel_mean"), dtype=np.float32)
+        std = np.asarray(model.get("acoustic_mel_std"), dtype=np.float32)
+        initial = _SoproVocoderState(
+            embed_state=np.zeros((1, 100, 6), dtype=np.float32),
+            conv_state=np.zeros((layers, 1, dimension, 6), dtype=np.float32),
+            pending=np.zeros((layers, 1, dimension, lookahead), dtype=np.float32),
+        )
+        warm_mel = reference_mel[:, -warm_frames:] * std[:, None] + mean[:, None]
+        output = self._run_contract_graph(
+            "vocoder",
+            {
+                "mel": np.ascontiguousarray(warm_mel[None, :, :], dtype=np.float32),
+                "is_start": np.asarray(True, dtype=np.bool_),
+                "is_flush": np.asarray(False, dtype=np.bool_),
+                "embed_state": initial.embed_state,
+                "conv_state": initial.conv_state,
+                "pending": initial.pending,
+            },
+            ("istft_features", "embed_state_out", "conv_state_out", "pending_out"),
+        )
+        features = np.asarray(output["istft_features"])
+        states = (
+            np.asarray(output["embed_state_out"]),
+            np.asarray(output["conv_state_out"]),
+            np.asarray(output["pending_out"]),
+        )
+        expected = ((1, 100, 6), (layers, 1, dimension, 6), (layers, 1, dimension, lookahead))
+        if (
+            features.ndim != 3
+            or features.shape[0] != 1
+            or features.shape[2] != n_fft + 2
+            or not np.isfinite(features).all()
+            or any(
+                state.shape != shape
+                or not np.issubdtype(state.dtype, np.floating)
+                or not np.isfinite(state).all()
+                for state, shape in zip(states, expected, strict=True)
+            )
+        ):
+            raise RuntimeContractError("Sopro vocoder prompt warmup returned invalid tensors")
+        prompt = _SoproVocoderPromptState(
+            warm_frames=warm_frames,
+            istft_features=self._readonly_cache_array(features),
+            embed_state=self._readonly_cache_array(states[0].astype(np.float32)),
+            conv_state=self._readonly_cache_array(states[1].astype(np.float32)),
+            pending=self._readonly_cache_array(states[2].astype(np.float32)),
+        )
+        self._store_stream_cache(self._vocoder_prompt_cache, key, prompt)
+        return prompt, False
+
+    def prepare_streaming(
+        self,
+        voice_state: SoproVoiceState,
+        *,
+        seed: int = 1,
+        steps: int | None = None,
+    ) -> None:
+        """Synchronously prewarm bounded prompt/vocoder state and streaming sessions."""
+        if not isinstance(voice_state, SoproVoiceState):
+            raise RuntimeContractError("Sopro streaming preparation requires a prepared voice")
+        config = self._runtime_config
+        self._semantic_generation_options({"seed": seed})
+        if steps is not None and (type(steps) is not int or steps != config.fixed_steps):
+            raise CapabilityError(
+                "Sopro streaming steps must match the installed fixed-step graphs"
+            )
+        providers = (
+            (self.providers,) if isinstance(self.providers, str) else tuple(self.providers or ())
+        )
+        if self.profile != "wasm-uint8" or providers not in {
+            ("cpu",),
+            ("CPUExecutionProvider",),
+        }:
+            raise CapabilityError(
+                "Sopro streaming prewarm is parity-gated for wasm-uint8 on CPUExecutionProvider"
+            )
+        mode, graphs = _select_stream_graph_mode(self.graphs, config.fixed_steps)
+        for graph in (*graphs, "acoustic_condition", "vocoder"):
+            self.session(graph)
+        if config.position_context is None or config.acoustic_pre_lookahead_frames is None:
+            raise ManifestError("Sopro streaming prompt dimensions are missing from the manifest")
+        hop_ratio = config.hop_ratio
+        aligned_tokens = min(
+            voice_state.semantic_tokens.size, voice_state.mel.shape[1] // hop_ratio
+        )
+        reference_frames = (voice_state.mel.shape[1] // hop_ratio) * hop_ratio
+        if reference_frames <= 0 or aligned_tokens <= 0:
+            raise RuntimeContractError("Sopro prepared voice has no aligned reference prompt")
+        reference_tokens = np.ascontiguousarray(voice_state.semantic_tokens[:aligned_tokens])
+        reference_mel = np.ascontiguousarray(voice_state.mel[:, :reference_frames])
+        stable_prompt = _stable_prompt_frames(
+            reference_frames,
+            aligned_tokens,
+            config.acoustic_pre_lookahead_frames,
+            hop_ratio,
+            config.stream_chunk_frames,
+        )
+        if stable_prompt >= config.position_context:
+            self._get_prompt_state(
+                voice_state,
+                reference_tokens,
+                reference_frames,
+                reference_mel,
+                stable_prompt,
+                seed,
+                mode,
+            )
+        self._get_vocoder_prompt_state(voice_state, reference_mel)
+
+    def _stream_one_segment(
         self,
         text_input: SoproTextInput,
         voice_state: SoproVoiceState,
+        options: _SemanticOptions,
+        prompt_tokens: Sequence[int] | np.ndarray | None,
         *,
-        options: Mapping[str, Any] | None = None,
-        prompt_tokens: Sequence[int] | np.ndarray | None = None,
-    ) -> InferenceResult:
-        settings = self._semantic_generation_options(options)
-        semantic = self._generate_semantic_tokens(
+        segment_index: int,
+    ) -> Generator[SoproStreamChunk, None, np.ndarray | None]:
+        stream_started = time.perf_counter()
+        config = self._runtime_config
+        steps = config.fixed_steps
+        if config.position_context is None or config.acoustic_pre_lookahead_frames is None:
+            raise ManifestError("Sopro streaming prompt dimensions are missing from the manifest")
+        position_context = config.position_context
+        model = self._frontend_config().get("model")
+        vocoder_config = self._frontend_config().get("vocoder")
+        if not isinstance(model, Mapping) or not isinstance(vocoder_config, Mapping):
+            raise ManifestError("Sopro streaming model and vocoder configuration are required")
+        mean = np.asarray(model.get("acoustic_mel_mean"), dtype=np.float32)
+        std = np.asarray(model.get("acoustic_mel_std"), dtype=np.float32)
+        dim_head = config.acoustic_dim_head
+        n_fft = config.vocoder_n_fft
+        vocoder_hop = config.vocoder_hop_length
+        dimension = config.vocoder_dim
+        layers = config.vocoder_layers
+        lookahead = config.vocoder_lookahead
+        if (
+            mean.shape != (100,)
+            or std.shape != (100,)
+            or not np.isfinite(mean).all()
+            or not np.isfinite(std).all()
+            or np.any(std <= 0)
+            or None in (dim_head, n_fft, vocoder_hop, dimension, layers, lookahead)
+        ):
+            raise ManifestError("Sopro streaming acoustic or vocoder dimensions are invalid")
+        dim_head = cast(int, dim_head)
+        n_fft = cast(int, n_fft)
+        vocoder_hop = cast(int, vocoder_hop)
+        dimension = cast(int, dimension)
+        layers = cast(int, layers)
+        lookahead = cast(int, lookahead)
+        hop_ratio = config.hop_ratio
+        stable_prompt = _stable_prompt_frames(
+            voice_state.mel.shape[1],
+            int(voice_state.semantic_tokens.size),
+            config.acoustic_pre_lookahead_frames,
+            hop_ratio,
+            config.stream_chunk_frames,
+        )
+        if stable_prompt < config.position_context:
+            fallback_started = time.perf_counter()
+            result = self._synthesize_one_segment(
+                text_input,
+                voice_state,
+                options=options,
+                prompt_tokens=prompt_tokens,
+            )
+            generated = np.asarray(
+                result.metadata.get("generated_semantic_tokens", ()), dtype=np.int64
+            )
+            prompt_limit = result.metadata.get("prompt_token_limit", 0)
+            carry = (
+                generated[-prompt_limit:].copy()
+                if type(prompt_limit) is int and prompt_limit > 0 and generated.size
+                else None
+            )
+            fallback_elapsed_ms = (time.perf_counter() - fallback_started) * 1000.0
+            metadata = {
+                "system": "sopro",
+                "profile": self.profile,
+                "revision": self.manifest.get("revision"),
+                "streaming": True,
+                "streaming_fallback": "short_reference",
+                "segment_index": segment_index,
+                "chunk_index": 0,
+                "seed": options.seed,
+                "steps": steps,
+                "semantic_tokens_total": int(generated.size),
+                "acoustic_cached_frames": int(result.metadata.get("acoustic_frames", 0)),
+                "audio_samples": int(result.audio.size),
+                "reference_prepare_ms": voice_state.reference_prepare_ms,
+                "stream_prompt_prepare_ms": 0.0,
+                "first_audio_chunk_ms": fallback_elapsed_ms,
+                "total_stream_ms": fallback_elapsed_ms,
+                "chunk_count": 1,
+                "generated_semantic_tokens": int(generated.size),
+                "is_final": True,
+            }
+            yield SoproStreamChunk(
+                audio=np.ascontiguousarray(result.audio, dtype=np.float32),
+                sample_rate=result.sample_rate,
+                is_final=True,
+                metadata=metadata,
+            )
+            return carry
+
+        mode, _ = _select_stream_graph_mode(self.graphs, steps)
+        aligned_tokens = min(
+            int(voice_state.semantic_tokens.size), voice_state.mel.shape[1] // hop_ratio
+        )
+        reference_tokens = np.ascontiguousarray(voice_state.semantic_tokens[:aligned_tokens])
+        reference_frames = (voice_state.mel.shape[1] // hop_ratio) * hop_ratio
+        reference_mel = np.ascontiguousarray(voice_state.mel[:, :reference_frames])
+        if reference_tokens.size == 0 or reference_frames == 0:
+            raise RuntimeContractError("Sopro stream reference has no aligned semantic/mel frames")
+        decoder = self._create_semantic_decoder(
             text_input,
             voice_state,
             options=options,
             prompt_token_override=prompt_tokens,
         )
-        token_samples = self.manifest.get("tokenSamples")
-        hop_ratio = self.manifest.get("hopRatio")
-        steps = self.manifest.get("steps")
-        if (
-            type(token_samples) is not int
-            or token_samples <= 0
-            or type(hop_ratio) is not int
-            or hop_ratio <= 0
-            or type(steps) is not int
-            or steps <= 0
-        ):
-            raise ManifestError("Sopro tokenSamples, hopRatio, and steps must be positive integers")
+        try:
+            prompt_prepare_started = time.perf_counter()
+            prompt_state, prompt_cache_hit = self._get_prompt_state(
+                voice_state,
+                reference_tokens,
+                reference_frames,
+                reference_mel,
+                stable_prompt,
+                options.seed,
+                mode,
+            )
+            condition = prompt_state.mu
+            state = _SoproAcousticState(
+                cached_frames=prompt_state.cached_frames,
+                x_context=prompt_state.x_context,
+                past_k=prompt_state.past_k,
+                past_v=prompt_state.past_v,
+            )
+            x_noise = _SoproNoise(options.seed)
+            x_noise.ensure(reference_frames)
+            cond_mel = np.zeros((1, 100, reference_frames), dtype=np.float32)
+            cond_mel[0] = reference_mel
+            vocoder_prompt, vocoder_cache_hit = self._get_vocoder_prompt_state(
+                voice_state, reference_mel
+            )
+            istft = _StreamingISTFT(int(n_fft), int(vocoder_hop))
+            warm_features = vocoder_prompt.istft_features
+            warm_audio = istft.push(warm_features, warm_features.shape[1], flush=False)
+            vocoder_state = _SoproVocoderState(
+                embed_state=vocoder_prompt.embed_state,
+                conv_state=vocoder_prompt.conv_state,
+                pending=vocoder_prompt.pending,
+            )
+            warm_frames = vocoder_prompt.warm_frames
+            skip_samples = max(0, warm_frames * int(vocoder_hop) - warm_audio.size)
+            stream_prompt_prepare_ms = (time.perf_counter() - prompt_prepare_started) * 1000.0
+            emitted_samples = 0
+            chunk_index = 0
+            semantic_first_token_ms: float | None = None
+            first_audio_chunk_ms: float | None = None
+            condition_token_count = 0
+
+            def feed_vocoder(mel_values: np.ndarray, *, start: bool, flush: bool) -> np.ndarray:
+                nonlocal vocoder_state, skip_samples
+                mel_values = np.asarray(mel_values, dtype=np.float32)
+                if (
+                    mel_values.ndim != 2
+                    or mel_values.shape[0] != 100
+                    or not np.isfinite(mel_values).all()
+                ):
+                    raise RuntimeContractError(
+                        "Sopro streaming vocoder mel has invalid shape or values"
+                    )
+                outputs = self._run_contract_graph(
+                    "vocoder",
+                    {
+                        "mel": np.ascontiguousarray(mel_values[None, :, :]),
+                        "is_start": np.asarray(start, dtype=np.bool_),
+                        "is_flush": np.asarray(flush, dtype=np.bool_),
+                        "embed_state": vocoder_state.embed_state,
+                        "conv_state": vocoder_state.conv_state,
+                        "pending": vocoder_state.pending,
+                    },
+                    ("istft_features", "embed_state_out", "conv_state_out", "pending_out"),
+                )
+                states = (
+                    np.asarray(outputs["embed_state_out"]),
+                    np.asarray(outputs["conv_state_out"]),
+                    np.asarray(outputs["pending_out"]),
+                )
+                expected = (
+                    (1, 100, 6),
+                    (int(layers), 1, int(dimension), 6),
+                    (int(layers), 1, int(dimension), int(lookahead)),
+                )
+                if any(
+                    value.shape != shape
+                    or not np.issubdtype(value.dtype, np.floating)
+                    or not np.isfinite(value).all()
+                    for value, shape in zip(states, expected, strict=True)
+                ):
+                    raise RuntimeContractError(
+                        "Sopro streaming vocoder returned invalid state tensors"
+                    )
+                vocoder_state = _SoproVocoderState(
+                    *(np.ascontiguousarray(value, dtype=np.float32) for value in states)
+                )
+                features = np.asarray(outputs["istft_features"])
+                if (
+                    features.ndim != 3
+                    or features.shape[0] != 1
+                    or features.shape[2] != int(n_fft) + 2
+                    or not np.isfinite(features).all()
+                ):
+                    raise RuntimeContractError(
+                        "Sopro streaming vocoder features have invalid dimensions or values"
+                    )
+                audio = istft.push(features, features.shape[1], flush=flush)
+                if skip_samples:
+                    drop = min(skip_samples, audio.size)
+                    audio = audio[drop:]
+                    skip_samples -= drop
+                return np.ascontiguousarray(audio, dtype=np.float32)
+
+            def process_until(
+                target_frames: int, generated: np.ndarray
+            ) -> Iterator[tuple[np.ndarray, int]]:
+                nonlocal state, condition, condition_token_count
+                if generated.size != condition_token_count:
+                    condition, _ = self._stream_condition(
+                        reference_tokens, generated, reference_frames
+                    )
+                    condition_token_count = int(generated.size)
+                stream_cond_mel = np.zeros((1, 100, condition.shape[-1]), dtype=np.float32)
+                stream_cond_mask = np.zeros((1, 1, condition.shape[-1]), dtype=np.float32)
+                stream_cond_mel[:, :, :reference_frames] = reference_mel[None, :, :]
+                stream_cond_mask[:, :, :reference_frames] = 1.0
+                while state.cached_frames < target_frames:
+                    cached = state.cached_frames
+                    count = min(config.stream_chunk_frames, target_frames - cached)
+                    end = cached + count
+                    start = cached - position_context
+                    if start < 0 or end > condition.shape[-1]:
+                        raise RuntimeContractError(
+                            "Sopro streaming acoustic window exceeds condition frames"
+                        )
+                    mel_values, next_state = self._stream_acoustic_step(
+                        steps=steps,
+                        split=mode == "split",
+                        state=state,
+                        x_init=x_noise.slice(cached, end),
+                        mu_window=np.ascontiguousarray(condition[:, :, start:end]),
+                        cond_vec=np.ascontiguousarray(voice_state.cond_vec[None, :]),
+                        cond_mel_window=np.ascontiguousarray(stream_cond_mel[:, :, start:end]),
+                        cond_mask_window=np.ascontiguousarray(stream_cond_mask[:, :, start:end]),
+                        cosine=_rotary(count, int(dim_head), offset=cached)[0],
+                        sine=_rotary(count, int(dim_head), offset=cached)[1],
+                    )
+                    state = next_state
+                    denormalized = mel_values[0] * std[:, None] + mean[:, None]
+                    audio = feed_vocoder(denormalized, start=False, flush=False)
+                    yield audio, state.cached_frames
+
+            for _tokens in decoder.iter_chunks(1):
+                generated = decoder.generated
+                if semantic_first_token_ms is None:
+                    semantic_first_token_ms = (time.perf_counter() - stream_started) * 1000.0
+                x_noise.ensure(reference_frames + generated.size * hop_ratio)
+                target = _stream_target_frames(
+                    reference_frames,
+                    int(generated.size),
+                    hop_ratio,
+                    config.acoustic_pre_lookahead_frames,
+                    config.stream_chunk_frames,
+                    final=False,
+                )
+                for audio, cached_frames in (
+                    process_until(target, generated) if target > state.cached_frames else ()
+                ):
+                    target_audio_samples = int(generated.size) * config.token_samples
+                    remaining = max(0, target_audio_samples - emitted_samples)
+                    chunk_audio = np.ascontiguousarray(audio[:remaining], dtype=np.float32)
+                    if chunk_audio.size:
+                        if first_audio_chunk_ms is None:
+                            first_audio_chunk_ms = (time.perf_counter() - stream_started) * 1000.0
+                        metadata = {
+                            "system": "sopro",
+                            "profile": self.profile,
+                            "revision": self.manifest.get("revision"),
+                            "streaming": True,
+                            "segment_index": segment_index,
+                            "chunk_index": chunk_index,
+                            "seed": options.seed,
+                            "steps": steps,
+                            "semantic_tokens_total": int(generated.size),
+                            "acoustic_cached_frames": cached_frames,
+                            "audio_samples": int(chunk_audio.size),
+                            "is_final": False,
+                        }
+                        emitted_samples += chunk_audio.size
+                        chunk_index += 1
+                        yield SoproStreamChunk(chunk_audio, self.sample_rate, False, metadata)
+
+            semantic = decoder.result
+            generated = semantic.tokens
+            if generated.size == 0:
+                return None
+            x_noise.ensure(reference_frames + generated.size * hop_ratio)
+            final_target = _stream_target_frames(
+                reference_frames,
+                int(generated.size),
+                hop_ratio,
+                config.acoustic_pre_lookahead_frames,
+                config.stream_chunk_frames,
+                final=True,
+            )
+            for audio, cached_frames in (
+                process_until(final_target, generated) if final_target > state.cached_frames else ()
+            ):
+                target_audio_samples = int(generated.size) * config.token_samples
+                remaining = max(0, target_audio_samples - emitted_samples)
+                chunk_audio = np.ascontiguousarray(audio[:remaining], dtype=np.float32)
+                if chunk_audio.size:
+                    if first_audio_chunk_ms is None:
+                        first_audio_chunk_ms = (time.perf_counter() - stream_started) * 1000.0
+                    metadata = {
+                        "system": "sopro",
+                        "profile": self.profile,
+                        "revision": self.manifest.get("revision"),
+                        "streaming": True,
+                        "segment_index": segment_index,
+                        "chunk_index": chunk_index,
+                        "seed": options.seed,
+                        "steps": steps,
+                        "semantic_tokens_total": int(generated.size),
+                        "acoustic_cached_frames": cached_frames,
+                        "audio_samples": int(chunk_audio.size),
+                        "is_final": False,
+                    }
+                    emitted_samples += chunk_audio.size
+                    chunk_index += 1
+                    yield SoproStreamChunk(chunk_audio, self.sample_rate, False, metadata)
+            tail = feed_vocoder(np.empty((100, 0), dtype=np.float32), start=False, flush=True)
+            target_audio_samples = int(generated.size) * config.token_samples
+            final_audio = np.ascontiguousarray(
+                tail[: max(0, target_audio_samples - emitted_samples)], dtype=np.float32
+            )
+            emitted_samples += final_audio.size
+            if emitted_samples != target_audio_samples:
+                raise RuntimeContractError(
+                    f"Sopro streaming audio length {emitted_samples} does not match target {target_audio_samples}"
+                )
+            prompt_limit = semantic.prompt_token_limit
+            carry = generated[-prompt_limit:].copy() if prompt_limit > 0 else None
+            total_stream_ms = (time.perf_counter() - stream_started) * 1000.0
+            if first_audio_chunk_ms is None:
+                first_audio_chunk_ms = total_stream_ms
+            metadata = {
+                "system": "sopro",
+                "profile": self.profile,
+                "revision": self.manifest.get("revision"),
+                "streaming": True,
+                "segment_index": segment_index,
+                "chunk_index": chunk_index,
+                "seed": options.seed,
+                "steps": steps,
+                "semantic_tokens_total": int(generated.size),
+                "acoustic_cached_frames": state.cached_frames,
+                "audio_samples": int(final_audio.size),
+                "reference_prepare_ms": voice_state.reference_prepare_ms,
+                "stream_prompt_prepare_ms": stream_prompt_prepare_ms,
+                "semantic_first_token_ms": semantic_first_token_ms,
+                "first_audio_chunk_ms": first_audio_chunk_ms,
+                "total_stream_ms": total_stream_ms,
+                "chunk_count": chunk_index + 1,
+                "generated_semantic_tokens": int(generated.size),
+                "prompt_cache_hit": prompt_cache_hit,
+                "vocoder_cache_hit": vocoder_cache_hit,
+                "is_final": True,
+            }
+            yield SoproStreamChunk(final_audio, self.sample_rate, True, metadata)
+            return carry
+        finally:
+            decoder.close()
+
+    def _synthesize_one_segment(
+        self,
+        text_input: SoproTextInput,
+        voice_state: SoproVoiceState,
+        *,
+        options: _SemanticOptions | Mapping[str, Any] | None = None,
+        prompt_tokens: Sequence[int] | np.ndarray | None = None,
+    ) -> InferenceResult:
+        settings = self._semantic_generation_options(options)
+        decoder = self._create_semantic_decoder(
+            text_input,
+            voice_state,
+            options=options,
+            prompt_token_override=prompt_tokens,
+        )
+        try:
+            for _chunk in decoder.iter_chunks(32):
+                pass
+            semantic = decoder.result
+        finally:
+            decoder.close()
+        runtime_config = self._runtime_config
+        token_samples = runtime_config.token_samples
+        hop_ratio = runtime_config.hop_ratio
+        steps = runtime_config.fixed_steps
         model = self._frontend_config().get("model")
         if not isinstance(model, Mapping):
             raise ManifestError("Sopro manifest is missing acoustic model configuration")
@@ -1432,6 +2537,38 @@ class SoproAdapter(SystemAdapter):
             },
         )
 
+    def begin_run(
+        self,
+        voice_state: SoproVoiceState,
+        *,
+        language: str | None = None,
+        **options: Any,
+    ) -> SoproRun:
+        """Create a segment run with validated, reusable generation settings."""
+        if not isinstance(voice_state, SoproVoiceState):
+            raise RuntimeContractError("Sopro run requires a prepared SoproVoiceState")
+        requested = self.providers
+        provider_names = (requested,) if isinstance(requested, str) else tuple(requested or ())
+        if self.profile != "wasm-uint8" or provider_names not in {
+            ("cpu",),
+            ("CPUExecutionProvider",),
+        }:
+            raise CapabilityError(
+                "Sopro runs are parity-gated for wasm-uint8 on CPUExecutionProvider"
+            )
+        if language is not None and language not in {"auto", "en", "pt", "fr", "de"}:
+            raise CapabilityError(f"Unsupported Sopro language {language!r}")
+        normalized_language = None if language in {None, "auto"} else language
+        resolved = self._semantic_generation_options(options)
+        return SoproRun(self, voice_state, normalized_language, resolved)
+
+    def close(self) -> None:
+        """Invalidate active runs and close all owned ONNX Runtime sessions."""
+        self._prompt_state_cache.clear()
+        self._vocoder_prompt_cache.clear()
+        self._generation_token += 1
+        super().close()
+
     def infer(self, token_ids: Sequence[int], **kwargs: Any) -> InferenceResult:
         """Generate one Sopro segment as raw mono float32 PCM.
 
@@ -1514,6 +2651,100 @@ class SoproAdapter(SystemAdapter):
         """Return diagnostics for every graph session created so far."""
         return super().diagnostics()
 
+
+class SoproRun:
+    """Mutable, non-thread-safe state for sequential Sopro text segments."""
+
+    def __init__(
+        self,
+        adapter: SoproAdapter,
+        voice: SoproVoiceState,
+        language: str | None,
+        options: _SemanticOptions,
+    ) -> None:
+        self._adapter_ref = weakref.ref(adapter)
+        self._adapter_generation = adapter._generation_token
+        self._voice = voice
+        self._language = language
+        self._options = options
+        self._carry: np.ndarray | None = None
+        self._segment_index = 0
+        self._closed = False
+
+    def _adapter(self) -> SoproAdapter:
+        adapter = self._adapter_ref()
+        if self._closed or adapter is None or adapter._generation_token != self._adapter_generation:
+            raise RuntimeContractError("Sopro run is closed or its adapter has been closed")
+        return adapter
+
+    @property
+    def voice(self) -> SoproVoiceState:
+        self._adapter()
+        return self._voice
+
+    @property
+    def segment_index(self) -> int:
+        return self._segment_index
+
+    def infer_segment(self, text: str, *, language: str | None = None) -> InferenceResult:
+        """Synthesize one segment and carry its semantic tail into the next."""
+        adapter = self._adapter()
+        effective_language = self._language if language is None else language
+        text_input = adapter.prepare_text(text, effective_language)
+        result = adapter._synthesize_one_segment(
+            text_input,
+            self._voice,
+            options=self._options,
+            prompt_tokens=self._carry,
+        )
+        generated = np.asarray(result.metadata.get("generated_semantic_tokens", ()), dtype=np.int64)
+        prompt_limit = result.metadata.get("prompt_token_limit", 0)
+        if type(prompt_limit) is int and prompt_limit > 0 and generated.size:
+            self._carry = generated[-prompt_limit:].copy()
+        else:
+            self._carry = None
+        self._segment_index += 1
+        return result
+
+    def stream_segment(
+        self, text: str, *, language: str | None = None
+    ) -> Generator[SoproStreamChunk]:
+        """Synchronously stream raw audio chunks for one text segment."""
+        adapter = self._adapter()
+        effective_language = self._language if language is None else language
+        text_input = adapter.prepare_text(text, effective_language)
+        stream = adapter._stream_one_segment(
+            text_input,
+            self._voice,
+            self._options,
+            self._carry,
+            segment_index=self._segment_index,
+        )
+        try:
+            while True:
+                try:
+                    chunk = next(stream)
+                except StopIteration as completed:
+                    self._carry = completed.value
+                    self._segment_index += 1
+                    return
+                if chunk.is_final:
+                    try:
+                        carry = next(stream)
+                    except StopIteration as completed:
+                        self._carry = completed.value
+                    else:
+                        raise RuntimeContractError(
+                            f"Sopro stream yielded unexpected data after final chunk: {carry!r}"
+                        )
+                    self._segment_index += 1
+                    yield chunk
+                    return
+                yield chunk
+        finally:
+            stream.close()
+
     def close(self) -> None:
-        """Close every created graph session; safe to call more than once."""
-        super().close()
+        """Release run-local carry; repeated close calls are safe."""
+        self._closed = True
+        self._carry = None

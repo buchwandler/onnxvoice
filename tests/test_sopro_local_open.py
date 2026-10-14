@@ -21,7 +21,8 @@ from onnxvoice.errors import (
     UnsafePathError,
 )
 from onnxvoice.systems import SoproAdapter, SoproVoiceState
-from onnxvoice.systems.sopro import _sopro_istft
+from onnxvoice.systems.sopro import _sopro_istft, prepare_reference_audio
+from onnxvoice.systems.sopro_streaming import _SoproPromptState, _SoproVocoderPromptState
 from onnxvoice.types import RuntimeDiagnostic, SessionDiagnostic, TensorSpec
 
 PROFILE = "wasm-uint8"
@@ -461,6 +462,86 @@ def test_prepare_voice_builds_typed_reference_state_and_official_graph_inputs(
     assert created[0].closed == 1
 
 
+def test_prepare_voice_seconds_override_changes_reusable_reference_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files, manifest = _write_bundle(tmp_path)
+    _configure_reference_frontend(files, manifest)
+    monkeypatch.setattr(
+        "onnxvoice.systems.sopro.OnnxSession",
+        lambda path, **kwargs: _FakeReferenceSession(path, **kwargs),
+    )
+    captured: list[float] = []
+    prepare = prepare_reference_audio
+
+    def capture_duration(waveform: np.ndarray, rate: int, *, seconds: float):
+        captured.append(seconds)
+        return prepare(waveform, rate, seconds=seconds)
+
+    monkeypatch.setattr("onnxvoice.systems.sopro.prepare_reference_audio", capture_duration)
+    runtime = _open_local(files)
+    waveform = np.random.default_rng(12).uniform(-0.1, 0.1, size=24000).astype(np.float32)
+    try:
+        default_voice = runtime.prepare_voice(waveform, 24000)
+        voice = runtime.prepare_voice(waveform, 24000, seconds=7.5)
+        assert captured == [10.0, 7.5]
+        assert default_voice.mel_frames > 0 and voice.mel_frames > 0
+        repeated_voice = runtime.prepare_voice(waveform, 24000, seconds=7.5)
+        assert repeated_voice.mel.shape == voice.mel.shape
+        assert repeated_voice.cache_key == voice.cache_key
+        assert default_voice.cache_key != voice.cache_key
+        with pytest.raises(RuntimeContractError, match="finite and positive"):
+            runtime.prepare_voice(waveform, 24000, seconds=float("inf"))
+    finally:
+        runtime.close()
+
+
+def test_stream_cache_capacity_is_bounded_lru_and_close_clears_entries(tmp_path: Path) -> None:
+    files, _manifest = _write_bundle(tmp_path)
+    runtime = _open_local(files, providers=["CPUExecutionProvider"])
+    try:
+        runtime.stream_cache_capacity = 2
+        prompt_entry = _SoproPromptState(
+            cached_frames=1,
+            x_context=np.empty((2, 1, 100, 1), dtype=np.float32),
+            past_k=np.empty((2, 8, 1, 8, 1, 64), dtype=np.float32),
+            past_v=np.empty((2, 8, 1, 8, 1, 64), dtype=np.float32),
+            split_ode=True,
+            mu=np.empty((1, 100, 1), dtype=np.float32),
+            mu_frames=1,
+        )
+        vocoder_entry = _SoproVocoderPromptState(
+            warm_frames=1,
+            istft_features=np.empty((1, 1, 1026), dtype=np.float32),
+            embed_state=np.empty((1, 100, 6), dtype=np.float32),
+            conv_state=np.empty((8, 1, 512, 6), dtype=np.float32),
+            pending=np.empty((8, 1, 512, 3), dtype=np.float32),
+        )
+        runtime._store_stream_cache(runtime._prompt_state_cache, ("old",), prompt_entry)
+        runtime._store_stream_cache(runtime._prompt_state_cache, ("new",), prompt_entry)
+        runtime._store_stream_cache(runtime._vocoder_prompt_cache, ("old",), vocoder_entry)
+        runtime._store_stream_cache(runtime._vocoder_prompt_cache, ("new",), vocoder_entry)
+        runtime._prompt_state_cache.move_to_end(("old",))
+        runtime._vocoder_prompt_cache.move_to_end(("old",))
+        runtime._store_stream_cache(runtime._prompt_state_cache, ("latest",), prompt_entry)
+        runtime._store_stream_cache(runtime._vocoder_prompt_cache, ("latest",), vocoder_entry)
+        assert ("old",) in runtime._prompt_state_cache
+        assert ("old",) in runtime._vocoder_prompt_cache
+        assert ("new",) not in runtime._prompt_state_cache
+        assert ("new",) not in runtime._vocoder_prompt_cache
+        runtime.stream_cache_capacity = 1
+        assert len(runtime._prompt_state_cache) == 1
+        assert len(runtime._vocoder_prompt_cache) == 1
+        assert ("latest",) in runtime._prompt_state_cache
+        assert ("latest",) in runtime._vocoder_prompt_cache
+        with pytest.raises(RuntimeContractError, match="non-negative integer"):
+            runtime.stream_cache_capacity = -1
+    finally:
+        runtime.close()
+    assert not runtime._prompt_state_cache
+    assert not runtime._vocoder_prompt_cache
+
+
 def test_real_reference_graph_matches_pinned_onnx_outputs(
     tmp_path: Path,
 ) -> None:
@@ -699,6 +780,7 @@ class _FakeSemanticPrefixSession:
         self.model = path
         self.kwargs = kwargs
         self.inputs: dict[str, np.ndarray] = {}
+        self.calls: list[dict[str, np.ndarray]] = []
 
     @property
     def input_specs(self) -> tuple[TensorSpec, ...]:
@@ -710,6 +792,7 @@ class _FakeSemanticPrefixSession:
 
     def run(self, inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
         self.inputs = {name: value.copy() for name, value in inputs.items()}
+        self.calls.append({name: value.copy() for name, value in inputs.items()})
         hidden_length = 2 + inputs["text_ids"].shape[1] + inputs["prompt_tokens"].shape[1]
         hidden = np.full((1, hidden_length, 8), 0.25, dtype=np.float32)
         bos_hidden = np.full((1, 1, 8), 0.5, dtype=np.float32)
@@ -943,6 +1026,7 @@ def test_semantic_generation_prefills_then_uses_cached_core_and_honors_minimum_e
     finally:
         runtime.close()
 
+
 def test_semantic_prompt_override_replaces_only_reference_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -972,7 +1056,6 @@ def test_semantic_prompt_override_replaces_only_reference_prompt(
         runtime.close()
 
 
-
 def test_semantic_sampling_is_seeded_and_respects_the_duration_step_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -999,6 +1082,146 @@ def test_semantic_sampling_is_seeded_and_respects_the_duration_step_guard(
         assert result.min_steps == 1
         assert not result.stopped_on_eos
         assert len(sessions["semantic_core"].calls) == 4
+        repeated = runtime._generate_semantic_tokens(
+            runtime.prepare_text("hello, world!", "en"),
+            _semantic_test_voice(),
+            options={
+                "temperature": 0.8,
+                "top_p": 0.8,
+                "top_k": 3,
+                "max_seconds": 0.13,
+                "min_seconds": 0.0,
+                "seed": 123,
+            },
+        )
+        np.testing.assert_array_equal(repeated.tokens, result.tokens)
+    finally:
+        runtime.close()
+
+
+def test_sopro_run_carries_prompt_and_close_invalidates_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files, manifest = _write_bundle(tmp_path)
+    _configure_semantic_bundle(files, manifest)
+    _add_fake_acoustic_graphs(files, manifest)
+    sessions = _install_semantic_fake_sessions(monkeypatch, "pipeline")
+    runtime = _open_local(files, providers=["CPUExecutionProvider"])
+    voice = _semantic_test_voice()
+    try:
+        run = runtime.begin_run(
+            voice, language="en", temperature=0.0, max_seconds=0.05, min_seconds=0.0
+        )
+        assert run.segment_index == 0
+        first_result = run.infer_segment("hello, world!")
+        direct = runtime.infer(
+            runtime.prepare_text("hello, world!", "en").token_ids,
+            voice_state=voice,
+            language="en",
+            temperature=0.0,
+            max_seconds=0.05,
+            min_seconds=0.0,
+        )
+        np.testing.assert_array_equal(first_result.audio, direct.audio)
+        warmed_session_count = len(runtime._sessions)
+        run.infer_segment("again")
+        assert run.segment_index == 2
+        prefix_calls = sessions["semantic_prefix"].calls
+        np.testing.assert_array_equal(prefix_calls[0]["prompt_tokens"], [[1, 2, 3, 4]])
+        np.testing.assert_array_equal(prefix_calls[2]["prompt_tokens"], [[5, 5]])
+        independent = runtime.begin_run(
+            voice, language="en", temperature=0.0, max_seconds=0.05, min_seconds=0.0
+        )
+        independent.infer_segment("fresh run")
+        np.testing.assert_array_equal(
+            sessions["semantic_prefix"].calls[3]["prompt_tokens"], [[1, 2, 3, 4]]
+        )
+        independent.close()
+        assert len(runtime._sessions) == warmed_session_count
+        run.close()
+        with pytest.raises(RuntimeContractError, match="closed"):
+            run.infer_segment("closed")
+        active = runtime.begin_run(voice, temperature=0.0, max_seconds=0.05, min_seconds=0.0)
+        runtime.close()
+        with pytest.raises(RuntimeContractError, match="adapter has been closed"):
+            active.infer_segment("invalidated")
+    finally:
+        runtime.close()
+
+
+def test_semantic_decoder_is_incremental_and_chunk_boundaries_do_not_change_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files, manifest = _write_bundle(tmp_path)
+    _configure_semantic_bundle(files, manifest)
+    sessions = _install_semantic_fake_sessions(monkeypatch, "seeded")
+    runtime = _open_local(files)
+    text = runtime.prepare_text("hello, world!", "en")
+    voice = _semantic_test_voice()
+    options = {
+        "temperature": 0.8,
+        "top_p": 0.8,
+        "top_k": 3,
+        "max_seconds": 0.13,
+        "min_seconds": 0.0,
+        "seed": 123,
+    }
+    try:
+        decoder = runtime._create_semantic_decoder(text, voice, options=options)
+        core = sessions["semantic_core"]
+        assert len(core.calls) == 1  # Prefix prefill only; no generated token yet.
+        first = decoder.next_token()
+        assert first is not None
+        assert len(core.calls) == 1
+        second = decoder.next_token()
+        assert second is not None
+        assert len(core.calls) == 2
+        decoder.close()
+        with pytest.raises(RuntimeContractError, match="decoder is closed"):
+            decoder.next_token()
+
+        one_token = runtime._create_semantic_decoder(text, voice, options=options)
+        tokens_one = np.concatenate(list(one_token.iter_chunks(1)))
+        one_token.close()
+        three_tokens = runtime._create_semantic_decoder(text, voice, options=options)
+        tokens_three = np.concatenate(list(three_tokens.iter_chunks(3)))
+        three_tokens.close()
+        np.testing.assert_array_equal(tokens_one, tokens_three)
+    finally:
+        runtime.close()
+
+
+def test_sopro_run_short_reference_stream_falls_back_to_one_offline_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files, manifest = _write_bundle(tmp_path)
+    _configure_semantic_bundle(files, manifest)
+    manifest["positionContext"] = 8
+    manifest["config"]["model"]["acoustic_pre_lookahead_frames"] = 100
+    files["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
+    _add_fake_acoustic_graphs(files, manifest)
+    _install_semantic_fake_sessions(monkeypatch, "pipeline")
+    runtime = _open_local(files, providers=["CPUExecutionProvider"])
+    try:
+        run = runtime.begin_run(
+            _semantic_test_voice(), temperature=0.0, max_seconds=0.05, min_seconds=0.0
+        )
+        stream = run.stream_segment("hello, world!")
+        chunk = next(stream)
+        stream.close()
+        chunks = [chunk]
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk.is_final
+        assert chunk.audio.dtype == np.float32 and chunk.audio.ndim == 1
+        assert chunk.metadata["streaming_fallback"] == "short_reference"
+        assert chunk.metadata["is_final"] is True
+        assert run.segment_index == 1
+        second_chunks = list(run.stream_segment("again"))
+        assert len(second_chunks) == 1
+        assert second_chunks[0].metadata["segment_index"] == 1
+        assert run.segment_index == 2
+        run.close()
     finally:
         runtime.close()
 
@@ -1036,6 +1259,7 @@ def test_single_segment_orders_acoustic_condition_ode_and_vocoder_without_applic
         assert result.metadata["generated_semantic_tokens"] == (5, 5)
         assert result.metadata["prompt_token_limit"] == 4
         assert result.metadata["audio_samples"] == result.audio.size
+        json.dumps(result.metadata)
 
         condition = sessions["acoustic_condition"].calls[0]
         np.testing.assert_array_equal(condition["semantic_tokens"], [[1, 2, 3, 4, 5, 6, 5, 5]])
@@ -1071,9 +1295,7 @@ def test_single_segment_orders_acoustic_condition_ode_and_vocoder_without_applic
         assert inferred.metadata["sample_rate"] == 24000
         assert inferred.metadata["generated_semantic_tokens"] == (5, 5)
         assert inferred.metadata["prompt_token_limit"] == 4
-        np.testing.assert_array_equal(
-            sessions["semantic_prefix"].inputs["prompt_tokens"], [[6, 5]]
-        )
+        np.testing.assert_array_equal(sessions["semantic_prefix"].inputs["prompt_tokens"], [[6, 5]])
     finally:
         runtime.close()
 
@@ -1144,7 +1366,6 @@ def test_infer_validates_tokens_options_voice_and_profile(tmp_path: Path) -> Non
     ("options", "error"),
     [
         ({"temperature": -0.1}, RuntimeContractError),
-        ({"top_p": 0.0}, RuntimeContractError),
         ({"top_k": -1}, RuntimeContractError),
         ({"max_seconds": 0.0}, RuntimeContractError),
         ({"max_seconds": 0.4, "min_seconds": 0.5}, RuntimeContractError),
@@ -1164,6 +1385,40 @@ def test_semantic_generation_rejects_invalid_controls(
     try:
         with pytest.raises(error):
             runtime._semantic_generation_options(options)
+    finally:
+        runtime.close()
+
+
+def test_generation_defaults_and_strategy_a_top_p_zero(tmp_path: Path) -> None:
+    files, manifest = _write_bundle(tmp_path)
+    _configure_semantic_bundle(files, manifest, include_prefix=False)
+    runtime = _open_local(files)
+    try:
+        defaults = runtime.generation_defaults
+        assert defaults.temperature == 0.8
+        assert defaults.top_p == 0.9
+        assert defaults.top_k == 25
+        assert defaults.steps == runtime.fixed_steps == 2
+        assert defaults.ref_seconds == 10.0
+        assert runtime.max_segment_chars == defaults.max_segment_chars
+        assert runtime.token_samples == 1024
+        assert runtime.hop_ratio == 4
+        shapes = runtime._runtime_config
+        assert shapes is runtime._runtime_config
+        assert shapes.sample_rate == 24000
+        assert shapes.token_samples == 1024
+        assert shapes.hop_ratio == 4
+        assert shapes.fixed_steps == 2
+        assert shapes.acoustic_dim_head == 4
+        assert shapes.vocoder_n_fft == 1024
+        assert shapes.vocoder_hop_length == 256
+        assert shapes.vocoder_dim == 8
+        assert shapes.vocoder_layers == 2
+        assert shapes.vocoder_lookahead == 3
+        assert runtime._semantic_generation_options({"top_p": 0.0}).top_p == 0.0
+        with pytest.raises((AttributeError, TypeError)):
+            attribute = "top_p"
+            setattr(defaults, attribute, 0.5)
     finally:
         runtime.close()
 

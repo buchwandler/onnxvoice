@@ -44,6 +44,7 @@ class PiperAdapter(SystemAdapter):
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             return None
         return value
+
     def _config(self) -> dict[str, Any]:
         if self._config_cache is not None:
             return self._config_cache

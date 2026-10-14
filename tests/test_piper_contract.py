@@ -132,9 +132,7 @@ def test_piper_max_phonemes_returns_none_for_dynamic_sequence_dimension(tmp_path
 
 
 def test_piper_max_phonemes_exposes_static_sequence_dimension(tmp_path):
-    adapter, fake = _capacity_adapter(
-        tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),)
-    )
+    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),))
 
     assert adapter.max_phonemes == 256
     assert fake.run_called is False
@@ -159,9 +157,7 @@ def test_piper_max_phonemes_rejects_invalid_dimensions(tmp_path, dimension):
         (TensorSpec("input", "tensor(int32)", None),),  # type: ignore[arg-type]
     ],
 )
-def test_piper_max_phonemes_returns_none_for_missing_or_malformed_input_spec(
-    tmp_path, input_specs
-):
+def test_piper_max_phonemes_returns_none_for_missing_or_malformed_input_spec(tmp_path, input_specs):
     adapter, fake = _capacity_adapter(tmp_path, input_specs)
 
     assert adapter.max_phonemes is None
@@ -169,9 +165,7 @@ def test_piper_max_phonemes_returns_none_for_missing_or_malformed_input_spec(
 
 
 def test_piper_max_phonemes_never_runs_inference(tmp_path):
-    adapter, fake = _capacity_adapter(
-        tmp_path, (TensorSpec("input", "tensor(int32)", (1, 64)),)
-    )
+    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 64)),))
 
     assert adapter.max_phonemes == 64
     assert fake.run_called is False

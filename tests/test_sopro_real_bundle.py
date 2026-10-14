@@ -94,6 +94,111 @@ def _assert_native_inference(
     return result, diagnostics
 
 
+def _assert_streaming_inference(
+    runtime: Any, golden: dict[str, Any], reference_golden: dict[str, Any]
+) -> None:
+    waveform, sample_rate = _reference_tone(reference_golden)
+    waveform = np.tile(waveform, 6)
+    voice = runtime.prepare_voice(waveform, sample_rate)
+    original_graph_runner = runtime._run_contract_graph
+    graph_calls: list[str] = []
+
+    def counted_graph_runner(graph: str, inputs: Any, expected_outputs: Any):
+        graph_calls.append(graph)
+        return original_graph_runner(graph, inputs, expected_outputs)
+
+    runtime._run_contract_graph = counted_graph_runner
+    runtime.prepare_streaming(voice, seed=golden["seed"])
+    prepared_call_count = len(graph_calls)
+    assert prepared_call_count > 0
+    runtime.prepare_streaming(voice, seed=golden["seed"])
+    assert len(graph_calls) == prepared_call_count
+    runtime._run_contract_graph = original_graph_runner
+    assert np.isfinite(voice.reference_prepare_ms) and voice.reference_prepare_ms >= 0.0
+    run = runtime.begin_run(
+        voice,
+        language=golden["language"],
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        max_seconds=1.0,
+        min_seconds=0.0,
+        seed=golden["seed"],
+    )
+    try:
+        partial_stream = run.stream_segment(golden["text"])
+        first_chunk = next(partial_stream)
+        assert not first_chunk.is_final
+        partial_stream.close()
+        assert run.segment_index == 0
+        chunks = list(run.stream_segment(golden["text"]))
+        assert run.segment_index == 1
+        assert chunks[-1].metadata["prompt_cache_hit"] is True
+        assert chunks[-1].metadata["vocoder_cache_hit"] is True
+    finally:
+        run.close()
+    runtime.stream_cache_capacity = 0
+    uncached_run = runtime.begin_run(
+        voice,
+        language=golden["language"],
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        max_seconds=1.0,
+        min_seconds=0.0,
+        seed=golden["seed"],
+    )
+    try:
+        uncached_chunks = list(uncached_run.stream_segment(golden["text"]))
+    finally:
+        uncached_run.close()
+    assert len(uncached_chunks) == len(chunks)
+    assert (
+        uncached_chunks[-1].metadata["semantic_tokens_total"]
+        == chunks[-1].metadata["semantic_tokens_total"]
+    )
+    for cached_chunk, uncached_chunk in zip(chunks, uncached_chunks, strict=True):
+        np.testing.assert_array_equal(cached_chunk.audio, uncached_chunk.audio)
+    assert len(chunks) > 1
+    assert all(chunk.audio.dtype == np.float32 and chunk.audio.ndim == 1 for chunk in chunks)
+    assert all(
+        chunk.audio.flags.c_contiguous and np.isfinite(chunk.audio).all() for chunk in chunks
+    )
+    assert all(chunk.is_final is False for chunk in chunks[:-1])
+    assert chunks[-1].is_final is True
+    assert all(chunk.sample_rate == 24000 for chunk in chunks)
+    semantic_tokens = chunks[-1].metadata["semantic_tokens_total"]
+    for name in (
+        "reference_prepare_ms",
+        "stream_prompt_prepare_ms",
+        "semantic_first_token_ms",
+        "first_audio_chunk_ms",
+        "total_stream_ms",
+    ):
+        assert np.isfinite(chunks[-1].metadata[name]) and chunks[-1].metadata[name] >= 0.0
+    assert chunks[-1].metadata["chunk_count"] == len(chunks)
+    assert first_chunk.metadata["semantic_tokens_total"] < semantic_tokens
+    assert (
+        sum(chunk.audio.size for chunk in chunks)
+        == semantic_tokens * runtime._runtime_config.token_samples
+    )
+    diagnostics = runtime.diagnostics()
+    sessions = {session.component: session for session in diagnostics.sessions}
+    stream_graphs = {
+        "acoustic_stream_prefill_2",
+        "acoustic_stream_prefill_ode_2_0",
+        "acoustic_stream_prefill_ode_2_1",
+        "acoustic_stream_step_2",
+        "acoustic_stream_ode_2_0",
+        "acoustic_stream_ode_2_1",
+        "vocoder",
+    }
+    assert stream_graphs <= set(sessions)
+    assert all(
+        sessions[name].providers_active == ("CPUExecutionProvider",) for name in stream_graphs
+    )
+
+
 def test_pinned_native_bundle_managed_install_offline_reopen_and_infer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -181,6 +286,7 @@ def test_pinned_native_bundle_managed_install_offline_reopen_and_infer(
             first_runtime, golden, reference_golden, installation.path
         )
         assert first_diagnostics.ref == installation.ref
+        _assert_streaming_inference(first_runtime, golden, reference_golden)
         first_runtime.close()
         first_runtime.close()
 

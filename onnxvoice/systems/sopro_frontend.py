@@ -42,6 +42,9 @@ class SoproVoiceState:
     sample_rate: int
     level_db: float
 
+    cache_key: str = ""
+    reference_prepare_ms: float = 0.0
+
     def __post_init__(self) -> None:
         condition = _readonly_array(self.cond_vec, np.float32, ndim=1, label="condition vector")
         raw_tokens = np.asarray(self.semantic_tokens)
@@ -63,10 +66,25 @@ class SoproVoiceState:
             raise RuntimeContractError("Sopro voice sample rate must be a positive integer")
         if not math.isfinite(float(self.level_db)):
             raise RuntimeContractError("Sopro reference level must be finite")
+        if not isinstance(self.cache_key, str) or (
+            self.cache_key
+            and (
+                len(self.cache_key) != 64
+                or any(c not in "0123456789abcdef" for c in self.cache_key)
+            )
+        ):
+            raise RuntimeContractError(
+                "Sopro voice cache key must be an empty or lowercase SHA-256 digest"
+            )
+        if not math.isfinite(float(self.reference_prepare_ms)) or self.reference_prepare_ms < 0:
+            raise RuntimeContractError(
+                "Sopro reference preparation timing must be finite and non-negative"
+            )
         object.__setattr__(self, "cond_vec", condition)
         object.__setattr__(self, "semantic_tokens", tokens)
         object.__setattr__(self, "mel", mel)
         object.__setattr__(self, "level_db", float(self.level_db))
+        object.__setattr__(self, "reference_prepare_ms", float(self.reference_prepare_ms))
 
     @property
     def mel_frames(self) -> int:

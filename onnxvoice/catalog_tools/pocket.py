@@ -1092,6 +1092,7 @@ PROMPT_RECORD_FIELDS = frozenset(
     }
 )
 
+
 # Checked-in license decisions from upstream documentation. A prompt without a
 # matching rule fails the build loudly instead of inheriting a permissive license.
 def prompt_license(source_path: str) -> tuple[str, str | None]:

@@ -10,8 +10,10 @@ from .kokoro_inno import KokoroVoicePack
 from .kokoro_split import SplitKokoroRuntime
 from .piper import PiperAdapter
 from .pocket import PocketAdapter
-from .sopro import SoproAdapter
+from .sopro import SoproAdapter, SoproRun
 from .sopro_frontend import SoproTextInput, SoproVoiceState
+from .sopro_generation import SoproGenerationDefaults
+from .sopro_streaming import SoproStreamChunk
 from .supertonic import SupertonicAdapter
 
 _ADAPTERS: dict[str, type[SystemAdapter]] = {
@@ -47,8 +49,11 @@ __all__ = [
     "PocketAdapter",
     "SupertonicAdapter",
     "SoproAdapter",
+    "SoproRun",
     "SoproTextInput",
     "SoproVoiceState",
+    "SoproGenerationDefaults",
+    "SoproStreamChunk",
     "KittenAdapter",
     "InflectAdapter",
     "SplitKokoroRuntime",

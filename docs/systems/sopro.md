@@ -4,9 +4,11 @@ Sopro is a manifest-backed, zero-shot voice-cloning system. The pinned `sopro:v2
 
 ## Current implementation status
 
-The built-in adapter supports catalog-managed/local opening, graph inspection, token preparation, reference-voice preparation, and one-segment offline synthesis. The pinned `wasm-uint8` graph/shard set has passed automated native CPU pipeline parity for semantic generation, acoustic conditioning/ODE sampling, vocoding, and final 24 kHz PCM.
+The adapter supports catalog-managed/local opening, graph inspection, token preparation, reusable reference preparation, one-segment offline synthesis, and stateful sequential `SoproRun` segment generation with automatic semantic carry. `SoproRun.stream_segment()` performs synchronous incremental inference on installed split acoustic ODE graphs, keeps acoustic/vocoder/ISTFT state, and yields raw mono float32 chunks; references too short for the streaming prompt safely fall back to one offline chunk. Bounded prompt/vocoder caches, synchronous `prepare_streaming()`, and final-chunk stream timings are available. The gated `wasm-uint8`/CPU real-bundle integration verifies incremental output, exact generated sample count, streaming graph use, and recovery after an early consumer stop.
 
 **Native Python `infer()` is enabled only for the `wasm-uint8` profile with `CPUExecutionProvider`.** This is the only profile/provider pair exercised by the complete native parity gate; `webgpu-fp16`, other profiles, and other requested providers remain unsupported for Python inference. `infer()` accepts already-prepared model token IDs plus a reusable `SoproVoiceState` and returns raw mono float32 PCM. It does not split sentences, apply application-level loudness policy, or encode WAV.
+
+`runtime.generation_defaults` exposes a frozen `SoproGenerationDefaults` snapshot; `fixed_steps`, `max_segment_chars`, `token_samples`, and `hop_ratio` provide validated manifest values without callers reading raw dictionaries. Sampling accepts `top_p` in the inclusive range `[0, 1]` (`0` retains the highest-probability candidate); `temperature=0` remains greedy, and `top_k=0` disables top-k filtering. Reference preparation accepts a finite positive `seconds` override; omitting it uses the manifest reference duration.
 
 ## Prepare text and reference voice
 
@@ -37,6 +39,22 @@ try:
 finally:
     runtime.close()
 ```
+
+For raw synchronous streaming, create a run from the prepared voice and iterate one text segment:
+
+```python
+runtime.prepare_streaming(reference, seed=42)
+run = runtime.begin_run(reference, language="pt", seed=42)
+try:
+    for chunk in run.stream_segment("olá, mundo!"):
+        consume(chunk.audio, sample_rate=chunk.sample_rate)
+finally:
+    run.close()
+```
+
+Each chunk is contiguous mono float32 model PCM. The final chunk sets `is_final=True`; the stream enforces an exact generated-token sample count. Short references use a one-chunk offline fallback.
+
+`prepare_streaming()` synchronously warms the acoustic and vocoder prompt states; repeated calls with the same voice/seed are idempotent. The adapter keeps a bounded one-entry LRU by default. Set `runtime.stream_cache_capacity = 0` to disable and clear the caches. Final chunk metadata includes preparation/stream timings, cache-hit flags, chunk count, and generated sample/token counts.
 
 `quality` selects the Sopro bundle profile; it is not an ONNX Runtime execution provider. See [local models](../local-models.md) for opening explicit local bundles without installing them into the shared store.
 
