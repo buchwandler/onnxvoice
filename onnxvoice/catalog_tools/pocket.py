@@ -1094,53 +1094,23 @@ PROMPT_RECORD_FIELDS = frozenset(
 
 # Checked-in license decisions from upstream documentation. A prompt without a
 # matching rule fails the build loudly instead of inheriting a permissive license.
-_PROMPT_LICENSE_RULES: tuple[tuple[str, str, str | None], ...] = (
-    ("alba-mackenna/", "CC-BY-4.0", None),
-    ("cml-tts/fr/", "CC-BY-4.0", None),
-    (
-        "ears/",
-        "CC-BY-NC-4.0",
-        "Non-commercial: upstream README licenses EARS prompts as CC BY-NC 4.0.",
-    ),
-    (
-        "expresso/",
-        "CC-BY-NC-4.0",
-        "Non-commercial: upstream README licenses Expresso prompts as CC BY-NC 4.0.",
-    ),
-    (
-        "unmute-prod-website/",
-        "CC0-1.0",
-        "Upstream README describes most unmute-prod-website prompts as Kyutai recordings usable as CC0.",
-    ),
-    ("voice-donations/", "CC0-1.0", None),
-    ("voice-zero/", "CC0-1.0", None),
-    ("vctk/", "CC-BY-4.0", None),
-)
-
-_PROMPT_LICENSE_OVERRIDES: dict[str, tuple[str, str | None]] = {
-    "unmute-prod-website/degaulle-2.wav": (
-        "NOASSERTION",
-        "Upstream README does not establish a definitive license for this file.",
-    ),
-    "unmute-prod-website/ex04_narration_longform_00001.wav": (
-        "CC-BY-NC-4.0",
-        "Non-commercial: upstream README identifies this prompt as Expresso material.",
-    ),
-    "unmute-prod-website/p329_022.wav": (
-        "CC-BY-4.0",
-        "Upstream README identifies this prompt as VCTK material under CC BY 4.0.",
-    ),
-}
-
-
 def prompt_license(source_path: str) -> tuple[str, str | None]:
-    """Return the checked-in license decision for one prompt source path."""
-    if source_path in _PROMPT_LICENSE_OVERRIDES:
-        return _PROMPT_LICENSE_OVERRIDES[source_path]
-    for prefix, license_name, note in _PROMPT_LICENSE_RULES:
-        if source_path.startswith(prefix):
-            return license_name, note
-    raise CatalogError(f"{source_path}: no checked-in license rule covers this prompt")
+    """Return the license decision owned by the Voicefolio package policy."""
+    try:
+        from voicefolio.models import CatalogError as VoicefolioCatalogError
+        from voicefolio.sources.kyutai_tts_voices import resolve_license
+    except ImportError as exc:
+        raise CatalogError(
+            "Voicefolio is required for prompt catalog licensing; install onnxvoice[pocket]."
+        ) from exc
+    try:
+        return resolve_license(source_path)
+    except VoicefolioCatalogError as exc:
+        if "no unique license rule" in str(exc):
+            raise CatalogError(
+                f"{source_path}: no checked-in license rule covers this prompt"
+            ) from exc
+        raise CatalogError(str(exc)) from exc
 
 
 def _prompt_license_evidence(repository: str, revision: str) -> str:
