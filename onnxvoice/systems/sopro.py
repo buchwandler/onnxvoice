@@ -53,6 +53,7 @@ class _SemanticResult:
     stopped_on_eos: bool
     max_steps: int
     min_steps: int
+    prompt_token_limit: int
 
 
 class _SoproRandom:
@@ -755,6 +756,7 @@ class SoproAdapter(SystemAdapter):
         voice_state: SoproVoiceState,
         *,
         options: Mapping[str, Any] | None = None,
+        prompt_token_override: Sequence[int] | np.ndarray | None = None,
     ) -> _SemanticResult:
         if not isinstance(text_input, SoproTextInput):
             raise RuntimeContractError("Sopro semantic generation requires a SoproTextInput")
@@ -840,11 +842,39 @@ class SoproAdapter(SystemAdapter):
         style_tokens = np.ascontiguousarray(
             voice_state.semantic_tokens[:style_length][None, :], dtype=np.int64
         )
-        prompt_tokens = np.ascontiguousarray(
-            voice_state.semantic_tokens[:prompt_length][None, :], dtype=np.int64
-        )
+        if prompt_token_override is None:
+            prompt_values = voice_state.semantic_tokens[:prompt_length]
+        else:
+            if isinstance(prompt_token_override, (str, bytes)) or not isinstance(
+                prompt_token_override, (Sequence, np.ndarray)
+            ):
+                raise RuntimeContractError(
+                    "Sopro prompt_tokens override must be a one-dimensional integer sequence"
+                )
+            try:
+                prompt_values = np.asarray(prompt_token_override)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeContractError(
+                    "Sopro prompt_tokens override must be a one-dimensional integer sequence"
+                ) from exc
+            if (
+                prompt_values.ndim != 1
+                or prompt_values.size > prompt_length
+                or (
+                    prompt_values.size > 0
+                    and not np.issubdtype(prompt_values.dtype, np.integer)
+                )
+            ):
+                raise RuntimeContractError(
+                    "Sopro prompt_tokens override has an invalid rank, length, or dtype"
+                )
+            if prompt_values.size and (
+                np.any(prompt_values < 0) or np.any(prompt_values >= vocab_size)
+            ):
+                raise RuntimeContractError("Sopro prompt_tokens override contains an invalid token")
+        prompt_input = np.ascontiguousarray(prompt_values[None, :], dtype=np.int64)
         model_text_ids = np.ascontiguousarray(token_ids[None, :], dtype=np.int64)
-        prefix_length = style_prefix + token_ids.size + prompt_tokens.shape[1] + 1
+        prefix_length = style_prefix + token_ids.size + prompt_input.shape[1] + 1
         hidden_length = prefix_length - 1
 
         prefix = self._run_contract_graph(
@@ -852,7 +882,7 @@ class SoproAdapter(SystemAdapter):
             {
                 "text_ids": model_text_ids,
                 "style_tokens": style_tokens,
-                "prompt_tokens": prompt_tokens,
+                "prompt_tokens": prompt_input,
             },
             ("hidden", "bos_hidden"),
         )
@@ -961,6 +991,7 @@ class SoproAdapter(SystemAdapter):
             stopped_on_eos=stopped_on_eos,
             max_steps=settings.max_steps,
             min_steps=settings.min_steps,
+            prompt_token_limit=prompt_length,
         )
 
     def prepare_voice(
@@ -1226,9 +1257,15 @@ class SoproAdapter(SystemAdapter):
         voice_state: SoproVoiceState,
         *,
         options: Mapping[str, Any] | None = None,
+        prompt_tokens: Sequence[int] | np.ndarray | None = None,
     ) -> InferenceResult:
         settings = self._semantic_generation_options(options)
-        semantic = self._generate_semantic_tokens(text_input, voice_state, options=options)
+        semantic = self._generate_semantic_tokens(
+            text_input,
+            voice_state,
+            options=options,
+            prompt_token_override=prompt_tokens,
+        )
         token_samples = self.manifest.get("tokenSamples")
         hop_ratio = self.manifest.get("hopRatio")
         steps = self.manifest.get("steps")
@@ -1262,6 +1299,8 @@ class SoproAdapter(SystemAdapter):
                     "steps": steps,
                     "semantic_steps": semantic.sampled_steps,
                     "semantic_tokens": 0,
+                    "generated_semantic_tokens": tuple(int(token) for token in semantic.tokens),
+                    "prompt_token_limit": semantic.prompt_token_limit,
                     "stopped_on_eos": semantic.stopped_on_eos,
                     "sample_rate": self.sample_rate,
                     "audio_samples": 0,
@@ -1383,6 +1422,8 @@ class SoproAdapter(SystemAdapter):
                 "steps": steps,
                 "semantic_steps": semantic.sampled_steps,
                 "semantic_tokens": int(semantic.tokens.size),
+                "generated_semantic_tokens": tuple(int(token) for token in semantic.tokens),
+                "prompt_token_limit": semantic.prompt_token_limit,
                 "stopped_on_eos": semantic.stopped_on_eos,
                 "reference_tokens": int(voice_state.semantic_tokens.size),
                 "acoustic_frames": frames,
@@ -1392,7 +1433,11 @@ class SoproAdapter(SystemAdapter):
         )
 
     def infer(self, token_ids: Sequence[int], **kwargs: Any) -> InferenceResult:
-        """Generate one already-planned text segment as raw mono float32 PCM."""
+        """Generate one Sopro segment as raw mono float32 PCM.
+
+        Omitted ``prompt_tokens`` preserves reference prompts. Results carry the generated
+        semantic tokens and configured prompt limit in metadata.
+        """
         if self.profile != "wasm-uint8":
             raise CapabilityError(
                 f"Native Python Sopro inference is only parity-gated for wasm-uint8, not {self.profile!r}"
@@ -1414,11 +1459,13 @@ class SoproAdapter(SystemAdapter):
             "min_seconds",
             "seed",
             "steps",
+            "prompt_tokens",
         }
         unknown = set(kwargs) - allowed
         if unknown:
             raise RuntimeContractError(f"Unsupported Sopro inference option(s): {sorted(unknown)}")
         voice_state = kwargs.pop("voice_state", None)
+        prompt_tokens = kwargs.pop("prompt_tokens", None)
         if not isinstance(voice_state, SoproVoiceState):
             raise RuntimeContractError("Sopro inference requires a prepared SoproVoiceState")
         if isinstance(token_ids, (str, bytes)) or not isinstance(token_ids, (Sequence, np.ndarray)):
@@ -1456,7 +1503,12 @@ class SoproAdapter(SystemAdapter):
             token_ids=tuple(int(token_id) for token_id in ids),
             language=language,
         )
-        return self._synthesize_one_segment(text_input, voice_state, options=kwargs)
+        return self._synthesize_one_segment(
+            text_input,
+            voice_state,
+            options=kwargs,
+            prompt_tokens=prompt_tokens,
+        )
 
     def diagnostics(self) -> RuntimeDiagnostic:
         """Return diagnostics for every graph session created so far."""

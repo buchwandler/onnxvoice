@@ -943,6 +943,35 @@ def test_semantic_generation_prefills_then_uses_cached_core_and_honors_minimum_e
     finally:
         runtime.close()
 
+def test_semantic_prompt_override_replaces_only_reference_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files, manifest = _write_bundle(tmp_path)
+    _configure_semantic_bundle(files, manifest)
+    sessions = _install_semantic_fake_sessions(monkeypatch, "minimum-eos")
+    runtime = _open_local(files)
+    try:
+        result = runtime._generate_semantic_tokens(
+            runtime.prepare_text("hello, world!", "en"),
+            _semantic_test_voice(),
+            prompt_token_override=(6, 5),
+            options={
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "top_k": 0,
+                "min_seconds": 0.08,
+                "max_seconds": 0.2,
+            },
+        )
+        assert result.tokens.tolist() == [3]
+        assert result.prompt_token_limit == 4
+        prefix = sessions["semantic_prefix"]
+        np.testing.assert_array_equal(prefix.inputs["style_tokens"], [[1, 2, 3]])
+        np.testing.assert_array_equal(prefix.inputs["prompt_tokens"], [[6, 5]])
+    finally:
+        runtime.close()
+
+
 
 def test_semantic_sampling_is_seeded_and_respects_the_duration_step_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1004,6 +1033,8 @@ def test_single_segment_orders_acoustic_condition_ode_and_vocoder_without_applic
         assert np.any(result.audio != 0.0)
         assert result.metadata["steps"] == 2
         assert result.metadata["semantic_tokens"] == 2
+        assert result.metadata["generated_semantic_tokens"] == (5, 5)
+        assert result.metadata["prompt_token_limit"] == 4
         assert result.metadata["audio_samples"] == result.audio.size
 
         condition = sessions["acoustic_condition"].calls[0]
@@ -1033,10 +1064,16 @@ def test_single_segment_orders_acoustic_condition_ode_and_vocoder_without_applic
             temperature=0.0,
             max_seconds=0.05,
             min_seconds=0.0,
+            prompt_tokens=[6, 5],
         )
         np.testing.assert_array_equal(inferred.audio, result.audio)
         assert inferred.metadata["language"] == "en"
         assert inferred.metadata["sample_rate"] == 24000
+        assert inferred.metadata["generated_semantic_tokens"] == (5, 5)
+        assert inferred.metadata["prompt_token_limit"] == 4
+        np.testing.assert_array_equal(
+            sessions["semantic_prefix"].inputs["prompt_tokens"], [[6, 5]]
+        )
     finally:
         runtime.close()
 
@@ -1083,6 +1120,10 @@ def test_infer_validates_tokens_options_voice_and_profile(tmp_path: Path) -> Non
             runtime.infer(np.asarray([1.0]), voice_state=voice)
         with pytest.raises(RuntimeContractError, match="token_ids"):
             runtime.infer([100000], voice_state=voice)
+        prompt_length = manifest["config"]["generation"]["prompt_tokens"]
+        for prompt_override in ([-1], [100000], [1.0], [1] * (prompt_length + 1), [[1]]):
+            with pytest.raises(RuntimeContractError, match="prompt_tokens"):
+                runtime.infer([1], voice_state=voice, prompt_tokens=prompt_override)
         with pytest.raises(CapabilityError, match="Unsupported Sopro language"):
             runtime.infer([1], voice_state=voice, language="es")
         runtime.providers = ("CUDAExecutionProvider",)
