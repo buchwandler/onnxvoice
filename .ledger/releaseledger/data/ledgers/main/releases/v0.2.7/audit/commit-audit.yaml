@@ -2,8 +2,8 @@ schema_version: 1
 object_type: commit_audit_sheet
 versioning:
   schema_version: 1
-  revision: 3
-release_version: v0.2.6
+  revision: 4
+release_version: v0.2.7
 git_base_ref: v0.2.5
 git_base_sha: b412cfda3dff52d47a959289f15b61f641f8de83
 git_head_ref: HEAD
