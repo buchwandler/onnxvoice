@@ -69,6 +69,7 @@ def test_fresh_install_events(tmp_path):
     assert install_started.ref == item.ref
     assert install_started.target is not None
     assert Path(install_started.target) == store.install_path("test", "one")
+    assert install_started.total == len(b"model-bytes")
 
     # Verify download_started
     download_started = next(e for e in events if e.phase == "download_started")
@@ -150,6 +151,8 @@ def test_already_installed_no_download_events(tmp_path):
     assert "install_started" in phases
     assert "install_completed" in phases
 
+    install_started = next(e for e in events if e.phase == "install_started")
+    assert install_started.total == len(b"model-bytes")
     # Verify install_completed has "already installed" message
     install_completed = events[-1]
     assert install_completed.phase == "install_completed"
@@ -305,6 +308,8 @@ def test_unknown_total(tmp_path):
         events.append(event)
 
     store.install(item, progress=capture)
+    install_started = next(e for e in events if e.phase == "install_started")
+    assert install_started.total is None
 
     # Find download_started event
     download_started = next(e for e in events if e.phase == "download_started")
@@ -356,6 +361,8 @@ def test_multiple_artifacts(tmp_path):
 
     store.install(item, progress=capture)
 
+    install_started = next(e for e in events if e.phase == "install_started")
+    assert install_started.total == len(payload1) + len(payload2)
     # Verify we have events for both artifacts
     artifact_events = [e for e in events if e.artifact is not None]
     model_events = [e for e in artifact_events if e.artifact == "model.onnx"]
@@ -369,3 +376,140 @@ def test_multiple_artifacts(tmp_path):
         assert e.role == "model"
     for e in config_events:
         assert e.role == "config"
+
+
+def test_http_progress_falls_back_to_catalog_size(tmp_path, monkeypatch):
+    class Response:
+        headers = {}
+
+        def __init__(self):
+            self.chunks = iter((b"abc", b"def", b""))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _size):
+            return next(self.chunks)
+
+    response = Response()
+    monkeypatch.setattr(
+        "onnxvoice.store.urllib.request.urlopen",
+        lambda *_args, **_kwargs: response,
+    )
+    events: list[AssetProgress] = []
+    destination = tmp_path / "download.bin"
+
+    AssetStore(tmp_path / "cache")._download(
+        "https://example.invalid/model.bin",
+        destination,
+        expected_size=6,
+        ref="test:one",
+        artifact="model.bin",
+        role="model",
+        target=str(destination),
+        progress=events.append,
+    )
+
+    assert [event.completed for event in events] == [3, 6]
+    assert [event.total for event in events] == [6, 6]
+
+
+def test_install_started_interrupt_cleans_staging_and_preserves_exception(tmp_path):
+    item, _ = _make_item(tmp_path)
+    store = AssetStore(tmp_path / "cache")
+    phases: list[str] = []
+
+    def interrupt(event: AssetProgress) -> None:
+        phases.append(event.phase)
+        if event.phase == "install_started":
+            raise KeyboardInterrupt("cancel at start")
+        if event.phase == "install_failed":
+            raise RuntimeError("failure callback failed")
+
+    with pytest.raises(KeyboardInterrupt, match="cancel at start"):
+        store.install(item, progress=interrupt)
+
+    target = store.install_path("test", "one")
+    assert phases == ["install_started", "install_failed"]
+    assert not target.exists()
+    assert not list(target.parent.glob(".one-*"))
+    store.install(item)
+    assert store.is_installed("test", "one")
+
+
+def test_download_started_interrupt_cleans_staging_and_releases_lock(tmp_path):
+    item, _ = _make_item(tmp_path)
+    store = AssetStore(tmp_path / "cache")
+    phases: list[str] = []
+
+    def interrupt(event: AssetProgress) -> None:
+        phases.append(event.phase)
+        if event.phase == "download_started":
+            raise KeyboardInterrupt("cancel download")
+
+    with pytest.raises(KeyboardInterrupt, match="cancel download"):
+        store.install(item, progress=interrupt)
+
+    target = store.install_path("test", "one")
+    assert "install_failed" in phases
+    assert not target.exists()
+    assert not list(target.parent.glob(".one-*"))
+    store.install(item)
+    assert store.is_installed("test", "one")
+
+
+def test_replacement_interrupt_preserves_previous_install_and_retries(tmp_path):
+    old_item, _ = _make_item(tmp_path, payload=b"old model")
+    new_item, _ = _make_item(tmp_path, filename="replacement.onnx", payload=b"new model")
+    store = AssetStore(tmp_path / "cache")
+    existing = store.install(old_item)
+
+    def interrupt(event: AssetProgress) -> None:
+        if event.phase == "download_started":
+            raise KeyboardInterrupt("cancel replacement")
+
+    with pytest.raises(KeyboardInterrupt, match="cancel replacement"):
+        store.replace(existing, new_item, progress=interrupt)
+
+    target = store.install_path("test", "one")
+    assert (target / "model.onnx").read_bytes() == b"old model"
+    assert not list(target.parent.glob(".one-*"))
+    assert not list(target.parent.glob(".onnxvoice-backup-*"))
+
+    replacement = store.replace(existing, new_item)
+    assert replacement.artifact("model").path.read_bytes() == b"new model"
+
+
+def test_replacement_commit_interrupt_rolls_back_and_retries(tmp_path, monkeypatch):
+    import onnxvoice.store as store_module
+
+    old_item, _ = _make_item(tmp_path, payload=b"old model")
+    new_item, _ = _make_item(tmp_path, filename="replacement.onnx", payload=b"new model")
+    store = AssetStore(tmp_path / "cache")
+    existing = store.install(old_item)
+    target = store.install_path("test", "one")
+    real_replace = store_module.os.replace
+    interrupted = False
+
+    def interrupt_commit(source, destination):
+        nonlocal interrupted
+        if Path(destination) == target and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt("cancel replacement commit")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(store_module.os, "replace", interrupt_commit)
+    with pytest.raises(KeyboardInterrupt, match="cancel replacement commit"):
+        store.replace(existing, new_item)
+
+    assert interrupted
+    assert (target / "model.onnx").read_bytes() == b"old model"
+    assert not list(target.parent.glob(".one-*"))
+    assert not list(target.parent.glob(".onnxvoice-backup-*"))
+
+    monkeypatch.setattr(store_module.os, "replace", real_replace)
+    replacement = store.replace(existing, new_item)
+    assert replacement.artifact("model").path.read_bytes() == b"new model"

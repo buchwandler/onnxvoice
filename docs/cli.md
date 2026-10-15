@@ -71,7 +71,42 @@ onnxvoice show piper:en_US-lessac-medium
 onnxvoice verify piper:en_US-lessac-medium
 ```
 
-`install` accepts `--quality`, `--distribution`, `--refresh`, and `--force`. Catalog quality and distribution choices can produce separate managed installations.
+Catalog quality and distribution choices can produce separate managed installations.
+
+### Shared progress, output, and cache
+
+`install` accepts `--quality`, `--distribution`, `--refresh`, `--force`, and `--no-progress`. Normal installs show immediate resolution feedback, then byte progress, the current artifact, file count, and an approximate transfer rate and ETA when enough observations are available. Progress is sent to stderr. Redirected stderr receives sparse plain-text lines without terminal control sequences, and unknown totals stay indeterminate.
+
+Successful install stdout contains only the final installed path so it can be captured by scripts. For example:
+
+```bash
+onnxvoice install qwen3:base-0.6b --quality int4 \
+  >installed-path.txt 2>install-progress.txt
+```
+
+`installed-path.txt` contains the path; `install-progress.txt` contains progress lines. Add `--no-progress` to suppress the display while keeping path-only stdout.
+
+`ONNXVOICE_CACHE_DIR` sets the shared root for model assets and catalogs. The global `--cache-dir` option takes precedence and must appear before the command:
+
+```bash
+ONNXVOICE_CACHE_DIR="$HOME/.cache/onnxvoice" onnxvoice install qwen3:base-0.6b --quality int4
+onnxvoice --cache-dir /mnt/models/onnxvoice install qwen3:base-0.6b --quality int4
+```
+
+Ctrl+C prints `Cancelled.` to stderr and returns exit status 130 without a traceback. Interrupted staging data is removed, prior usable installations are preserved during replacement, and a later install can be retried.
+
+### Shared Qwen3 asset commands
+
+```bash
+onnxvoice list --system qwen3
+onnxvoice install qwen3:base-0.6b --quality int4
+onnxvoice install qwen3:voice-design-1.7b --quality int4
+onnxvoice info qwen3:base-0.6b --quality int4
+onnxvoice path qwen3:base-0.6b --quality int4
+onnxvoice verify qwen3:base-0.6b --quality int4
+onnxvoice installed
+onnxvoice cache info
+```
 
 ## Check and apply updates
 

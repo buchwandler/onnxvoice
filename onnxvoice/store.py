@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import uuid
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -454,14 +455,17 @@ class AssetStore:
             raise UnsafePathError(
                 f"Artifact path {_INSTALL_MANIFEST_FILENAME!r} is reserved for installation metadata"
             )
+        expected_bytes = self._expected_install_bytes(item.artifacts)
         if self.is_installed(item.system, storage_id) and not force:
             installation = self.get(item.system, storage_id)
             target = self.install_path(item.system, storage_id)
-            self.verify(installation)
             self._emit(
                 progress,
-                AssetProgress("install_started", item.ref, target=str(target)),
+                AssetProgress(
+                    "install_started", item.ref, total=expected_bytes, target=str(target)
+                ),
             )
+            self.verify(installation)
             self._emit(
                 progress,
                 AssetProgress(
@@ -471,9 +475,17 @@ class AssetStore:
             return installation
         target = self.install_path(item.system, storage_id)
         target.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
-        self._emit(progress, AssetProgress("install_started", item.ref, target=str(target)))
+        staging = target.parent / f".{storage_id}-{uuid.uuid4().hex}"
+        backup: Path | None = None
+        committed = False
         try:
+            staging.mkdir()
+            self._emit(
+                progress,
+                AssetProgress(
+                    "install_started", item.ref, total=expected_bytes, target=str(target)
+                ),
+            )
             installed: list[InstalledArtifact] = []
             with FileLock(self._gc_lock_path()):
                 for artifact in item.artifacts:
@@ -539,16 +551,63 @@ class AssetStore:
                 (staging / _INSTALL_MANIFEST_FILENAME).write_text(
                     json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
                 )
-                if target.exists():
-                    shutil.rmtree(target)
-                os.replace(staging, target)
+                backup = self._commit_staging(staging, target)
+                committed = True
             installation = self.get(item.system, storage_id)
             self._emit(progress, AssetProgress("install_completed", item.ref, target=str(target)))
+            if backup is not None:
+                shutil.rmtree(backup, ignore_errors=True)
             return installation
-        except Exception:
-            shutil.rmtree(staging, ignore_errors=True)
-            self._emit(progress, AssetProgress("install_failed", item.ref, target=str(target)))
+        except BaseException:
+            with suppress(BaseException):
+                shutil.rmtree(staging, ignore_errors=True)
+            with suppress(BaseException):
+                if backup is not None:
+                    self._restore_backup(backup, target)
+                elif committed and target.exists():
+                    shutil.rmtree(target, ignore_errors=True)
+            with suppress(BaseException):
+                self._emit(
+                    progress,
+                    AssetProgress("install_failed", item.ref, target=str(target)),
+                )
             raise
+
+    @staticmethod
+    def _expected_install_bytes(artifacts: Sequence[Artifact]) -> int | None:
+        total = 0
+        for artifact in artifacts:
+            size = artifact.size
+            if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+                return None
+            total += size
+        return total
+
+    @staticmethod
+    def _commit_staging(staging: Path, target: Path) -> Path | None:
+        backup: Path | None = (
+            target.parent / f".onnxvoice-backup-{uuid.uuid4().hex}" if target.exists() else None
+        )
+        try:
+            if backup is not None:
+                os.replace(target, backup)
+            os.replace(staging, target)
+        except BaseException:
+            if backup is not None and backup.exists():
+                with suppress(BaseException):
+                    AssetStore._restore_backup(backup, target)
+            elif not staging.exists() and target.exists():
+                with suppress(BaseException):
+                    shutil.rmtree(target, ignore_errors=True)
+            raise
+        return backup
+
+    @staticmethod
+    def _restore_backup(backup: Path, target: Path) -> None:
+        if backup.exists():
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            os.replace(backup, target)
 
     def import_files(
         self,
@@ -934,9 +993,18 @@ class AssetStore:
 
         with FileLock(self._install_lock_path(system, storage_id)):
             # Use the same staging + atomic replace workflow as install
-            staging_path = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
-            self._emit(progress, AssetProgress("install_started", item.ref, target=str(target)))
+            expected_bytes = self._expected_install_bytes(item.artifacts)
+            staging_path = target.parent / f".{storage_id}-{uuid.uuid4().hex}"
+            backup: Path | None = None
+            committed = False
             try:
+                staging_path.mkdir()
+                self._emit(
+                    progress,
+                    AssetProgress(
+                        "install_started", item.ref, total=expected_bytes, target=str(target)
+                    ),
+                )
                 installed: list[InstalledArtifact] = []
                 with FileLock(self._gc_lock_path()):
                     for artifact in item.artifacts:
@@ -990,18 +1058,28 @@ class AssetStore:
                     (staging_path / _INSTALL_MANIFEST_FILENAME).write_text(
                         json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
                     )
-                    # Atomic replace
-                    if target.exists():
-                        shutil.rmtree(target)
-                    os.replace(staging_path, target)
+                    backup = self._commit_staging(staging_path, target)
+                    committed = True
                 installation = self.get(system, storage_id)
                 self._emit(
                     progress, AssetProgress("install_completed", item.ref, target=str(target))
                 )
+                if backup is not None:
+                    shutil.rmtree(backup, ignore_errors=True)
                 return installation
-            except Exception:
-                shutil.rmtree(staging_path, ignore_errors=True)
-                self._emit(progress, AssetProgress("install_failed", item.ref, target=str(target)))
+            except BaseException:
+                with suppress(BaseException):
+                    shutil.rmtree(staging_path, ignore_errors=True)
+                with suppress(BaseException):
+                    if backup is not None:
+                        self._restore_backup(backup, target)
+                    elif committed and target.exists():
+                        shutil.rmtree(target, ignore_errors=True)
+                with suppress(BaseException):
+                    self._emit(
+                        progress,
+                        AssetProgress("install_failed", item.ref, target=str(target)),
+                    )
                 raise
 
     def _materialize_artifact(
@@ -1100,6 +1178,7 @@ class AssetStore:
                     role=artifact.role,
                     target=target,
                     progress=progress,
+                    expected_size=artifact.size,
                 )
             self._emit(
                 progress,
@@ -1147,6 +1226,7 @@ class AssetStore:
         source: str,
         destination: Path,
         *,
+        expected_size: int | None,
         ref: str,
         artifact: str,
         role: str,
@@ -1166,6 +1246,7 @@ class AssetStore:
                     ref,
                     artifact,
                     completed=destination.stat().st_size,
+                    total=expected_size,
                     role=role,
                     target=target,
                 ),
@@ -1180,7 +1261,7 @@ class AssetStore:
                 destination.open("wb") as out,
             ):
                 total = response.headers.get("Content-Length")
-                total_bytes = int(total) if total and total.isdigit() else None
+                total_bytes = int(total) if total and total.isdigit() else expected_size
                 completed = 0
                 while chunk := response.read(1024 * 1024):
                     out.write(chunk)

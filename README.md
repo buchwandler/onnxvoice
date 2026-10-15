@@ -35,6 +35,21 @@ onnxvoice installed
 onnxvoice cache info
 ```
 
+ONNXVoice provides the shared asset-management CLI for Qwen3-TTS and other supported systems:
+
+```bash
+onnxvoice list --system qwen3
+onnxvoice install qwen3:base-0.6b --quality int4
+onnxvoice install qwen3:voice-design-1.7b --quality int4
+onnxvoice info qwen3:base-0.6b --quality int4
+onnxvoice path qwen3:base-0.6b --quality int4
+onnxvoice verify qwen3:base-0.6b --quality int4
+onnxvoice installed
+onnxvoice cache info
+```
+
+Install progress is written to stderr. Successful install stdout contains only the installed path; use `--no-progress` to disable progress output. `ONNXVOICE_CACHE_DIR` selects the shared model and catalog cache root, and the global `--cache-dir` option overrides it. Ctrl+C prints `Cancelled.` to stderr and exits with status 130 after cleaning staging data; an existing usable installation is preserved.
+
 ### Python
 
 ```python

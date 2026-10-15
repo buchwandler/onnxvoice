@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ._install_progress import InstallProgress
 from .catalog_tools import kitten as kitten_catalog_tools
 from .catalog_tools import pocket as pocket_catalog_tools
 from .catalog_tools import qwen3 as qwen3_catalog_tools
@@ -108,6 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--refresh", action="store_true")
     install_parser.add_argument("--force", action="store_true")
 
+    install_parser.add_argument(
+        "--no-progress", action="store_true", help="Disable install progress output"
+    )
     # --- updates ---
     updates_parser = sub.add_parser("updates", help="Check for available updates")
     _add_filter_args(updates_parser)
@@ -969,13 +973,19 @@ def main(argv: list[str] | None = None) -> int:
         manager = _manager(args)
 
         if args.command == "install":
-            installed = manager.install(
-                args.ref,
-                quality=args.quality,
-                distribution=getattr(args, "distribution", None),
-                refresh=args.refresh,
-                force=args.force,
-            )
+            progress = None if args.no_progress else InstallProgress(args.ref)
+            try:
+                installed = manager.install(
+                    args.ref,
+                    quality=args.quality,
+                    distribution=getattr(args, "distribution", None),
+                    refresh=args.refresh,
+                    force=args.force,
+                    progress=progress,
+                )
+            finally:
+                if progress is not None:
+                    progress.close()
             print(installed.path)
             return 0
 
@@ -1032,6 +1042,9 @@ def main(argv: list[str] | None = None) -> int:
             print(installed.path)
             return 0
 
+    except KeyboardInterrupt:
+        print("Cancelled.", file=sys.stderr)
+        return 130
     except Exception as exc:
         print(f"onnxvoice: {exc}", file=sys.stderr)
         return 2

@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import hashlib
 import json
+import os
 import warnings
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -49,9 +50,14 @@ class OnnxVoice:
         offline: bool = False,
     ) -> None:
         """Create a manager using the selected cache and catalog configuration."""
-        self.store = AssetStore(cache_dir, offline=offline)
+        cache_root: Path | None = Path(cache_dir) if cache_dir is not None else None
+        if cache_root is None:
+            environment_cache_dir = os.environ.get("ONNXVOICE_CACHE_DIR")
+            if environment_cache_dir:
+                cache_root = Path(environment_cache_dir)
+        self.store = AssetStore(cache_root, offline=offline)
         self.catalog = CatalogClient(
-            cache_dir=Path(cache_dir) if cache_dir is not None else None,
+            cache_dir=cache_root,
             sources=catalog_sources,
             offline=offline,
         )
