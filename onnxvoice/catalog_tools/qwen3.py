@@ -20,7 +20,7 @@ DEFAULT_SEED_PATH = Path(__file__).with_name("qwen3_seed.json")
 DEFAULT_CATALOG_URL = (
     "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json"
 )
-USER_AGENT = "onnxvoice/0.3.0"
+USER_AGENT = "onnxvoice-qwen3-catalog"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")

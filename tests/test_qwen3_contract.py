@@ -139,8 +139,8 @@ def _graph_specs(
         outputs = (
             _tensor("logits", f32, 1, 1, config.talker_vocab_size),
             _tensor("hidden_states", f32, 1, 1, hidden),
-            _tensor("past_keys", f32, *cache),
-            _tensor("past_values", f32, *cache),
+            _tensor("present_keys", f32, *cache),
+            _tensor("present_values", f32, *cache),
         )
         return inputs, outputs
     if component == "code_predictor":
@@ -153,8 +153,8 @@ def _graph_specs(
         )
         outputs = (
             _tensor("logits", f32, 1, "sequence", config.cp_vocab_size),
-            _tensor("past_keys", f32, *cache),
-            _tensor("past_values", f32, *cache),
+            _tensor("present_keys", f32, *cache),
+            _tensor("present_values", f32, *cache),
         )
         return inputs, outputs
     if component == "vocoder":
@@ -369,6 +369,31 @@ def test_qwen3_graph_contract_accepts_wavekat_specs(component: str) -> None:
     config = Qwen3Config.from_mapping(_config())
     inputs, outputs = _graph_specs(component, config)
     validate_graph_abi(component, config, inputs, outputs)
+
+
+@pytest.mark.parametrize("component", ("talker_decode", "code_predictor"))
+def test_cache_graphs_require_present_cache_output_names(component: str) -> None:
+    config = Qwen3Config.from_mapping(_config())
+    inputs, outputs = _graph_specs(component, config)
+    expected_names = (
+        ("logits", "hidden_states", "present_keys", "present_values")
+        if component == "talker_decode"
+        else ("logits", "present_keys", "present_values")
+    )
+
+    assert tuple(spec.name for spec in outputs) == expected_names
+    invalid_outputs = tuple(
+        _tensor(
+            {"present_keys": "past_keys", "present_values": "past_values"}.get(
+                spec.name, spec.name
+            ),
+            spec.ort_type,
+            *spec.shape,
+        )
+        for spec in outputs
+    )
+    with pytest.raises(RuntimeContractError, match="names mismatch"):
+        validate_graph_abi(component, config, inputs, invalid_outputs)
 
 
 def test_qwen3_graph_contract_rejects_names_dtypes_ranks_and_cache_layout() -> None:

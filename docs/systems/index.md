@@ -28,4 +28,5 @@ kitten
 inflect
 sopro
 qwen3
+qwen3-release-validation
 ```

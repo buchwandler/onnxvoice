@@ -50,6 +50,7 @@ The text IDs must use the supported assistant chat wrapping, and the description
 
 ```python
 import numpy as np
+
 # Assume runtime is an open Qwen3 adapter; the ID sequences come from the frontend.
 result = runtime.infer(
     text_ids,
@@ -117,8 +118,12 @@ for component, filename in tokenizers.items():
     files[f"tokenizer:{component}"] = root / "tokenizer" / filename
 
 embeddings = [
-    "text_embedding", "text_projection_fc1_weight", "text_projection_fc1_bias",
-    "text_projection_fc2_weight", "text_projection_fc2_bias", "talker_codec_embedding",
+    "text_embedding",
+    "text_projection_fc1_weight",
+    "text_projection_fc1_bias",
+    "text_projection_fc2_weight",
+    "text_projection_fc2_bias",
+    "talker_codec_embedding",
     *(f"cp_codec_embedding_{index}" for index in range(15)),
 ]
 for component in embeddings:
@@ -169,7 +174,7 @@ onnxvoice catalog qwen3 build --output /tmp/qwen3-bundles.json \
 
 ## Tests and parity limits
 
-Offline unit tests cover catalog contracts, local inventories, graph signatures, deterministic sampling, fake-session generation, immutable Base conditioning, and the committed NumPy log-mel reference fixture. The CPU integration test is marked `integration` and `resource_heavy`; it exercises actual VoiceDesign and Base inference at both qualities when those bundles are already installed. It never downloads assets. Pytest's default discovery does not exclude integration markers, so use `-m "not integration"` for an offline-only suite; the explicit selector below runs these real-bundle cases:
+Offline unit tests cover catalog contracts, local inventories, graph signatures, deterministic sampling, fake-session generation, immutable Base conditioning, and the committed NumPy log-mel reference fixture. The CPU integration test is marked `integration` and `resource_heavy`; it exercises actual VoiceDesign and Base inference at both qualities when those bundles are already installed and never downloads assets. Without `ONNXVOICE_REQUIRE_QWEN3_REAL=1`, missing runtime or installations may be skipped for developer convenience. Set that variable for release verification; missing ONNX Runtime or any required profile then fails. Pytest's default discovery does not exclude integration markers, so use `-m "not integration"` for an offline-only suite.
 
 ```bash
 export ONNXVOICE_TEST_CACHE=/path/to/onnxvoice-cache
@@ -178,7 +183,8 @@ for bundle in qwen3:voice-design-1.7b qwen3:base-0.6b; do
     onnxvoice --cache-dir "$ONNXVOICE_TEST_CACHE" install "$bundle" --quality "$quality"
   done
 done
-pytest -m "integration and resource_heavy" tests/test_qwen3_integration.py
+ONNXVOICE_REQUIRE_QWEN3_REAL=1 \
+pytest -vv -m "integration and resource_heavy" tests/test_qwen3_integration.py
 ```
 
-The test runs offline and skips a case if its matching installation is absent. A skip is **not** a model-inference or waveform-parity pass. Real-bundle graph execution, numerical comparisons against audited model outputs, and listening/perceptual assessment remain unverified until the pinned assets and reference evidence are available. Do not describe unit tests or the log-mel fixture as end-to-end speech parity.
+Real CPU WaveKat execution has been verified for all four advertised profiles. See [Qwen3 release validation](qwen3-release-validation.md) for the measured environment, source revisions, command, and results. The release gate checks non-empty finite non-silent mono float32 audio at 24 kHz and active `CPUExecutionProvider`. This confirms runtime graph execution, not numerical parity against another implementation. Audited output comparisons and listening/perceptual assessment remain unverified. Do not describe unit tests or the log-mel fixture as end-to-end speech parity.

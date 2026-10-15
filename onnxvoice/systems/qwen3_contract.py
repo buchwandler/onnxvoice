@@ -469,8 +469,8 @@ def validate_graph_abi(
         outputs = {
             "logits": _TensorContract(f32, 3, (1, 1, config.talker_vocab_size)),
             "hidden_states": _TensorContract(f32, 3, (1, 1, config.talker_hidden_size)),
-            "past_keys": _TensorContract(f32, 5, cache),
-            "past_values": _TensorContract(f32, 5, cache),
+            "present_keys": _TensorContract(f32, 5, cache),
+            "present_values": _TensorContract(f32, 5, cache),
         }
         _validate_named_specs(output_specs, outputs, component=component, direction="output")
         return
@@ -486,8 +486,8 @@ def validate_graph_abi(
         _validate_named_specs(input_specs, inputs, component=component, direction="input")
         outputs = {
             "logits": _TensorContract(f32, 3, (1, seq, config.cp_vocab_size)),
-            "past_keys": _TensorContract(f32, 5, cache),
-            "past_values": _TensorContract(f32, 5, cache),
+            "present_keys": _TensorContract(f32, 5, cache),
+            "present_values": _TensorContract(f32, 5, cache),
         }
         _validate_named_specs(output_specs, outputs, component=component, direction="output")
         return

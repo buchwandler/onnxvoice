@@ -151,6 +151,10 @@ activemq-data/
 .env
 .envrc
 .venv
+
+.venv-qwen3-release/
+.qwen3-release-cache/
+.wheel-smoke/
 env/
 venv/
 ENV/
