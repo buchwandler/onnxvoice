@@ -137,6 +137,7 @@ class OnnxSession:
         providers: str | Sequence[str] | None = None,
         provider_options: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
         session_options: Any | None = None,
+        strict_providers: bool = False,
     ) -> None:
         """Configure a model path and optional provider policy."""
         self.model = Path(model)
@@ -147,8 +148,10 @@ class OnnxSession:
         )
         self.provider_options = provider_options
         self.session_options = session_options
+        self.strict_providers = strict_providers
         self._session: Any | None = None
         self._resolved_providers: tuple[str, ...] | None = None
+        self._active_providers: tuple[str, ...] | None = None
 
     @property
     def session(self) -> Any:
@@ -184,6 +187,13 @@ class OnnxSession:
         assert self._resolved_providers is not None
         return self._resolved_providers
 
+    @property
+    def active_providers(self) -> tuple[str, ...]:
+        """Return the providers actually active in the initialized session."""
+        _ = self.session
+        assert self._active_providers is not None
+        return self._active_providers
+
     def _create(self) -> Any:
         if not self.model.is_file():
             raise FileNotFoundError(self.model)
@@ -193,13 +203,45 @@ class OnnxSession:
         options = provider_options_for(selected, self.provider_options)
         if options is not None:
             kwargs["provider_options"] = options
-        if self.session_options is not None:
-            kwargs["sess_options"] = self.session_options
+        session_options = self.session_options
+        if self.strict_providers and "CPUExecutionProvider" not in selected:
+            try:
+                if session_options is None:
+                    session_options = ort.SessionOptions()
+                add_config_entry = getattr(session_options, "add_session_config_entry", None)
+                if not callable(add_config_entry):
+                    raise RuntimeContractError(
+                        "Strict provider policy requires session_options.add_session_config_entry"
+                    )
+                add_config_entry("session.disable_cpu_ep_fallback", "1")
+            except RuntimeContractError:
+                raise
+            except Exception as exc:
+                raise RuntimeContractError(
+                    f"Could not enforce strict ONNX provider policy: {exc}"
+                ) from exc
+        if session_options is not None:
+            kwargs["sess_options"] = session_options
         try:
             session = ort.InferenceSession(str(self.model), **kwargs)
         except Exception as exc:
             raise RuntimeContractError(f"Could not create ONNX Runtime session: {exc}") from exc
+        if self.strict_providers:
+            disable_fallback = getattr(session, "disable_fallback", None)
+            if not callable(disable_fallback):
+                raise RuntimeContractError(
+                    "ONNX Runtime session does not support strict provider fallback control"
+                )
+            try:
+                disable_fallback()
+            except Exception as exc:
+                raise RuntimeContractError(
+                    f"Could not disable ONNX provider fallback: {exc}"
+                ) from exc
         self._resolved_providers = selected
+        get_providers = getattr(session, "get_providers", None)
+        active = tuple(get_providers()) if callable(get_providers) else selected
+        self._active_providers = active or selected
         return session
 
     @staticmethod
@@ -226,7 +268,7 @@ class OnnxSession:
                 normalize_provider_name(name)
                 for name in _requested_provider_names(self.provider_request or "cpu")
             ),
-            providers_active=self.resolved_providers,
+            providers_active=self.active_providers,
             inputs=self.input_names,
             outputs=self.output_names,
         )
@@ -234,3 +276,5 @@ class OnnxSession:
     def close(self) -> None:
         """Release the current session so it can be recreated on next access."""
         self._session = None
+        self._resolved_providers = None
+        self._active_providers = None

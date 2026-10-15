@@ -8,6 +8,7 @@ from typing import Any
 
 from .catalog_tools import kitten as kitten_catalog_tools
 from .catalog_tools import pocket as pocket_catalog_tools
+from .catalog_tools import qwen3 as qwen3_catalog_tools
 from .catalog_tools import supertonic as supertonic_catalog_tools
 from .catalog_tools.piper import (
     DEFAULT_REPOSITORY,
@@ -262,6 +263,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     kitten_verify_parser.add_argument("--catalog", type=Path, required=True)
     kitten_verify_parser.add_argument("--source", type=Path)
+    qwen3_parser = catalog_sub.add_parser("qwen3", help="Manage the Qwen3 WaveKat catalog")
+    qwen3_sub = qwen3_parser.add_subparsers(dest="catalog_action", required=True)
+    qwen3_build_parser = qwen3_sub.add_parser("build", help="Build a pinned Qwen3 catalog")
+    qwen3_build_parser.add_argument("--output", type=Path, required=True)
+    qwen3_build_parser.add_argument("--source-output", type=Path)
+    qwen3_verify_parser = qwen3_sub.add_parser("verify", help="Verify a Qwen3 catalog offline")
+    qwen3_verify_parser.add_argument("--catalog", type=Path, required=True)
+    qwen3_verify_parser.add_argument("--source", type=Path)
     return parser
 
 
@@ -919,6 +928,20 @@ def main(argv: list[str] | None = None) -> int:
                 if args.catalog_action == "verify":
                     catalog = kitten_catalog_tools.load_catalog(args.catalog, args.source)
                     print(f"Verified {len(catalog['models'])} Kitten models")
+                    return 0
+            elif args.catalog_system == "qwen3":
+                if args.catalog_action == "build":
+                    catalog = qwen3_catalog_tools.build_catalog()
+                    source = qwen3_catalog_tools.build_source(catalog)
+                    qwen3_catalog_tools.verify_catalog(catalog, source)
+                    _write_json(args.output, catalog)
+                    if args.source_output is not None:
+                        _write_json(args.source_output, source)
+                    print(f"Wrote {len(catalog['bundles'])} Qwen3 bundles to {args.output}")
+                    return 0
+                if args.catalog_action == "verify":
+                    catalog = qwen3_catalog_tools.load_catalog(args.catalog, args.source)
+                    print(f"Verified {len(catalog['bundles'])} Qwen3 bundles")
                     return 0
             else:
                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")

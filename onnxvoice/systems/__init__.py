@@ -10,6 +10,8 @@ from .kokoro_inno import KokoroVoicePack
 from .kokoro_split import SplitKokoroRuntime
 from .piper import PiperAdapter
 from .pocket import PocketAdapter
+from .qwen3 import Qwen3Adapter
+from .qwen3_audio import Qwen3VoiceState
 from .sopro import SoproAdapter, SoproRun
 from .sopro_frontend import SoproTextInput, SoproVoiceState
 from .sopro_generation import SoproGenerationDefaults
@@ -24,6 +26,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
     SoproAdapter.system: SoproAdapter,
     KittenAdapter.system: KittenAdapter,
     InflectAdapter.system: InflectAdapter,
+    Qwen3Adapter.system: Qwen3Adapter,
 }
 
 
@@ -55,6 +58,8 @@ __all__ = [
     "SoproGenerationDefaults",
     "SoproStreamChunk",
     "KittenAdapter",
+    "Qwen3Adapter",
+    "Qwen3VoiceState",
     "InflectAdapter",
     "SplitKokoroRuntime",
     "KokoroCloningRuntime",

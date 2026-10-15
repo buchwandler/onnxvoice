@@ -54,4 +54,6 @@ Pocket local opening requires a complete bundle and its contract metadata. See [
 Kitten uses a model ONNX file and `voices.npz`. Supply both through the `model=` and `voices=` parameters to `open_local()`; style extraction and selection stay with the caller. See [KittenTTS](systems/kitten.md).
 Sopro uses a manifest-driven bundle with a tokenizer, selected profile, ONNX graphs, and external-data shards; native one-segment inference is currently supported only for the parity-tested `wasm-uint8` profile with `CPUExecutionProvider`. See [Sopro](systems/sopro.md).
 
+Qwen3's `qwen3-wavekat-v1` local layout requires a complete config, tokenizer, embedding, graph, and adjacent external-data inventory. Use `OnnxVoice.open_local(system="qwen3", files=..., runtime={"layout": "qwen3-wavekat-v1", "quality": "int4"}, sample_rate=24000, providers="cpu")`; Base also requires its two shared encoder graphs and `.onnx.data` files. This path never uses the catalog or store. See [Qwen3-TTS WaveKat](systems/qwen3.md) for the full mapping and model-ready-token boundary.
+
 The simple CLI `onnxvoice import --model ...` is not a generic multi-component bundle importer.

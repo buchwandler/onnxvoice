@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -8,12 +9,25 @@ from onnxvoice import runtime
 from onnxvoice.errors import RuntimeContractError
 
 
+class FakeSessionOptions:
+    def __init__(self) -> None:
+        self.entries: list[tuple[str, str]] = []
+
+    def add_session_config_entry(self, key: str, value: str) -> None:
+        self.entries.append((key, value))
+
+
 class FakeOrt:
-    def __init__(self):
-        self.created = None
+    def __init__(self) -> None:
+        self.created: tuple[str, dict[str, Any]] | None = None
+        self.session_options: FakeSessionOptions | None = None
 
     def get_available_providers(self):
         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    def SessionOptions(self) -> FakeSessionOptions:
+        self.session_options = FakeSessionOptions()
+        return self.session_options
 
     def InferenceSession(self, model, **kwargs):
         self.created = (model, kwargs)
@@ -23,6 +37,8 @@ class FakeOrt:
             ],
             get_outputs=lambda: [SimpleNamespace(name="audio", type="tensor(float)", shape=["N"])],
             run=lambda *_: [],
+            get_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            disable_fallback=lambda: None,
         )
 
 
@@ -63,5 +79,20 @@ def test_session_passes_options_and_exposes_tensor_specs(tmp_path, monkeypatch):
     assert session.input_specs[0].ort_type == "tensor(int32)"
     assert session.output_specs[0].shape == ("N",)
     assert session.resolved_providers == ("CUDAExecutionProvider",)
+    assert session.active_providers == ("CUDAExecutionProvider", "CPUExecutionProvider")
+    assert session.diagnostics().providers_active == session.active_providers
+    assert ort.created is not None
     assert ort.created[1]["provider_options"] == [{"device_id": "1"}]
     assert ort.created[1]["sess_options"] is session_options
+
+
+def test_strict_provider_policy_disables_implicit_cpu_fallback(tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"model")
+    ort = FakeOrt()
+    monkeypatch.setattr(runtime, "_ort", lambda: ort)
+    session = runtime.OnnxSession(model, providers="cuda", strict_providers=True)
+    _ = session.session
+    assert ort.session_options is not None
+    assert ort.session_options.entries == [("session.disable_cpu_ep_fallback", "1")]
+    assert session.active_providers == ("CUDAExecutionProvider", "CPUExecutionProvider")

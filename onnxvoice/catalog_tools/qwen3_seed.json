@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "kind": "qwen3-onnx-bundle-seed",
+  "bundles": {
+    "base-0.6b": {
+      "aliases": ["base", "clone", "wavekat-base-0.6b"],
+      "layout": "qwen3-wavekat-v1",
+      "model_type": "base",
+      "sample_rate": 24000,
+      "source": {
+        "provider": "huggingface",
+        "repository": "wavekat/Qwen3-TTS-0.6B-Base-ONNX",
+        "revision": "177cd39e2ddab0d4d7ce5152a7abc2d382621158",
+        "license": "apache-2.0"
+      },
+      "profiles": {
+        "fp32": {
+          "include": [
+            "config.json",
+            "tokenizer/*",
+            "embeddings/*",
+            "speaker_encoder.onnx",
+            "speaker_encoder.onnx.data",
+            "tokenizer_encoder.onnx",
+            "tokenizer_encoder.onnx.data",
+            "fp32/talker_prefill.onnx",
+            "fp32/talker_prefill.onnx.data",
+            "fp32/talker_decode.onnx",
+            "fp32/talker_decode.onnx.data",
+            "fp32/code_predictor.onnx",
+            "fp32/code_predictor.onnx.data",
+            "fp32/vocoder.onnx",
+            "fp32/vocoder.onnx.data"
+          ]
+        },
+        "int4": {
+          "include": [
+            "config.json",
+            "tokenizer/*",
+            "embeddings/*",
+            "speaker_encoder.onnx",
+            "speaker_encoder.onnx.data",
+            "tokenizer_encoder.onnx",
+            "tokenizer_encoder.onnx.data",
+            "int4/talker_prefill.onnx",
+            "int4/talker_prefill.onnx.data",
+            "int4/talker_decode.onnx",
+            "int4/talker_decode.onnx.data",
+            "int4/code_predictor.onnx",
+            "int4/code_predictor.onnx.data",
+            "int4/vocoder.onnx",
+            "int4/vocoder.onnx.data"
+          ]
+        }
+      }
+    },
+    "voice-design-1.7b": {
+      "aliases": ["voicedesign", "design", "wavekat-voice-design-1.7b"],
+      "layout": "qwen3-wavekat-v1",
+      "model_type": "voice_design",
+      "sample_rate": 24000,
+      "source": {
+        "provider": "huggingface",
+        "repository": "wavekat/Qwen3-TTS-1.7B-VoiceDesign-ONNX",
+        "revision": "62c7863a68800d72bcee4f2931148c441571ace7",
+        "license": "apache-2.0"
+      },
+      "profiles": {
+        "fp32": {
+          "include": [
+            "config.json",
+            "tokenizer/*",
+            "embeddings/*",
+            "fp32/talker_prefill.onnx",
+            "fp32/talker_prefill.onnx.data",
+            "fp32/talker_decode.onnx",
+            "fp32/talker_decode.onnx.data",
+            "fp32/code_predictor.onnx",
+            "fp32/code_predictor.onnx.data",
+            "fp32/vocoder.onnx",
+            "fp32/vocoder.onnx.data"
+          ]
+        },
+        "int4": {
+          "include": [
+            "config.json",
+            "tokenizer/*",
+            "embeddings/*",
+            "int4/talker_prefill.onnx",
+            "int4/talker_prefill.onnx.data",
+            "int4/talker_decode.onnx",
+            "int4/talker_decode.onnx.data",
+            "int4/code_predictor.onnx",
+            "int4/code_predictor.onnx.data",
+            "int4/vocoder.onnx",
+            "int4/vocoder.onnx.data"
+          ]
+        }
+      }
+    }
+  }
+}

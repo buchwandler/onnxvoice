@@ -42,16 +42,16 @@ onnxvoice list --system piper --format json
 onnxvoice installed --format tsv
 ```
 
-| Flag                   | Accepted values or meaning                                     |
-| ---------------------- | -------------------------------------------------------------- |
-| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect` |
-| `--kind`               | `voice`, `model`, `bundle`                                     |
-| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`                 |
-| `--gender`             | `male`, `female`, `neutral`, `unknown`                         |
-| `--quality`            | Quality selection                                              |
-| `--distribution`       | Distribution identifier                                        |
-| `--status`             | `installed`, `available`, `local`                              |
-| `--format`             | `table`, `plain`, `json`, `tsv`                                |
+| Flag                   | Accepted values or meaning                                              |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect`, `qwen3` |
+| `--kind`               | `voice`, `model`, `bundle`                                              |
+| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`                          |
+| `--gender`             | `male`, `female`, `neutral`, `unknown`                                  |
+| `--quality`            | Quality selection                                                       |
+| `--distribution`       | Distribution identifier                                                 |
+| `--status`             | `installed`, `available`, `local`                                       |
+| `--format`             | `table`, `plain`, `json`, `tsv`                                         |
 
 Generic language tags match compatible specific locales. An `en` filter matches English locales such as `en-US` and `en-GB`. An `en-US` filter matches a generic `en` capability, but not a conflicting specific locale such as `en-GB`. Case and hyphen normalization are supported.
 
@@ -64,6 +64,8 @@ onnxvoice install piper:en_US-lessac-medium
 onnxvoice install kokoro:v1.0 --quality fp16
 onnxvoice install inflect:nano-v2
 onnxvoice info piper:en_US-lessac-medium
+onnxvoice install qwen3:voice-design-1.7b --quality int4
+onnxvoice install qwen3:base-0.6b --quality fp32
 onnxvoice path piper:en_US-lessac-medium
 onnxvoice show piper:en_US-lessac-medium
 onnxvoice verify piper:en_US-lessac-medium
@@ -160,6 +162,9 @@ onnxvoice catalog kitten build \
   --source-output catalog/source.json \
   --revision main
 onnxvoice catalog kitten verify --catalog catalog/models.json --source catalog/source.json
+onnxvoice catalog qwen3 build --output catalog/bundles.json --source-output catalog/source.json
+onnxvoice catalog qwen3 verify --catalog catalog/bundles.json --source catalog/source.json
 ```
 
 Piper, Pocket, and Supertonic builders accept repository and revision options. The Kitten builder uses the normalized catalog as a seed manifest and refreshes each listed Hugging Face repository; it reads upstream `config.json` and artifact metadata. Build requires network access, while verification is offline. See [KittenTTS](systems/kitten.md) and `onnxvoice catalog <system> <action> --help` for details.
+Qwen3 catalog building fetches metadata and artifact integrity from the seed's pinned repositories; the output catalog and source manifest can be verified offline with `onnxvoice catalog qwen3 verify`. See [Qwen3-TTS WaveKat](systems/qwen3.md) for bundle profiles, runtime contracts, and parity status.

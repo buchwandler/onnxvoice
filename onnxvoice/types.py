@@ -372,6 +372,7 @@ class RuntimeDiagnostic:
     ref: str
     layout: str
     sessions: tuple[SessionDiagnostic, ...]
+    properties: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

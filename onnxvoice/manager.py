@@ -11,7 +11,7 @@ from typing import Any
 
 from .catalog import CatalogClient, filter_items, parse_ref
 from .checksums import digest_file
-from .errors import AssetNotFoundError, NotInstalledError, VoiceNotFoundError
+from .errors import AssetNotFoundError, NotInstalledError, RuntimeContractError, VoiceNotFoundError
 from .inventory import (
     InventoryRecord,
     matches_language,
@@ -290,37 +290,50 @@ class OnnxVoice:
             if voices is not None:
                 merged_files["voices"] = voices
 
-        local_artifacts: list[InstalledArtifact] = []
-        model_components = {
-            "duration_predictor",
-            "text_encoder",
-            "vector_estimator",
-            "vocoder",
-        }
-        for key, raw_path in merged_files.items():
-            component = None
-            if system == "supertonic" and key in model_components:
-                role = "model"
-                component = key
-            elif ":" in key:
-                role, _, component = key.partition(":")
-                if not role or not component or ":" in component:
-                    if key.startswith("voice_style:"):
-                        raise ValueError("voice_style keys must include a component name")
-                    raise ValueError("Artifact keys must use non-empty role:component values")
-            elif key in {"prosody", "curves", "decoder"}:
-                role = "model"
-                component = key
-            else:
-                role = key
-            local_artifacts.append(
-                OnnxVoice._local_artifact(
-                    role,
-                    raw_path,
-                    component=component,
-                    extra_metadata=(artifact_metadata or {}).get(key),
-                )
+        local_artifacts: builtins.list[InstalledArtifact]
+        qwen3_runtime: dict[str, Any] | None = None
+        if system.lower() == "qwen3":
+            runtime_input = runtime
+            if runtime_input is None:
+                runtime_input = (metadata or {}).get("runtime", {})
+            local_artifacts, qwen3_runtime = OnnxVoice._qwen3_local_artifacts(
+                merged_files,
+                runtime=runtime_input,
+                sample_rate=sample_rate,
+                artifact_metadata=artifact_metadata,
             )
+        else:
+            local_artifacts = []
+            model_components = {
+                "duration_predictor",
+                "text_encoder",
+                "vector_estimator",
+                "vocoder",
+            }
+            for key, raw_path in merged_files.items():
+                component = None
+                if system == "supertonic" and key in model_components:
+                    role = "model"
+                    component = key
+                elif ":" in key:
+                    role, _, component = key.partition(":")
+                    if not role or not component or ":" in component:
+                        if key.startswith("voice_style:"):
+                            raise ValueError("voice_style keys must include a component name")
+                        raise ValueError("Artifact keys must use non-empty role:component values")
+                elif key in {"prosody", "curves", "decoder"}:
+                    role = "model"
+                    component = key
+                else:
+                    role = key
+                local_artifacts.append(
+                    OnnxVoice._local_artifact(
+                        role,
+                        raw_path,
+                        component=component,
+                        extra_metadata=(artifact_metadata or {}).get(key),
+                    )
+                )
         model_artifact = next(
             (
                 artifact
@@ -346,13 +359,19 @@ class OnnxVoice:
             "runtime": dict(runtime or {}),
             **(metadata or {}),
         }
+        installation_system = system
+        installation_sample_rate = sample_rate
+        if qwen3_runtime is not None:
+            merged_metadata["runtime"] = qwen3_runtime
+            installation_system = "qwen3"
+            installation_sample_rate = 24000
         installation = Installation(
-            system=system,
+            system=installation_system,
             id=f"local-{Path(model_artifact.filename).stem}",
             kind="external",
             path=model_artifact.path.parent,
             artifacts=tuple(local_artifacts),
-            sample_rate=sample_rate,
+            sample_rate=installation_sample_rate,
             metadata=merged_metadata,
         )
         adapter = get_adapter(system)
@@ -661,11 +680,14 @@ class OnnxVoice:
         return OnnxVoice.open_local(**kwargs)
 
     @staticmethod
+    @staticmethod
     def _local_artifact(
         role: str,
         raw_path: str | Path,
         *,
         component: str | None = None,
+        quality: str | None = None,
+        filename: str | None = None,
         extra_metadata: Mapping[str, Any] | None = None,
     ) -> InstalledArtifact:
         path = Path(raw_path).expanduser().resolve()
@@ -674,15 +696,194 @@ class OnnxVoice:
         metadata: dict[str, Any] = {}
         if extra_metadata:
             metadata.update(extra_metadata)
+        artifact_filename = filename or path.name
         return InstalledArtifact(
             role=role,
-            filename=path.name,
+            filename=artifact_filename,
             path=path,
             sha256=digest_file(path),
             size=path.stat().st_size,
+            quality=quality,
             component=component,
+            format=Path(artifact_filename).suffix.lower().lstrip("."),
             metadata=metadata,
         )
+
+    @staticmethod
+    def _qwen3_local_artifacts(
+        files: Mapping[str, str | Path],
+        *,
+        runtime: Any,
+        sample_rate: int | None,
+        artifact_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> tuple[builtins.list[InstalledArtifact], dict[str, Any]]:
+        """Normalize and validate unmanaged Qwen3 files without catalog/store access."""
+        if not isinstance(runtime, Mapping):
+            raise RuntimeContractError("Qwen3 local open requires runtime metadata")
+        if runtime.get("layout") != "qwen3-wavekat-v1":
+            raise RuntimeContractError("Qwen3 local runtime layout must be 'qwen3-wavekat-v1'")
+        quality = runtime.get("quality")
+        if not isinstance(quality, str) or quality not in {"fp32", "int4"}:
+            raise RuntimeContractError("Qwen3 local runtime quality must be 'fp32' or 'int4'")
+        runtime_rate = runtime.get("sample_rate", 24000)
+        effective_rate = sample_rate if sample_rate is not None else runtime_rate
+        if (
+            isinstance(effective_rate, bool)
+            or not isinstance(effective_rate, int)
+            or effective_rate != 24000
+            or runtime_rate != 24000
+        ):
+            raise RuntimeContractError("Qwen3 WaveKat local bundles require sample_rate=24000")
+
+        tokenizer_files = {
+            "tokenizer_json": "tokenizer.json",
+            "vocab": "vocab.json",
+            "merges": "merges.txt",
+            "tokenizer_config": "tokenizer_config.json",
+            "special_tokens": "special_tokens_map.json",
+            "added_tokens": "added_tokens.json",
+        }
+        generation_components = {"talker_prefill", "talker_decode", "code_predictor", "vocoder"}
+        encoder_components = {"speaker_encoder", "tokenizer_encoder"}
+        embedding_components = {
+            "text_embedding",
+            "text_projection_fc1_weight",
+            "text_projection_fc1_bias",
+            "text_projection_fc2_weight",
+            "text_projection_fc2_bias",
+            "talker_codec_embedding",
+            *(f"cp_codec_embedding_{index}" for index in range(15)),
+        }
+        optional_embeddings = {"small_to_mtp_projection_bias", "small_to_mtp_projection_weight"}
+
+        parsed: dict[tuple[str, str | None], tuple[str | Path, str]] = {}
+        for key, path in files.items():
+            if not isinstance(key, str) or not key:
+                raise RuntimeContractError("Qwen3 local artifact keys must be non-empty strings")
+            if key == "config":
+                role, component = "config", None
+            else:
+                parts = key.split(":")
+                if len(parts) != 2 or not all(parts):
+                    raise RuntimeContractError(f"Invalid Qwen3 local artifact key {key!r}")
+                role, component = parts
+                if role not in {"tokenizer", "embedding", "model", "model_data"}:
+                    raise RuntimeContractError(f"Unsupported Qwen3 local artifact role {role!r}")
+            identity = (role, component)
+            if identity in parsed:
+                raise RuntimeContractError(f"Duplicate Qwen3 local artifact {key!r}")
+            parsed[identity] = (path, key)
+
+        encoder_models = {
+            component
+            for role, component in parsed
+            if role == "model" and component in encoder_components
+        }
+        encoder_data = {
+            component
+            for role, component in parsed
+            if role == "model_data" and component in encoder_components
+        }
+        if encoder_models or encoder_data:
+            if encoder_models != encoder_components or encoder_data != encoder_components:
+                raise RuntimeContractError(
+                    "Qwen3 Base local bundle requires both encoder graphs and data files"
+                )
+            inferred_model_type = "base"
+        else:
+            inferred_model_type = "voice_design"
+        model_type = runtime.get("model_type")
+        if (
+            not isinstance(model_type, str)
+            or model_type not in {"base", "voice_design"}
+            or model_type != inferred_model_type
+        ):
+            raise RuntimeContractError(
+                "Qwen3 local runtime model_type must be 'base' or 'voice_design' and match its encoder inventory"
+            )
+
+        expected_models = set(generation_components)
+        if model_type == "base":
+            expected_models.update(encoder_components)
+        expected: set[tuple[str, str | None]] = {("config", None)}
+        expected.update(("tokenizer", component) for component in tokenizer_files)
+        expected.update(("embedding", component) for component in embedding_components)
+        expected.update(("model", component) for component in expected_models)
+        expected.update(("model_data", component) for component in expected_models)
+        actual = set(parsed)
+        allowed = expected | {("embedding", component) for component in optional_embeddings}
+        missing = expected - actual
+        extra_keys = actual - allowed
+        if missing or extra_keys:
+            raise RuntimeContractError(
+                f"Incomplete Qwen3 local artifact inventory; missing={sorted(missing, key=repr)}, extra={sorted(extra_keys, key=repr)}"
+            )
+
+        artifacts: list[InstalledArtifact] = []
+        for (role, component), (path, key) in parsed.items():
+            if role == "config":
+                relative_path = "config.json"
+                artifact_quality = None
+            elif role == "tokenizer":
+                if component not in tokenizer_files:
+                    raise RuntimeContractError(f"Unknown Qwen3 tokenizer component {component!r}")
+                relative_path = f"tokenizer/{tokenizer_files[component]}"
+                artifact_quality = None
+            elif role == "embedding":
+                if component not in embedding_components | optional_embeddings:
+                    raise RuntimeContractError(f"Unknown Qwen3 embedding component {component!r}")
+                relative_path = f"embeddings/{component}.npy"
+                artifact_quality = None
+            else:
+                if component not in expected_models:
+                    raise RuntimeContractError(f"Unknown Qwen3 model component {component!r}")
+                shared_encoder = component in encoder_components
+                graph_path = (
+                    f"{component}.onnx" if shared_encoder else f"{quality}/{component}.onnx"
+                )
+                relative_path = graph_path + (".data" if role == "model_data" else "")
+                artifact_quality = None if shared_encoder else quality
+            raw_extra = (artifact_metadata or {}).get(key, {})
+            if not isinstance(raw_extra, Mapping):
+                raise RuntimeContractError(f"Qwen3 artifact metadata for {key!r} must be an object")
+            extra_metadata = dict(raw_extra)
+            extra_metadata["path"] = relative_path
+            artifacts.append(
+                OnnxVoice._local_artifact(
+                    role,
+                    path,
+                    component=component,
+                    quality=artifact_quality,
+                    filename=relative_path,
+                    extra_metadata=extra_metadata,
+                )
+            )
+
+        by_identity = {(artifact.role, artifact.component): artifact for artifact in artifacts}
+        for component in expected_models:
+            graph = by_identity[("model", component)]
+            data = by_identity[("model_data", component)]
+            expected_graph_name = f"{component}.onnx"
+            if (
+                graph.path.name != expected_graph_name
+                or data.path.name != expected_graph_name + ".data"
+            ):
+                raise RuntimeContractError(
+                    f"Qwen3 local graph and external data filenames disagree for {component!r}"
+                )
+            if data.path.resolve() != Path(str(graph.path.resolve()) + ".data"):
+                raise RuntimeContractError(
+                    f"Qwen3 local external data must be adjacent to its {component!r} graph"
+                )
+
+        normalized_runtime = {
+            **runtime,
+            "layout": "qwen3-wavekat-v1",
+            "model_type": model_type,
+            "quality": quality,
+            "sample_rate": 24000,
+        }
+        return artifacts, normalized_runtime
 
     @staticmethod
     def _selection_storage_id(

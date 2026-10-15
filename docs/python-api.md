@@ -75,6 +75,10 @@ runtime = OnnxVoice.open_local(
 
 No catalog access, store registration, or file copy occurs. For multi-component layouts, provide named `artifacts=` or system-specific `files=` mappings. See [Local models](local-models.md).
 
+## Qwen3 WaveKat
+
+Qwen3 requires its WaveKat tokenizer/chat frontend to provide model-ready token IDs. OnnxVoice owns Qwen3 catalog/install/runtime and exposes VoiceDesign inference, Base reference preparation, `Qwen3VoiceState`, graph/provider diagnostics, and local bundle opening. See [Qwen3-TTS WaveKat](systems/qwen3.md) for the exact ID, audio, bundle, and provider contracts; use [Qwen3Synth](https://github.com/buchwandler/qwen3synth) for the text/WAV/profile workflow.
+
 ## Providers and diagnostics
 
 Pass `provider=` or `providers=` to `open()` or `open_local()`. `OnnxSession` resolves aliases against the installed ONNX Runtime provider set. `runtime.diagnostics()` returns provider and graph details for every session, including multi-session adapters:

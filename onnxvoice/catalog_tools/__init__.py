@@ -2,6 +2,7 @@
 
 from . import kitten as kitten_tools
 from . import pocket as pocket_tools
+from . import qwen3 as qwen3_tools
 from . import supertonic as supertonic_tools
 from .kitten import CatalogError as KittenCatalogError
 from .kitten import build_catalog as build_kitten_catalog
@@ -50,4 +51,5 @@ __all__ = [
     "verify_kitten_catalog",
     "kitten_tools",
     "verify_supertonic_catalog",
+    "qwen3_tools",
 ]

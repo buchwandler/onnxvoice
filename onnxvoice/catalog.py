@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import math
 import os
@@ -73,6 +74,7 @@ DEFAULT_SOURCES = {
     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
     "inflect": "https://raw.githubusercontent.com/buchwandler/inflect-onnx-bundles/main/catalog/models.json",
     "sopro": "https://raw.githubusercontent.com/buchwandler/sopro-onnx-bundles/main/catalog/bundles.json",
+    "qwen3": "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json",
 }
 _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
     {
@@ -220,10 +222,12 @@ class CatalogClient:
         *,
         refresh: bool = False,
         progress: ProgressCallback | None = None,
-    ) -> list[CatalogItem]:
+    ) -> builtins.list[CatalogItem]:
         """Return parsed catalog items for a system."""
         system = system.lower()
         raw = self.load_raw(system, refresh=refresh, progress=progress)
+        if system == "qwen3":
+            return _parse_qwen3(raw)
         if system == "piper":
             return _parse_piper(raw)
         if system == "kokoro":
@@ -256,6 +260,18 @@ class CatalogClient:
         distribution select system-specific artifact variants.
         """
         system, item_id = parse_ref(ref)
+        if system == "qwen3":
+            item = next(
+                (
+                    candidate
+                    for candidate in self.list(system, refresh=refresh, progress=progress)
+                    if candidate.id == item_id or item_id in candidate.aliases
+                ),
+                None,
+            )
+            if item is None:
+                raise AssetNotFoundError(f"Unknown catalog item: {ref}")
+            return _select_qwen3_profile(item, quality)
         if system == "kokoro":
             raw = self.load_raw(system, refresh=refresh, progress=progress)
             models = _kokoro_models(raw)
@@ -1453,6 +1469,376 @@ def _select_sopro_profile(item: CatalogItem, quality: str | None) -> CatalogItem
                 "profile": quality,
             },
         },
+    )
+
+
+_QWEN3_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_QWEN3_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_QWEN3_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_QWEN3_TOKENIZER_COMPONENTS = {
+    "tokenizer_json",
+    "vocab",
+    "merges",
+    "tokenizer_config",
+    "special_tokens",
+    "added_tokens",
+}
+_QWEN3_EMBEDDING_COMPONENTS = {
+    "text_embedding",
+    "text_projection_fc1_weight",
+    "text_projection_fc1_bias",
+    "text_projection_fc2_weight",
+    "text_projection_fc2_bias",
+    "talker_codec_embedding",
+    *(f"cp_codec_embedding_{index}" for index in range(15)),
+}
+_QWEN3_OPTIONAL_EMBEDDING_COMPONENTS = {
+    "small_to_mtp_projection_bias",
+    "small_to_mtp_projection_weight",
+}
+_QWEN3_GENERATION_COMPONENTS = {"talker_prefill", "talker_decode", "code_predictor", "vocoder"}
+_QWEN3_ENCODER_COMPONENTS = {"speaker_encoder", "tokenizer_encoder"}
+_QWEN3_BUNDLE_TYPES = {"base-0.6b": "base", "voice-design-1.7b": "voice_design"}
+
+
+def _qwen3_artifact_url(repository: str, revision: str, path: str) -> str:
+    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
+    asset = urllib.parse.quote(path, safe="/")
+    return f"https://huggingface.co/{repo}/resolve/{revision}/{asset}?download=true"
+
+
+def _parse_qwen3(data: Mapping[str, Any]) -> list[CatalogItem]:
+    """Parse and strictly validate normalized WaveKat Qwen3 bundle records."""
+    if not isinstance(data, Mapping) or set(data) != {"schema", "kind", "source", "bundles"}:
+        raise CatalogError("Qwen3 catalog must contain exactly schema, kind, source, and bundles")
+    if type(data.get("schema")) is not int or data.get("schema") != 1:
+        raise CatalogError("Qwen3 catalog schema must be 1")
+    if data.get("kind") != "qwen3-onnx-bundle-catalog":
+        raise CatalogError(f"Unexpected Qwen3 catalog kind: {data.get('kind')!r}")
+    source = data.get("source")
+    if not isinstance(source, Mapping) or set(source) != {"provider", "bundle_count"}:
+        raise CatalogError("Qwen3 catalog source metadata must contain provider and bundle_count")
+    if source.get("provider") != "huggingface":
+        raise CatalogError("Qwen3 source provider must be huggingface")
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Mapping) or set(bundles) != set(_QWEN3_BUNDLE_TYPES):
+        raise CatalogError("Qwen3 catalog must contain exactly the Base and VoiceDesign bundles")
+    if type(source.get("bundle_count")) is not int or source["bundle_count"] != len(bundles):
+        raise CatalogError("Qwen3 source bundle_count does not match bundles")
+
+    all_names = set(bundles)
+    result: list[CatalogItem] = []
+    for bundle_id in sorted(bundles):
+        raw = bundles[bundle_id]
+        if not isinstance(raw, Mapping):
+            raise CatalogError(f"{bundle_id}: bundle entry must be an object")
+        fields = {
+            "id",
+            "aliases",
+            "layout",
+            "model_type",
+            "sample_rate",
+            "source",
+            "profiles",
+            "artifacts",
+        }
+        if set(raw) != fields:
+            raise CatalogError(
+                f"{bundle_id}: Qwen3 bundle fields do not match the normalized contract"
+            )
+        if raw.get("id") != bundle_id:
+            raise CatalogError(f"{bundle_id}: bundle map key does not match id")
+        expected_type = _QWEN3_BUNDLE_TYPES[bundle_id]
+        if raw.get("model_type") != expected_type:
+            raise CatalogError(f"{bundle_id}: model_type must be {expected_type!r}")
+        if raw.get("layout") != "qwen3-wavekat-v1":
+            raise CatalogError(f"{bundle_id}: unsupported Qwen3 layout {raw.get('layout')!r}")
+        sample_rate = raw.get("sample_rate")
+        if type(sample_rate) is not int or sample_rate != 24000:
+            raise CatalogError(f"{bundle_id}: sample_rate must be 24000")
+
+        aliases_raw = raw.get("aliases")
+        if not isinstance(aliases_raw, Sequence) or isinstance(aliases_raw, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: aliases must be a sequence")
+        aliases: list[str] = []
+        for alias in aliases_raw:
+            if not isinstance(alias, str) or _QWEN3_ID_RE.fullmatch(alias) is None:
+                raise CatalogError(f"{bundle_id}: unsafe alias {alias!r}")
+            if alias in all_names:
+                raise CatalogError(f"{bundle_id}: duplicate or ambiguous alias {alias!r}")
+            all_names.add(alias)
+            aliases.append(alias)
+
+        raw_source = raw.get("source")
+        if not isinstance(raw_source, Mapping) or set(raw_source) != {
+            "provider",
+            "repository",
+            "revision",
+            "license",
+        }:
+            raise CatalogError(
+                f"{bundle_id}: source must contain provider, repository, revision, and license"
+            )
+        repository = raw_source.get("repository")
+        if (
+            not isinstance(repository, str)
+            or re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository) is None
+        ):
+            raise CatalogError(f"{bundle_id}: invalid Hugging Face repository")
+        revision = raw_source.get("revision")
+        if not isinstance(revision, str) or _QWEN3_SHA_RE.fullmatch(revision) is None:
+            raise CatalogError(f"{bundle_id}: source revision must be a lowercase 40-character SHA")
+        if raw_source.get("provider") != "huggingface":
+            raise CatalogError(f"{bundle_id}: source provider must be huggingface")
+        license_name = raw_source.get("license")
+        if not isinstance(license_name, str) or not license_name:
+            raise CatalogError(f"{bundle_id}: source license is required")
+
+        profiles = raw.get("profiles")
+        if not isinstance(profiles, Mapping) or set(profiles) != {"fp32", "int4"}:
+            raise CatalogError(f"{bundle_id}: profiles must contain exactly fp32 and int4")
+        expected_models = set(_QWEN3_GENERATION_COMPONENTS)
+        if expected_type == "base":
+            expected_models.update(_QWEN3_ENCODER_COMPONENTS)
+        for quality, profile in profiles.items():
+            if not isinstance(profile, Mapping) or set(profile) != {"components"}:
+                raise CatalogError(f"{bundle_id}/{quality}: profile must declare model components")
+            components = profile.get("components")
+            if not isinstance(components, Sequence) or isinstance(components, (str, bytes)):
+                raise CatalogError(f"{bundle_id}/{quality}: profile components must be a sequence")
+            if list(components) != sorted(expected_models):
+                raise CatalogError(
+                    f"{bundle_id}/{quality}: profile is missing required model components"
+                )
+
+        raw_artifacts = raw.get("artifacts")
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: artifacts must be a sequence")
+        artifacts: list[Artifact] = []
+        keys: set[tuple[str, str | None, str | None]] = set()
+        paths: set[str] = set()
+        component_by_quality: dict[str | None, set[str]] = {None: set()}
+        data_by_quality: dict[str | None, set[str]] = {None: set()}
+        tokenizer_components: set[str] = set()
+        embedding_components: set[str] = set()
+        config_count = 0
+        for index, item in enumerate(raw_artifacts):
+            if not isinstance(item, Mapping) or set(item) != {
+                "role",
+                "component",
+                "quality",
+                "path",
+                "url",
+                "size",
+                "sha256",
+            }:
+                raise CatalogError(
+                    f"{bundle_id}: artifact {index} has unexpected or missing fields"
+                )
+            role = item.get("role")
+            component = item.get("component")
+            quality = item.get("quality")
+            path = item.get("path")
+            if not isinstance(role, str) or role not in {
+                "config",
+                "tokenizer",
+                "embedding",
+                "model",
+                "model_data",
+            }:
+                raise CatalogError(f"{bundle_id}: unknown artifact role {role!r}")
+            if not isinstance(path, str):
+                raise CatalogError(f"{bundle_id}/{role}: artifact path is required")
+            try:
+                validate_relative_path(path, field_name="Qwen3 artifact path")
+            except ValueError as exc:
+                raise CatalogError(f"{bundle_id}/{role}: {exc}") from exc
+            if path in paths:
+                raise CatalogError(f"{bundle_id}: duplicate artifact path {path!r}")
+            paths.add(path)
+            if component is not None and not isinstance(component, str):
+                raise CatalogError(f"{bundle_id}/{role}: component must be a string or null")
+            if quality is not None and not isinstance(quality, str):
+                raise CatalogError(f"{bundle_id}/{role}: quality must be a string or null")
+            key = (role, component, quality)
+            if key in keys:
+                raise CatalogError(f"{bundle_id}: duplicate role/component/quality {key!r}")
+            keys.add(key)
+            if role == "config":
+                if component is not None or quality is not None or path != "config.json":
+                    raise CatalogError(
+                        f"{bundle_id}: config must be the shared config.json artifact"
+                    )
+                config_count += 1
+            elif role == "tokenizer":
+                if component not in _QWEN3_TOKENIZER_COMPONENTS or quality is not None:
+                    raise CatalogError(f"{bundle_id}: invalid tokenizer component or quality")
+                expected_file = {
+                    "tokenizer_json": "tokenizer.json",
+                    "vocab": "vocab.json",
+                    "merges": "merges.txt",
+                    "tokenizer_config": "tokenizer_config.json",
+                    "special_tokens": "special_tokens_map.json",
+                    "added_tokens": "added_tokens.json",
+                }[component]
+                if path != f"tokenizer/{expected_file}":
+                    raise CatalogError(
+                        f"{bundle_id}: tokenizer path disagrees with component {component!r}"
+                    )
+                tokenizer_components.add(component)
+            elif role == "embedding":
+                if (
+                    component
+                    not in (_QWEN3_EMBEDDING_COMPONENTS | _QWEN3_OPTIONAL_EMBEDDING_COMPONENTS)
+                    or quality is not None
+                ):
+                    raise CatalogError(f"{bundle_id}: invalid embedding component or quality")
+                if path != f"embeddings/{component}.npy":
+                    raise CatalogError(
+                        f"{bundle_id}: embedding path disagrees with component {component!r}"
+                    )
+                embedding_components.add(component)
+            else:
+                is_generation_component = component in _QWEN3_GENERATION_COMPONENTS
+                if not isinstance(component, str):
+                    raise CatalogError(f"{bundle_id}: model component must be a string")
+                is_encoder_component = (
+                    expected_type == "base" and component in _QWEN3_ENCODER_COMPONENTS
+                )
+                if not (is_generation_component or is_encoder_component):
+                    raise CatalogError(f"{bundle_id}: unknown model component {component!r}")
+                if is_generation_component and quality not in {"fp32", "int4"}:
+                    raise CatalogError(f"{bundle_id}: generation artifact must select fp32 or int4")
+                if is_encoder_component and quality is not None:
+                    raise CatalogError(f"{bundle_id}: Base encoders must be shared across profiles")
+                graph_path = (
+                    f"{quality}/{component}.onnx"
+                    if is_generation_component
+                    else f"{component}.onnx"
+                )
+                expected_path = f"{graph_path}.data" if role == "model_data" else graph_path
+                if path != expected_path:
+                    raise CatalogError(
+                        f"{bundle_id}: path disagrees with {role}:{component}:{quality}"
+                    )
+                target = component_by_quality if role == "model" else data_by_quality
+                target.setdefault(quality, set()).add(component)
+
+            url = item.get("url")
+            if not isinstance(url, str) or url != _qwen3_artifact_url(repository, revision, path):
+                raise CatalogError(f"{bundle_id}/{role}: artifact URL is not pinned to its source")
+            size = item.get("size")
+            if type(size) is not int or size <= 0:
+                raise CatalogError(f"{bundle_id}/{role}: size must be a positive integer")
+            sha256 = item.get("sha256")
+            if not isinstance(sha256, str) or _QWEN3_SHA256_RE.fullmatch(sha256) is None:
+                raise CatalogError(f"{bundle_id}/{role}: sha256 must be lowercase 64-character hex")
+            artifacts.append(
+                Artifact(
+                    role=role,
+                    component=component,
+                    filename=path,
+                    url=url,
+                    size=size,
+                    sha256=sha256,
+                    quality=quality,
+                    format=Path(path).suffix.lower().lstrip("."),
+                    metadata={
+                        "path": path,
+                        "source_repository": repository,
+                        "source_revision": revision,
+                    },
+                )
+            )
+
+        if config_count != 1:
+            raise CatalogError(f"{bundle_id}: exactly one config artifact is required")
+        if tokenizer_components != _QWEN3_TOKENIZER_COMPONENTS:
+            missing = _QWEN3_TOKENIZER_COMPONENTS - tokenizer_components
+            raise CatalogError(
+                f"{bundle_id}: missing tokenizer components: {', '.join(sorted(missing))}"
+            )
+        missing_embeddings = _QWEN3_EMBEDDING_COMPONENTS - embedding_components
+        unknown_embeddings = embedding_components - (
+            _QWEN3_EMBEDDING_COMPONENTS | _QWEN3_OPTIONAL_EMBEDDING_COMPONENTS
+        )
+        if missing_embeddings or unknown_embeddings:
+            missing_embedding_names = sorted(missing_embeddings)
+            unknown_embedding_names = sorted(unknown_embeddings)
+            raise CatalogError(
+                f"{bundle_id}: invalid embedding inventory; missing={missing_embedding_names}, unknown={unknown_embedding_names}"
+            )
+        if component_by_quality.get(None, set()) != (
+            set(_QWEN3_ENCODER_COMPONENTS) if expected_type == "base" else set()
+        ):
+            raise CatalogError(f"{bundle_id}: missing or unexpected shared model components")
+        if data_by_quality.get(None, set()) != (
+            set(_QWEN3_ENCODER_COMPONENTS) if expected_type == "base" else set()
+        ):
+            raise CatalogError(f"{bundle_id}: missing Base encoder external-data dependencies")
+        for quality in ("fp32", "int4"):
+            if component_by_quality.get(quality, set()) != _QWEN3_GENERATION_COMPONENTS:
+                raise CatalogError(f"{bundle_id}/{quality}: missing required model components")
+            if data_by_quality.get(quality, set()) != _QWEN3_GENERATION_COMPONENTS:
+                raise CatalogError(f"{bundle_id}/{quality}: missing external-data dependencies")
+
+        result.append(
+            CatalogItem(
+                system="qwen3",
+                id=bundle_id,
+                kind="bundle",
+                artifacts=tuple(artifacts),
+                aliases=tuple(aliases),
+                sample_rate=sample_rate,
+                metadata={
+                    "layout": "qwen3-wavekat-v1",
+                    "model_type": expected_type,
+                    "source_repository": repository,
+                    "source_revision": revision,
+                    "license": license_name,
+                    "profiles": {quality: dict(profile) for quality, profile in profiles.items()},
+                    "runtime": {
+                        "layout": "qwen3-wavekat-v1",
+                        "model_type": expected_type,
+                        "quality": None,
+                        "sample_rate": sample_rate,
+                    },
+                },
+            )
+        )
+    return result
+
+
+def _select_qwen3_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
+    choices = ("fp32", "int4")
+    selected = quality or "fp32"
+    if selected not in choices:
+        raise AssetNotFoundError(
+            f"Unknown Qwen3 quality {selected!r}; available profiles: {', '.join(choices)}"
+        )
+    artifacts = tuple(
+        artifact
+        for artifact in item.artifacts
+        if artifact.quality is None or artifact.quality == selected
+    )
+    models = {artifact.component for artifact in artifacts if artifact.role == "model"}
+    required = set(_QWEN3_GENERATION_COMPONENTS)
+    if item.metadata.get("model_type") == "base":
+        required.update(_QWEN3_ENCODER_COMPONENTS)
+    if models != required:
+        raise CatalogError(f"Qwen3 profile {selected!r} is missing required model components")
+    runtime = dict(item.metadata.get("runtime") or {})
+    runtime["quality"] = selected
+    return CatalogItem(
+        system=item.system,
+        id=item.id,
+        kind=item.kind,
+        artifacts=artifacts,
+        aliases=item.aliases,
+        sample_rate=item.sample_rate,
+        voices=item.voices,
+        default_voice=item.default_voice,
+        metadata={**item.metadata, "selected_quality": selected, "runtime": runtime},
     )
 
 

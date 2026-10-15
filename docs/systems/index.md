@@ -11,6 +11,7 @@ Each system adapter owns the model-specific ONNX graph contract. It does not pro
 | Kitten     | Yes              | Yes              | Child voice IDs on model items         | Model-ready token IDs, style tensor, and speed                |
 | Inflect    | Yes              | Yes              | One fixed `default` voice              | Model-ready token IDs, speed, variation, and seed             |
 | Sopro      | Yes (partial)    | Yes              | Zero-shot reference audio              | One-segment token IDs and reference state; `wasm-uint8` + CPU |
+| Qwen3-TTS  | Yes              | Yes              | No; VoiceDesign/Base bundles           | Wrapped text/instruction IDs or Base voice state              |
 
 Sopro native offline inference is currently enabled only for the parity-tested `wasm-uint8` plus `CPUExecutionProvider` combination. See [Sopro](sopro.md) for the API boundary and native parity gate.
 `OnnxVoice` discovers voices from the normalized catalog data shown above. A catalog item whose kind is `voice` contributes its own ID; items with child voices contribute the IDs already present in `CatalogItem.voices`. The catalog determines which voices are available.
@@ -26,4 +27,5 @@ supertonic
 kitten
 inflect
 sopro
+qwen3
 ```
