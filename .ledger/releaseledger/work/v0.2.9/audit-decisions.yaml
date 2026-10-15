@@ -1,0 +1,37 @@
+rows:
+  - sha: fe650b312fdac938b584d84ed712b6584fb646d0
+    inspected: true
+    inspected_paths:
+      - docs/systems/piper.md
+      - onnxvoice/__init__.py
+      - onnxvoice/systems/piper.py
+      - onnxvoice/types.py
+      - tests/test_piper_contract.py
+      - tests/test_piper_integration.py
+    observed_behavior: Added a public Piper sequence-axis contract that distinguishes symbolic, fixed, and unknown ONNX dimensions without running inference; kept max_phonemes unset because a fixed dimension is not a supported hard maximum.
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: Reviewed adapter/API/docs and contract/integration tests.
+    stale: false
+  - sha: 12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/cli.md
+      - onnxvoice/_install_progress.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - pyproject.toml
+      - tests/test_install_progress_cli.py
+      - tests/test_manager_cache.py
+      - tests/test_store_progress.py
+    observed_behavior: Added install progress on stderr, configurable shared cache selection, Qwen3 install command documentation, and cleanup/rollback behavior for canceled installs and replacements.
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: Reviewed progress rendering, CLI/cache integration, staging replacement behavior, and tests.
+    stale: false

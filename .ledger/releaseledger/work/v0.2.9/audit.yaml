@@ -1,0 +1,59 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.9
+git_base_ref: v0.2.8
+git_base_sha: ce5e0f1f529546cc17cf2c152f5e38b49437690e
+git_head_ref: HEAD
+git_head_sha: 12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+git_range: ce5e0f1f529546cc17cf2c152f5e38b49437690e..12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+commit_count: 2
+rows:
+  - sha: fe650b312fdac938b584d84ed712b6584fb646d0
+    source_ref: git:fe650b312fdac938b584d84ed712b6584fb646d0
+    short_sha: fe650b3
+    changed_paths:
+      - docs/systems/piper.md
+      - onnxvoice/__init__.py
+      - onnxvoice/systems/piper.py
+      - onnxvoice/types.py
+      - tests/test_piper_contract.py
+      - tests/test_piper_integration.py
+    stats:
+      files_changed: 6
+      insertions: 157
+      deletions: 30
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: piper max phoneme cap"
+  - sha: 12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+    source_ref: git:12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+    short_sha: 12de613
+    changed_paths:
+      - README.md
+      - docs/cli.md
+      - onnxvoice/_install_progress.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - pyproject.toml
+      - tests/test_install_progress_cli.py
+      - tests/test_manager_cache.py
+      - tests/test_store_progress.py
+    stats:
+      files_changed: 10
+      insertions: 873
+      deletions: 31
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: install process and qwen3 installer added"

@@ -1,0 +1,341 @@
+ docs/systems/piper.md           | 10 +++++--
+ onnxvoice/__init__.py           |  2 ++
+ onnxvoice/systems/piper.py      | 43 ++++++++++++++++++++++------
+ onnxvoice/types.py              | 12 +++++++-
+ tests/test_piper_contract.py    | 63 +++++++++++++++++++++++++++++------------
+ tests/test_piper_integration.py | 57 +++++++++++++++++++++++++++++++++++++
+ 6 files changed, 157 insertions(+), 30 deletions(-)
+
+diff --git a/docs/systems/piper.md b/docs/systems/piper.md
+index a5ecebf..3c85a08 100644
+--- a/docs/systems/piper.md
++++ b/docs/systems/piper.md
+@@ -24,9 +24,15 @@ finally:
+
+ The runtime reads the sample rate from installation metadata or the Piper config, with a fallback when neither supplies it. A single-speaker model does not accept `speaker_id`; a multi-speaker model with a `sid` input requires it.
+
+-## Graph-declared phoneme capacity
++## Sequence-axis contract
+
+-`runtime.max_phonemes` reports only a hard sequence length declared by the active ONNX graph's Piper `input` tensor. Dynamic or otherwise ambiguous dimensions return `None`; this means no graph-declared fixed bound is available, not that capacity is infinite. OnnxVoice does not invent a practical text or phoneme limit.
++`runtime.phoneme_sequence_contract` reports the evidence for the active ONNX graph's Piper `input` sequence axis (`axis == 1`):
++
++- `variable`: the graph explicitly declares a non-empty symbolic dimension;
++- `fixed`: the graph declares an exact positive integer dimension;
++- `unknown`: the input metadata is missing, malformed, or otherwise not authoritative.
++
++The contract's `dimension` preserves the graph value when available, and `source` is `onnx.input.shape`. Inspecting it reads runtime graph metadata but never runs acoustic inference. `runtime.max_phonemes` remains only as a compatibility property and returns `None`: a static ONNX dimension is not treated as a maximum unless the runtime implements and documents padding for shorter sequences. OnnxVoice does not invent a practical text or phoneme limit.
+
+ ## Open local files
+
+diff --git a/onnxvoice/__init__.py b/onnxvoice/__init__.py
+index 1f7d6c2..0408d06 100644
+--- a/onnxvoice/__init__.py
++++ b/onnxvoice/__init__.py
+@@ -47,6 +47,7 @@ from .types import (
+     Installation,
+     InstalledArtifact,
+     RuntimeDiagnostic,
++    SequenceLengthContract,
+     SessionDiagnostic,
+     TensorSpec,
+     VoiceMetadata,
+@@ -145,6 +146,7 @@ __all__ = [
+     "VoiceNotFoundError",
+     "InferenceResult",
+     "TensorSpec",
++    "SequenceLengthContract",
+     "RuntimeDiagnostic",
+     "SessionDiagnostic",
+     "CatalogItem",
+diff --git a/onnxvoice/systems/piper.py b/onnxvoice/systems/piper.py
+index 450308f..32c14b4 100644
+--- a/onnxvoice/systems/piper.py
++++ b/onnxvoice/systems/piper.py
+@@ -8,7 +8,7 @@ import numpy as np
+
+ from ..errors import RuntimeContractError
+ from ..runtime import OnnxSession
+-from ..types import InferenceResult, Installation, TensorSpec
++from ..types import InferenceResult, Installation, SequenceLengthContract, TensorSpec
+ from .base import SystemAdapter
+
+
+@@ -35,15 +35,40 @@ class PiperAdapter(SystemAdapter):
+         return "sid" in self.session.input_names
+
+     @property
+-    def max_phonemes(self) -> int | None:
+-        """Return the graph-declared Piper input sequence bound, if static."""
++    def phoneme_sequence_contract(self) -> SequenceLengthContract:
++        """Report graph evidence for the Piper phoneme sequence axis without inference."""
+         spec = self._input_spec("input")
+-        if spec is None or not isinstance(spec.shape, tuple) or len(spec.shape) < 2:
+-            return None
+-        value = spec.shape[1]
+-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+-            return None
+-        return value
++        dimension: Any = None
++        if spec is not None:
++            shape = getattr(spec, "shape", None)
++            if isinstance(shape, tuple) and len(shape) >= 2:
++                dimension = shape[1]
++
++        if isinstance(dimension, str) and dimension.strip():
++            return SequenceLengthContract(
++                kind="variable",
++                axis=1,
++                dimension=dimension,
++                source="onnx.input.shape",
++            )
++        if isinstance(dimension, int) and not isinstance(dimension, bool) and dimension > 0:
++            return SequenceLengthContract(
++                kind="fixed",
++                axis=1,
++                dimension=dimension,
++                source="onnx.input.shape",
++            )
++        return SequenceLengthContract(
++            kind="unknown",
++            axis=1,
++            dimension=dimension,
++            source="onnx.input.shape",
++        )
++
++    @property
++    def max_phonemes(self) -> int | None:
++        """Compatibility API; graph dimensions do not establish a hard maximum."""
++        return None
+
+     def _config(self) -> dict[str, Any]:
+         if self._config_cache is not None:
+diff --git a/onnxvoice/types.py b/onnxvoice/types.py
+index 752e0ba..66fee9d 100644
+--- a/onnxvoice/types.py
++++ b/onnxvoice/types.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from collections.abc import Mapping
+ from dataclasses import dataclass, field
+ from pathlib import Path
+-from typing import Any
++from typing import Any, Literal
+
+ import numpy as np
+
+@@ -375,6 +375,16 @@ class RuntimeDiagnostic:
+     properties: Mapping[str, Any] = field(default_factory=dict)
+
+
++@dataclass(frozen=True, slots=True)
++class SequenceLengthContract:
++    """Authoritative graph evidence for one sequence axis."""
++
++    kind: Literal["variable", "fixed", "unknown"]
++    axis: int
++    dimension: int | str | None
++    source: str
++
++
+ @dataclass(frozen=True, slots=True)
+ class TensorSpec:
+     """Name, ONNX Runtime type, and declared shape of one graph tensor."""
+diff --git a/tests/test_piper_contract.py b/tests/test_piper_contract.py
+index f4d51b5..ef326b6 100644
+--- a/tests/test_piper_contract.py
++++ b/tests/test_piper_contract.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+
+ import json
++from typing import Any, cast
+
+ import numpy as np
+ import pytest
+@@ -22,7 +23,7 @@ class PiperSession:
+
+     def __init__(self, names=None):
+         self.input_names = tuple(names or self.input_names)
+-        self.seen = None
++        self.seen: dict[str, np.ndarray] | None = None
+
+     def run(self, inputs):
+         self.seen = inputs
+@@ -59,6 +60,7 @@ def test_piper_forwards_model_ready_speaker_id_and_graph_dtypes(tmp_path):
+     assert adapter.requires_speaker_id is True
+     assert result.sample_rate == 16000
+     assert result.audio.dtype == np.float32
++    assert fake.seen is not None
+     assert fake.seen["input"].dtype == np.int32
+     assert fake.seen["scales"].dtype == np.float16
+     assert fake.seen["sid"].dtype == np.int64
+@@ -90,7 +92,7 @@ def test_piper_passes_provider_and_session_options(tmp_path, monkeypatch):
+     options = object()
+
+     class CapturingSession:
+-        def __init__(self, *args, **kwargs):
++        def __init__(self, *_args, **kwargs):
+             captured.update(kwargs)
+
+     monkeypatch.setattr(piper_module, "OnnxSession", CapturingSession)
+@@ -112,7 +114,7 @@ class NoInferencePiperSession:
+         self.input_specs = tuple(input_specs)
+         self.run_called = False
+
+-    def run(self, inputs):
++    def run(self, _inputs):
+         self.run_called = True
+         raise AssertionError("capacity inspection must not execute inference")
+
+@@ -124,27 +126,45 @@ def _capacity_adapter(tmp_path, input_specs):
+     return adapter, fake
+
+
+-def test_piper_max_phonemes_returns_none_for_dynamic_sequence_dimension(tmp_path):
+-    adapter = PiperAdapter(_installation(tmp_path))
+-    adapter._session = PiperSession()  # type: ignore[assignment]
++@pytest.mark.parametrize("dimension", ["N", "phonemes", "sequence_length"])
++def test_piper_sequence_contract_reports_symbolic_axis_as_variable(tmp_path, dimension):
++    adapter, fake = _capacity_adapter(
++        tmp_path, (TensorSpec("input", "tensor(int32)", (1, dimension)),)
++    )
+
+-    assert adapter.max_phonemes is None
++    contract = adapter.phoneme_sequence_contract
++
++    assert contract.kind == "variable"
++    assert contract.dimension == dimension
++    assert contract.axis == 1
++    assert contract.source == "onnx.input.shape"
++    assert fake.run_called is False
+
+
+-def test_piper_max_phonemes_exposes_static_sequence_dimension(tmp_path):
++def test_piper_sequence_contract_reports_integer_axis_as_fixed(tmp_path):
+     adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),))
+
+-    assert adapter.max_phonemes == 256
++    contract = adapter.phoneme_sequence_contract
++
++    assert contract.kind == "fixed"
++    assert contract.dimension == 256
++    assert contract.axis == 1
++    assert contract.source == "onnx.input.shape"
+     assert fake.run_called is False
+
+
+-@pytest.mark.parametrize("dimension", [None, "N", "256", 0, -1, True])
+-def test_piper_max_phonemes_rejects_invalid_dimensions(tmp_path, dimension):
++@pytest.mark.parametrize("dimension", [None, True, 0, -1, ""])
++def test_piper_sequence_contract_classifies_unsupported_dimensions_as_unknown(tmp_path, dimension):
+     adapter, fake = _capacity_adapter(
+         tmp_path, (TensorSpec("input", "tensor(int32)", (1, dimension)),)
+     )
+
+-    assert adapter.max_phonemes is None
++    contract = adapter.phoneme_sequence_contract
++
++    assert contract.kind == "unknown"
++    assert contract.dimension == dimension
++    assert contract.axis == 1
++    assert contract.source == "onnx.input.shape"
+     assert fake.run_called is False
+
+
+@@ -152,20 +172,27 @@ def test_piper_max_phonemes_rejects_invalid_dimensions(tmp_path, dimension):
+     "input_specs",
+     [
+         (),
++        (TensorSpec("other", "tensor(int32)", (1, 256)),),
+         (TensorSpec("input", "tensor(int32)", ()),),
+         (TensorSpec("input", "tensor(int32)", (256,)),),
+-        (TensorSpec("input", "tensor(int32)", None),),  # type: ignore[arg-type]
++        (TensorSpec("input", "tensor(int32)", cast(Any, None)),),
++        (TensorSpec("input", "tensor(int32)", cast(Any, [])),),
+     ],
+ )
+-def test_piper_max_phonemes_returns_none_for_missing_or_malformed_input_spec(tmp_path, input_specs):
++def test_piper_sequence_contract_is_unknown_for_missing_or_malformed_input(tmp_path, input_specs):
+     adapter, fake = _capacity_adapter(tmp_path, input_specs)
+
+-    assert adapter.max_phonemes is None
++    contract = adapter.phoneme_sequence_contract
++
++    assert contract.kind == "unknown"
++    assert contract.dimension is None
++    assert contract.axis == 1
++    assert contract.source == "onnx.input.shape"
+     assert fake.run_called is False
+
+
+-def test_piper_max_phonemes_never_runs_inference(tmp_path):
+-    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 64)),))
++def test_piper_max_phonemes_does_not_treat_fixed_dimension_as_a_limit(tmp_path):
++    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),))
+
+-    assert adapter.max_phonemes == 64
++    assert adapter.max_phonemes is None
+     assert fake.run_called is False
+diff --git a/tests/test_piper_integration.py b/tests/test_piper_integration.py
+new file mode 100644
+index 0000000..37811fd
+--- /dev/null
++++ b/tests/test_piper_integration.py
+@@ -0,0 +1,57 @@
++from __future__ import annotations
++
++import os
++
++import pytest
++
++from onnxvoice import NotInstalledError, OnnxVoice
++
++_REQUIRE_REAL = os.environ.get("ONNXVOICE_REQUIRE_PIPER_REAL") == "1"
++
++
++@pytest.mark.integration
++@pytest.mark.resource_heavy
++def test_managed_amy_medium_reports_variable_sequence_axis(monkeypatch):
++    """Inspect the actual managed Piper graph without executing acoustic inference."""
++    try:
++        import onnxruntime  # noqa: F401
++    except ImportError:
++        message = "onnxruntime is required for the Piper graph integration check"
++        if _REQUIRE_REAL:
++            pytest.fail(message)
++        pytest.skip("onnxruntime is not installed")
++
++    manager = OnnxVoice(
++        cache_dir=os.environ.get("ONNXVOICE_TEST_CACHE"),
++        offline=True,
++    )
++    try:
++        installation = manager.resolve("piper:en_US-amy-medium")
++    except NotInstalledError:
++        message = "piper:en_US-amy-medium is not installed in the offline OnnxVoice store"
++        if _REQUIRE_REAL:
++            pytest.fail(message)
++        pytest.skip(message)
++
++    adapter = manager.open(installation, providers="cpu")
++    try:
++        session = adapter.session
++        input_spec = next(spec for spec in session.input_specs if spec.name == "input")
++        assert input_spec.shape is not None
++
++        run_called = False
++
++        def fail_if_inferred(_inputs):
++            nonlocal run_called
++            run_called = True
++            raise AssertionError("sequence contract inspection must not execute inference")
++
++        monkeypatch.setattr(session, "run", fail_if_inferred)
++        contract = adapter.phoneme_sequence_contract
++
++        assert contract.kind == "variable"
++        assert contract.axis == 1
++        assert contract.source == "onnx.input.shape"
++        assert run_called is False
++    finally:
++        adapter.close()

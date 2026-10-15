@@ -1,0 +1,51 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.9
+git_base_ref: ce5e0f1f529546cc17cf2c152f5e38b49437690e
+git_base_sha: ce5e0f1f529546cc17cf2c152f5e38b49437690e
+git_head_ref: 12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+git_head_sha: 12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: Added Piper sequence-axis metadata without treating fixed ONNX dimensions as phoneme limits
+    status: accepted
+    source_refs:
+      - git:fe650b312fdac938b584d84ed712b6584fb646d0
+    paths:
+      - docs/systems/piper.md
+      - onnxvoice/__init__.py
+      - onnxvoice/systems/piper.py
+      - onnxvoice/types.py
+      - tests/test_piper_contract.py
+      - tests/test_piper_integration.py
+    sources:
+      - git:fe650b312fdac938b584d84ed712b6584fb646d0
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: Added install progress, configurable shared cache, and interruption-safe asset replacement
+    status: accepted
+    source_refs:
+      - git:12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+    paths:
+      - README.md
+      - docs/cli.md
+      - onnxvoice/_install_progress.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - pyproject.toml
+      - tests/test_install_progress_cli.py
+      - tests/test_manager_cache.py
+      - tests/test_store_progress.py
+    sources:
+      - git:12de613c204e78d2ffafe6da4fc355c6c0ce49a8
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

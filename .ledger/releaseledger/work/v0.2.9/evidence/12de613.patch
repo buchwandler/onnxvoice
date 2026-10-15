@@ -1,0 +1,1146 @@
+ README.md                          |  15 +++
+ docs/cli.md                        |  37 +++++-
+ onnxvoice/_install_progress.py     | 243 ++++++++++++++++++++++++++++++++++
+ onnxvoice/cli.py                   |  27 +++-
+ onnxvoice/manager.py               |  10 +-
+ onnxvoice/store.py                 | 121 ++++++++++++++---
+ pyproject.toml                     |   2 +-
+ tests/test_install_progress_cli.py | 260 +++++++++++++++++++++++++++++++++++++
+ tests/test_manager_cache.py        |  45 +++++++
+ tests/test_store_progress.py       | 144 ++++++++++++++++++++
+ 10 files changed, 873 insertions(+), 31 deletions(-)
+
+diff --git a/README.md b/README.md
+index 92d6a96..cdcf9da 100644
+--- a/README.md
++++ b/README.md
+@@ -35,6 +35,21 @@ onnxvoice installed
+ onnxvoice cache info
+ ```
+
++ONNXVoice provides the shared asset-management CLI for Qwen3-TTS and other supported systems:
++
++```bash
++onnxvoice list --system qwen3
++onnxvoice install qwen3:base-0.6b --quality int4
++onnxvoice install qwen3:voice-design-1.7b --quality int4
++onnxvoice info qwen3:base-0.6b --quality int4
++onnxvoice path qwen3:base-0.6b --quality int4
++onnxvoice verify qwen3:base-0.6b --quality int4
++onnxvoice installed
++onnxvoice cache info
++```
++
++Install progress is written to stderr. Successful install stdout contains only the installed path; use `--no-progress` to disable progress output. `ONNXVOICE_CACHE_DIR` selects the shared model and catalog cache root, and the global `--cache-dir` option overrides it. Ctrl+C prints `Cancelled.` to stderr and exits with status 130 after cleaning staging data; an existing usable installation is preserved.
++
+ ### Python
+
+ ```python
+diff --git a/docs/cli.md b/docs/cli.md
+index bfc8a87..f8e4301 100644
+--- a/docs/cli.md
++++ b/docs/cli.md
+@@ -71,7 +71,42 @@ onnxvoice show piper:en_US-lessac-medium
+ onnxvoice verify piper:en_US-lessac-medium
+ ```
+
+-`install` accepts `--quality`, `--distribution`, `--refresh`, and `--force`. Catalog quality and distribution choices can produce separate managed installations.
++Catalog quality and distribution choices can produce separate managed installations.
++
++### Shared progress, output, and cache
++
++`install` accepts `--quality`, `--distribution`, `--refresh`, `--force`, and `--no-progress`. Normal installs show immediate resolution feedback, then byte progress, the current artifact, file count, and an approximate transfer rate and ETA when enough observations are available. Progress is sent to stderr. Redirected stderr receives sparse plain-text lines without terminal control sequences, and unknown totals stay indeterminate.
++
++Successful install stdout contains only the final installed path so it can be captured by scripts. For example:
++
++```bash
++onnxvoice install qwen3:base-0.6b --quality int4 \
++  >installed-path.txt 2>install-progress.txt
++```
++
++`installed-path.txt` contains the path; `install-progress.txt` contains progress lines. Add `--no-progress` to suppress the display while keeping path-only stdout.
++
++`ONNXVOICE_CACHE_DIR` sets the shared root for model assets and catalogs. The global `--cache-dir` option takes precedence and must appear before the command:
++
++```bash
++ONNXVOICE_CACHE_DIR="$HOME/.cache/onnxvoice" onnxvoice install qwen3:base-0.6b --quality int4
++onnxvoice --cache-dir /mnt/models/onnxvoice install qwen3:base-0.6b --quality int4
++```
++
++Ctrl+C prints `Cancelled.` to stderr and returns exit status 130 without a traceback. Interrupted staging data is removed, prior usable installations are preserved during replacement, and a later install can be retried.
++
++### Shared Qwen3 asset commands
++
++```bash
++onnxvoice list --system qwen3
++onnxvoice install qwen3:base-0.6b --quality int4
++onnxvoice install qwen3:voice-design-1.7b --quality int4
++onnxvoice info qwen3:base-0.6b --quality int4
++onnxvoice path qwen3:base-0.6b --quality int4
++onnxvoice verify qwen3:base-0.6b --quality int4
++onnxvoice installed
++onnxvoice cache info
++```
+
+ ## Check and apply updates
+
+diff --git a/onnxvoice/_install_progress.py b/onnxvoice/_install_progress.py
+new file mode 100644
+index 0000000..ce25f21
+--- /dev/null
++++ b/onnxvoice/_install_progress.py
+@@ -0,0 +1,243 @@
++from __future__ import annotations
++
++import sys
++import time
++from collections import deque
++from collections.abc import Callable
++from typing import TYPE_CHECKING, TextIO
++
++if TYPE_CHECKING:
++    from .types import AssetProgress
++
++
++class InstallProgress:
++    """Render shared asset-install events to stderr."""
++
++    def __init__(
++        self,
++        ref: str,
++        *,
++        stream: TextIO | None = None,
++        clock: Callable[[], float] = time.monotonic,
++    ) -> None:
++        self.ref = ref
++        self.stream = stream if stream is not None else sys.stderr
++        self._clock = clock
++        self._tty = self.stream.isatty()
++        self._closed = False
++        self._last_render = self._clock()
++        self._last_tty_line_length = 0
++        self._total_bytes: int | None = None
++        self._completed_bytes = 0
++        self._current_artifact: str | None = None
++        self._current_total: int | None = None
++        self._current_received = 0
++        self._last_file_completed = 0
++        self._file_count = 0
++        self._file_count_total: int | None = None
++        self._finalized_artifacts: set[str] = set()
++        self._network_bytes = 0
++        self._rate_samples: deque[tuple[float, int]] = deque()
++        self._status = "Installing"
++        self._write_line(f"Resolving {ref}")
++
++    def __call__(self, event: AssetProgress) -> None:
++        if self._closed:
++            return
++
++        if event.phase == "install_started":
++            self._total_bytes = self._known_size(event.total)
++            self._status = "Installing"
++            self._render(force=True)
++        elif event.phase == "download_started":
++            self._current_artifact = event.artifact
++            self._current_total = self._known_size(event.total)
++            self._current_received = 0
++            self._last_file_completed = 0
++            self._status = "Downloading"
++            self._render(force=True)
++        elif event.phase == "download_progress":
++            self._record_download_progress(event)
++            self._render()
++        elif event.phase == "download_completed":
++            self._finish_download(event)
++            self._status = "Installing"
++            self._render(force=True)
++        elif event.phase == "artifact_cached":
++            self._record_cached_artifact(event)
++            self._status = "Installing"
++            self._render(force=True)
++        elif event.phase == "artifact_installed":
++            if type(event.completed) is int and event.completed >= 0:
++                self._file_count = max(self._file_count, event.completed)
++            self._file_count_total = self._known_size(event.total)
++            self._status = "Installing"
++            self._render(force=self._tty)
++        elif event.phase == "install_completed":
++            self._current_artifact = None
++            self._current_total = None
++            self._current_received = 0
++            self._status = "Installed"
++            self._render(force=True)
++        elif event.phase == "install_failed":
++            self._status = "Install failed"
++            self._render(force=True)
++
++    def close(self) -> None:
++        if self._closed:
++            return
++        self._closed = True
++        if self._tty and self._last_tty_line_length:
++            self.stream.write("\n")
++            self.stream.flush()
++
++    def _record_download_progress(self, event: AssetProgress) -> None:
++        if self._current_artifact != event.artifact:
++            self._current_artifact = event.artifact
++            self._current_total = self._known_size(event.total)
++            self._current_received = 0
++            self._last_file_completed = 0
++        elif self._current_total is None:
++            self._current_total = self._known_size(event.total)
++
++        completed = self._known_size(event.completed)
++        if completed is None:
++            return
++        new_completed = max(self._last_file_completed, completed)
++        delta = new_completed - self._last_file_completed
++        self._last_file_completed = new_completed
++        self._current_received += delta
++        if delta:
++            now = self._clock()
++            self._network_bytes += delta
++            self._rate_samples.append((now, self._network_bytes))
++            while len(self._rate_samples) > 2 and now - self._rate_samples[1][0] > 20:
++                self._rate_samples.popleft()
++
++    def _finish_download(self, event: AssetProgress) -> None:
++        artifact = event.artifact or self._current_artifact
++        if artifact is None or artifact in self._finalized_artifacts:
++            return
++
++        received = self._current_received if self._current_artifact == artifact else 0
++        reported = self._known_size(event.completed)
++        if reported is not None:
++            received = max(received, reported)
++        self._completed_bytes += received
++        self._finalized_artifacts.add(artifact)
++        if self._current_artifact == artifact:
++            self._current_artifact = None
++            self._current_total = None
++            self._current_received = 0
++            self._last_file_completed = 0
++
++    def _record_cached_artifact(self, event: AssetProgress) -> None:
++        artifact = event.artifact
++        if artifact is None or artifact in self._finalized_artifacts:
++            return
++        total = self._known_size(event.total)
++        if total is not None:
++            self._completed_bytes += total
++        self._finalized_artifacts.add(artifact)
++
++    def _render(self, *, force: bool = False) -> None:
++        now = self._clock()
++        interval = 0.12 if self._tty else 5.0
++        if not force and now - self._last_render < interval:
++            return
++        self._last_render = now
++
++        downloaded = self._completed_bytes + self._current_received
++        if self._total_bytes is None:
++            byte_progress = f"{self._format_bytes(downloaded)} downloaded (total unknown)"
++        elif self._total_bytes > 0:
++            percent = min(100, downloaded * 100 // self._total_bytes)
++            if self._tty:
++                width = 20
++                filled = percent * width // 100
++                bar = "#" * filled + "-" * (width - filled)
++                byte_progress = (
++                    f"[{bar}] {percent}% {self._format_bytes(downloaded)} / "
++                    f"{self._format_bytes(self._total_bytes)}"
++                )
++            else:
++                byte_progress = (
++                    f"{percent}% {self._format_bytes(downloaded)} / "
++                    f"{self._format_bytes(self._total_bytes)}"
++                )
++        else:
++            byte_progress = f"{self._format_bytes(downloaded)} / 0 B"
++
++        details = [byte_progress]
++        if self._current_artifact is not None:
++            file_progress = self._format_bytes(self._current_received)
++            if self._current_total is not None:
++                file_progress += f" / {self._format_bytes(self._current_total)}"
++            details.append(f"file {file_progress}")
++            details.append(f"current {self._current_artifact}")
++
++        if self._file_count_total is None:
++            details.append(f"files {self._file_count}")
++        else:
++            details.append(f"files {self._file_count}/{self._file_count_total}")
++
++        rate = self._network_rate()
++        if rate is not None:
++            details.append(f"{self._format_rate(rate)}")
++            if self._total_bytes is not None:
++                remaining = max(0, self._total_bytes - downloaded)
++                details.append(f"ETA {self._format_duration(remaining / rate)}")
++
++        line = f"{self._status} {self.ref}: " + ", ".join(details)
++        if self._tty:
++            padding = " " * max(0, self._last_tty_line_length - len(line))
++            self.stream.write("\r" + line + padding)
++            self._last_tty_line_length = len(line)
++        else:
++            self.stream.write(line + "\n")
++        self.stream.flush()
++
++    def _network_rate(self) -> float | None:
++        if len(self._rate_samples) < 2:
++            return None
++        first_time, first_bytes = self._rate_samples[0]
++        last_time, last_bytes = self._rate_samples[-1]
++        elapsed = last_time - first_time
++        if elapsed <= 0 or last_bytes <= first_bytes:
++            return None
++        return (last_bytes - first_bytes) / elapsed
++
++    def _write_line(self, line: str) -> None:
++        self.stream.write(line + "\n")
++        self.stream.flush()
++
++    @staticmethod
++    def _known_size(value: int | None) -> int | None:
++        if type(value) is int and value >= 0:
++            return value
++        return None
++
++    @staticmethod
++    def _format_bytes(value: int) -> str:
++        if value < 1024:
++            return f"{value} B"
++        amount = float(value)
++        for unit in ("KiB", "MiB", "GiB", "TiB"):
++            amount /= 1024
++            if amount < 1024 or unit == "TiB":
++                return f"{amount:.1f} {unit}"
++        raise AssertionError("unreachable")
++
++    @classmethod
++    def _format_rate(cls, value: float) -> str:
++        if value < 1024:
++            return f"{value:.0f} B/s"
++        return f"{cls._format_bytes(int(value))}/s"
++
++    @staticmethod
++    def _format_duration(seconds: float) -> str:
++        if seconds < 60:
++            return f"{seconds:.0f}s"
++        if seconds < 3600:
++            return f"{seconds / 60:.0f}m"
++        return f"{seconds / 3600:.1f}h"
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 7140530..6dc6543 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -6,6 +6,7 @@ import sys
+ from pathlib import Path
+ from typing import Any
+
++from ._install_progress import InstallProgress
+ from .catalog_tools import kitten as kitten_catalog_tools
+ from .catalog_tools import pocket as pocket_catalog_tools
+ from .catalog_tools import qwen3 as qwen3_catalog_tools
+@@ -108,6 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
+     install_parser.add_argument("--refresh", action="store_true")
+     install_parser.add_argument("--force", action="store_true")
+
++    install_parser.add_argument(
++        "--no-progress", action="store_true", help="Disable install progress output"
++    )
+     # --- updates ---
+     updates_parser = sub.add_parser("updates", help="Check for available updates")
+     _add_filter_args(updates_parser)
+@@ -969,13 +973,19 @@ def main(argv: list[str] | None = None) -> int:
+         manager = _manager(args)
+
+         if args.command == "install":
+-            installed = manager.install(
+-                args.ref,
+-                quality=args.quality,
+-                distribution=getattr(args, "distribution", None),
+-                refresh=args.refresh,
+-                force=args.force,
+-            )
++            progress = None if args.no_progress else InstallProgress(args.ref)
++            try:
++                installed = manager.install(
++                    args.ref,
++                    quality=args.quality,
++                    distribution=getattr(args, "distribution", None),
++                    refresh=args.refresh,
++                    force=args.force,
++                    progress=progress,
++                )
++            finally:
++                if progress is not None:
++                    progress.close()
+             print(installed.path)
+             return 0
+
+@@ -1032,6 +1042,9 @@ def main(argv: list[str] | None = None) -> int:
+             print(installed.path)
+             return 0
+
++    except KeyboardInterrupt:
++        print("Cancelled.", file=sys.stderr)
++        return 130
+     except Exception as exc:
+         print(f"onnxvoice: {exc}", file=sys.stderr)
+         return 2
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 2861f7c..473bb2c 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import builtins
+ import hashlib
+ import json
++import os
+ import warnings
+ from collections.abc import Mapping, Sequence
+ from contextlib import suppress
+@@ -49,9 +50,14 @@ class OnnxVoice:
+         offline: bool = False,
+     ) -> None:
+         """Create a manager using the selected cache and catalog configuration."""
+-        self.store = AssetStore(cache_dir, offline=offline)
++        cache_root: Path | None = Path(cache_dir) if cache_dir is not None else None
++        if cache_root is None:
++            environment_cache_dir = os.environ.get("ONNXVOICE_CACHE_DIR")
++            if environment_cache_dir:
++                cache_root = Path(environment_cache_dir)
++        self.store = AssetStore(cache_root, offline=offline)
+         self.catalog = CatalogClient(
+-            cache_dir=Path(cache_dir) if cache_dir is not None else None,
++            cache_dir=cache_root,
+             sources=catalog_sources,
+             offline=offline,
+         )
+diff --git a/onnxvoice/store.py b/onnxvoice/store.py
+index babe17a..cce4f4f 100644
+--- a/onnxvoice/store.py
++++ b/onnxvoice/store.py
+@@ -9,6 +9,7 @@ import tempfile
+ import threading
+ import time
+ import urllib.request
++import uuid
+ import weakref
+ from collections.abc import Callable, Mapping, Sequence
+ from contextlib import suppress
+@@ -454,14 +455,17 @@ class AssetStore:
+             raise UnsafePathError(
+                 f"Artifact path {_INSTALL_MANIFEST_FILENAME!r} is reserved for installation metadata"
+             )
++        expected_bytes = self._expected_install_bytes(item.artifacts)
+         if self.is_installed(item.system, storage_id) and not force:
+             installation = self.get(item.system, storage_id)
+             target = self.install_path(item.system, storage_id)
+-            self.verify(installation)
+             self._emit(
+                 progress,
+-                AssetProgress("install_started", item.ref, target=str(target)),
++                AssetProgress(
++                    "install_started", item.ref, total=expected_bytes, target=str(target)
++                ),
+             )
++            self.verify(installation)
+             self._emit(
+                 progress,
+                 AssetProgress(
+@@ -471,9 +475,17 @@ class AssetStore:
+             return installation
+         target = self.install_path(item.system, storage_id)
+         target.parent.mkdir(parents=True, exist_ok=True)
+-        staging = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
+-        self._emit(progress, AssetProgress("install_started", item.ref, target=str(target)))
++        staging = target.parent / f".{storage_id}-{uuid.uuid4().hex}"
++        backup: Path | None = None
++        committed = False
+         try:
++            staging.mkdir()
++            self._emit(
++                progress,
++                AssetProgress(
++                    "install_started", item.ref, total=expected_bytes, target=str(target)
++                ),
++            )
+             installed: list[InstalledArtifact] = []
+             with FileLock(self._gc_lock_path()):
+                 for artifact in item.artifacts:
+@@ -539,17 +551,64 @@ class AssetStore:
+                 (staging / _INSTALL_MANIFEST_FILENAME).write_text(
+                     json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                 )
+-                if target.exists():
+-                    shutil.rmtree(target)
+-                os.replace(staging, target)
++                backup = self._commit_staging(staging, target)
++                committed = True
+             installation = self.get(item.system, storage_id)
+             self._emit(progress, AssetProgress("install_completed", item.ref, target=str(target)))
++            if backup is not None:
++                shutil.rmtree(backup, ignore_errors=True)
+             return installation
+-        except Exception:
+-            shutil.rmtree(staging, ignore_errors=True)
+-            self._emit(progress, AssetProgress("install_failed", item.ref, target=str(target)))
++        except BaseException:
++            with suppress(BaseException):
++                shutil.rmtree(staging, ignore_errors=True)
++            with suppress(BaseException):
++                if backup is not None:
++                    self._restore_backup(backup, target)
++                elif committed and target.exists():
++                    shutil.rmtree(target, ignore_errors=True)
++            with suppress(BaseException):
++                self._emit(
++                    progress,
++                    AssetProgress("install_failed", item.ref, target=str(target)),
++                )
+             raise
+
++    @staticmethod
++    def _expected_install_bytes(artifacts: Sequence[Artifact]) -> int | None:
++        total = 0
++        for artifact in artifacts:
++            size = artifact.size
++            if not isinstance(size, int) or isinstance(size, bool) or size < 0:
++                return None
++            total += size
++        return total
++
++    @staticmethod
++    def _commit_staging(staging: Path, target: Path) -> Path | None:
++        backup: Path | None = (
++            target.parent / f".onnxvoice-backup-{uuid.uuid4().hex}" if target.exists() else None
++        )
++        try:
++            if backup is not None:
++                os.replace(target, backup)
++            os.replace(staging, target)
++        except BaseException:
++            if backup is not None and backup.exists():
++                with suppress(BaseException):
++                    AssetStore._restore_backup(backup, target)
++            elif not staging.exists() and target.exists():
++                with suppress(BaseException):
++                    shutil.rmtree(target, ignore_errors=True)
++            raise
++        return backup
++
++    @staticmethod
++    def _restore_backup(backup: Path, target: Path) -> None:
++        if backup.exists():
++            if target.exists():
++                shutil.rmtree(target, ignore_errors=True)
++            os.replace(backup, target)
++
+     def import_files(
+         self,
+         *,
+@@ -934,9 +993,18 @@ class AssetStore:
+
+         with FileLock(self._install_lock_path(system, storage_id)):
+             # Use the same staging + atomic replace workflow as install
+-            staging_path = Path(tempfile.mkdtemp(prefix=f".{storage_id}-", dir=target.parent))
+-            self._emit(progress, AssetProgress("install_started", item.ref, target=str(target)))
++            expected_bytes = self._expected_install_bytes(item.artifacts)
++            staging_path = target.parent / f".{storage_id}-{uuid.uuid4().hex}"
++            backup: Path | None = None
++            committed = False
+             try:
++                staging_path.mkdir()
++                self._emit(
++                    progress,
++                    AssetProgress(
++                        "install_started", item.ref, total=expected_bytes, target=str(target)
++                    ),
++                )
+                 installed: list[InstalledArtifact] = []
+                 with FileLock(self._gc_lock_path()):
+                     for artifact in item.artifacts:
+@@ -990,18 +1058,28 @@ class AssetStore:
+                     (staging_path / _INSTALL_MANIFEST_FILENAME).write_text(
+                         json.dumps(manifest_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                     )
+-                    # Atomic replace
+-                    if target.exists():
+-                        shutil.rmtree(target)
+-                    os.replace(staging_path, target)
++                    backup = self._commit_staging(staging_path, target)
++                    committed = True
+                 installation = self.get(system, storage_id)
+                 self._emit(
+                     progress, AssetProgress("install_completed", item.ref, target=str(target))
+                 )
++                if backup is not None:
++                    shutil.rmtree(backup, ignore_errors=True)
+                 return installation
+-            except Exception:
+-                shutil.rmtree(staging_path, ignore_errors=True)
+-                self._emit(progress, AssetProgress("install_failed", item.ref, target=str(target)))
++            except BaseException:
++                with suppress(BaseException):
++                    shutil.rmtree(staging_path, ignore_errors=True)
++                with suppress(BaseException):
++                    if backup is not None:
++                        self._restore_backup(backup, target)
++                    elif committed and target.exists():
++                        shutil.rmtree(target, ignore_errors=True)
++                with suppress(BaseException):
++                    self._emit(
++                        progress,
++                        AssetProgress("install_failed", item.ref, target=str(target)),
++                    )
+                 raise
+
+     def _materialize_artifact(
+@@ -1100,6 +1178,7 @@ class AssetStore:
+                     role=artifact.role,
+                     target=target,
+                     progress=progress,
++                    expected_size=artifact.size,
+                 )
+             self._emit(
+                 progress,
+@@ -1147,6 +1226,7 @@ class AssetStore:
+         source: str,
+         destination: Path,
+         *,
++        expected_size: int | None,
+         ref: str,
+         artifact: str,
+         role: str,
+@@ -1166,6 +1246,7 @@ class AssetStore:
+                     ref,
+                     artifact,
+                     completed=destination.stat().st_size,
++                    total=expected_size,
+                     role=role,
+                     target=target,
+                 ),
+@@ -1180,7 +1261,7 @@ class AssetStore:
+                 destination.open("wb") as out,
+             ):
+                 total = response.headers.get("Content-Length")
+-                total_bytes = int(total) if total and total.isdigit() else None
++                total_bytes = int(total) if total and total.isdigit() else expected_size
+                 completed = 0
+                 while chunk := response.read(1024 * 1024):
+                     out.write(chunk)
+diff --git a/pyproject.toml b/pyproject.toml
+index f17c294..b4e7144 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -82,7 +82,7 @@ dev = [
+
+ [tool.setuptools_scm]
+ write_to = "onnxvoice/_version.py"
+-fallback_version = "0.2.8"
++fallback_version = "0.2.9"
+
+ [tool.pytest.ini_options]
+ testpaths = ["tests"]
+diff --git a/tests/test_install_progress_cli.py b/tests/test_install_progress_cli.py
+new file mode 100644
+index 0000000..4720afe
+--- /dev/null
++++ b/tests/test_install_progress_cli.py
+@@ -0,0 +1,260 @@
++from __future__ import annotations
++
++from io import StringIO
++
++from onnxvoice._install_progress import InstallProgress
++from onnxvoice.types import AssetProgress
++
++
++class FakeClock:
++    def __init__(self) -> None:
++        self.now = 0.0
++
++    def __call__(self) -> float:
++        return self.now
++
++    def advance(self, seconds: float) -> None:
++        self.now += seconds
++
++
++class TTYStream(StringIO):
++    def isatty(self) -> bool:
++        return True
++
++
++def _event(
++    phase: str,
++    *,
++    artifact: str | None = None,
++    completed: int | None = None,
++    total: int | None = None,
++) -> AssetProgress:
++    return AssetProgress(
++        phase,
++        "qwen3:base-0.6b",
++        artifact=artifact,
++        completed=completed,
++        total=total,
++    )
++
++
++def test_redirected_output_is_sparse_plain_and_indeterminate():
++    stream = StringIO()
++    clock = FakeClock()
++    progress = InstallProgress("qwen3:base-0.6b", stream=stream, clock=clock)
++    assert stream.getvalue() == "Resolving qwen3:base-0.6b\n"
++
++    progress(_event("install_started"))
++    progress(_event("download_started", artifact="model.onnx"))
++    clock.advance(1)
++    progress(_event("download_progress", artifact="model.onnx", completed=5))
++    clock.advance(5)
++    progress(_event("download_progress", artifact="model.onnx", completed=10))
++
++    output = stream.getvalue()
++    assert "total unknown" in output
++    assert "%" not in output
++    assert "current model.onnx" in output
++    assert "10 B downloaded" in output
++    assert "\r" not in output
++    assert "\x1b" not in output
++    assert len(output.splitlines()) == 4
++
++
++def test_tty_renders_throttled_bar_and_close_is_idempotent():
++    stream = TTYStream()
++    clock = FakeClock()
++    progress = InstallProgress("qwen3:base-0.6b", stream=stream, clock=clock)
++
++    progress(_event("install_started", total=100))
++    progress(_event("download_started", artifact="model.onnx", total=100))
++    before_progress = stream.getvalue()
++    clock.advance(0.05)
++    progress(_event("download_progress", artifact="model.onnx", completed=25, total=100))
++    assert stream.getvalue() == before_progress
++
++    clock.advance(0.1)
++    progress(_event("download_progress", artifact="model.onnx", completed=25, total=100))
++    output = stream.getvalue()
++    assert "[#####---------------] 25%" in output
++    assert "current model.onnx" in output
++    assert "\r" in output
++    assert "\x1b" not in output
++
++    progress.close()
++    progress.close()
++    assert stream.getvalue().endswith("\n")
++    assert not stream.getvalue().endswith("\n\n")
++
++
++def test_cached_and_downloaded_bytes_are_counted_once_without_cache_rate():
++    stream = TTYStream()
++    clock = FakeClock()
++    progress = InstallProgress("qwen3:base-0.6b", stream=stream, clock=clock)
++
++    progress(_event("install_started", total=100))
++    progress(_event("artifact_cached", artifact="config.json", total=40))
++    progress(_event("download_started", artifact="model.onnx", total=60))
++    clock.advance(1)
++    progress(_event("download_progress", artifact="model.onnx", completed=20, total=60))
++    clock.advance(1)
++    progress(_event("download_progress", artifact="model.onnx", completed=20, total=60))
++    clock.advance(1)
++    progress(_event("download_progress", artifact="model.onnx", completed=50, total=60))
++
++    assert progress._network_bytes == 50
++    assert "15 B/s" in stream.getvalue()
++
++    completed = _event("download_completed", artifact="model.onnx", completed=50, total=60)
++    progress(completed)
++    progress(completed)
++    progress(_event("artifact_installed", completed=1, total=2))
++    progress(_event("artifact_installed", completed=2, total=2))
++    progress(_event("install_completed", total=100))
++
++    final_line = stream.getvalue().split("\r")[-1]
++    assert "90 B / 100 B" in final_line
++    assert "files 2/2" in final_line
++    assert "current model.onnx" not in final_line
++
++
++def test_cached_artifacts_do_not_create_network_rate_samples():
++    stream = TTYStream()
++    clock = FakeClock()
++    progress = InstallProgress("qwen3:base-0.6b", stream=stream, clock=clock)
++
++    progress(_event("install_started", total=10))
++    progress(_event("artifact_cached", artifact="cached.bin", total=5))
++    assert progress._network_rate() is None
++    assert progress._network_bytes == 0
++
++
++def test_install_cli_keeps_stdout_machine_readable_and_passes_progress(
++    monkeypatch, capsys, tmp_path
++):
++    from types import SimpleNamespace
++
++    import onnxvoice.cli as cli
++
++    installed_path = tmp_path / "installed-model"
++    calls = {}
++
++    class Manager:
++        def install(self, ref, **kwargs):
++            calls["ref"] = ref
++            calls.update(kwargs)
++            progress = kwargs["progress"]
++            assert isinstance(progress, InstallProgress)
++            progress(_event("install_started", total=10))
++            progress(_event("install_completed", total=10))
++            return SimpleNamespace(path=installed_path)
++
++    monkeypatch.setattr(cli, "_manager", lambda _args: Manager())
++    result = cli.main(
++        [
++            "install",
++            "qwen3:base-0.6b",
++            "--quality",
++            "int4",
++            "--distribution",
++            "standard",
++            "--refresh",
++            "--force",
++        ]
++    )
++
++    captured = capsys.readouterr()
++    assert result == 0
++    assert captured.out == f"{installed_path}\n"
++    assert "Resolving qwen3:base-0.6b" in captured.err
++    assert calls["ref"] == "qwen3:base-0.6b"
++    assert calls["quality"] == "int4"
++    assert calls["distribution"] == "standard"
++    assert calls["refresh"] is True
++    assert calls["force"] is True
++
++
++def test_install_cli_no_progress_passes_none_and_writes_no_progress_stderr(
++    monkeypatch, capsys, tmp_path
++):
++    from types import SimpleNamespace
++
++    import onnxvoice.cli as cli
++
++    installed_path = tmp_path / "installed-model"
++    calls = {}
++
++    class Manager:
++        def install(self, ref, **kwargs):
++            calls["progress"] = kwargs["progress"]
++            return SimpleNamespace(path=installed_path)
++
++    monkeypatch.setattr(cli, "_manager", lambda _args: Manager())
++    result = cli.main(["install", "qwen3:base-0.6b", "--no-progress"])
++
++    captured = capsys.readouterr()
++    assert result == 0
++    assert captured.out == f"{installed_path}\n"
++    assert captured.err == ""
++    assert calls["progress"] is None
++
++
++def test_install_cli_closes_progress_after_failure(monkeypatch, capsys):
++    import onnxvoice.cli as cli
++
++    displays = []
++
++    class Display:
++        def __init__(self, ref):
++            self.ref = ref
++            self.close_count = 0
++            displays.append(self)
++
++        def close(self):
++            self.close_count += 1
++
++    class Manager:
++        def install(self, _ref, **_kwargs):
++            raise RuntimeError("install failed")
++
++    monkeypatch.setattr(cli, "InstallProgress", Display)
++    monkeypatch.setattr(cli, "_manager", lambda _args: Manager())
++    result = cli.main(["install", "qwen3:base-0.6b"])
++
++    captured = capsys.readouterr()
++    assert result == 2
++    assert captured.out == ""
++    assert captured.err == "onnxvoice: install failed\n"
++    assert len(displays) == 1
++    assert displays[0].close_count == 1
++
++
++def test_install_cli_ctrl_c_returns_130_without_traceback(monkeypatch, capsys):
++    import onnxvoice.cli as cli
++
++    displays = []
++
++    class Display:
++        def __init__(self, ref):
++            self.ref = ref
++            self.close_count = 0
++            displays.append(self)
++
++        def close(self):
++            self.close_count += 1
++
++    class Manager:
++        def install(self, _ref, **_kwargs):
++            raise KeyboardInterrupt
++
++    monkeypatch.setattr(cli, "InstallProgress", Display)
++    monkeypatch.setattr(cli, "_manager", lambda _args: Manager())
++    result = cli.main(["install", "qwen3:base-0.6b"])
++
++    captured = capsys.readouterr()
++    assert result == 130
++    assert captured.out == ""
++    assert captured.err == "Cancelled.\n"
++    assert "Traceback" not in captured.err
++    assert len(displays) == 1
++    assert displays[0].close_count == 1
+diff --git a/tests/test_manager_cache.py b/tests/test_manager_cache.py
+new file mode 100644
+index 0000000..ce02a4d
+--- /dev/null
++++ b/tests/test_manager_cache.py
+@@ -0,0 +1,45 @@
++from __future__ import annotations
++
++import pytest
++
++from onnxvoice.errors import OfflineError
++from onnxvoice.manager import OnnxVoice
++
++
++def test_environment_cache_root_is_shared_by_store_and_catalog(tmp_path, monkeypatch):
++    root = tmp_path / "custom"
++    monkeypatch.setenv("ONNXVOICE_CACHE_DIR", str(root))
++
++    manager = OnnxVoice()
++
++    assert manager.store.root == root
++    assert manager.catalog.cache_dir == root / "catalogs"
++    assert manager.store.offline is False
++    assert manager.catalog.offline is False
++
++
++def test_explicit_cache_root_overrides_environment_and_preserves_offline(tmp_path, monkeypatch):
++    environment_root = tmp_path / "environment"
++    explicit_root = tmp_path / "explicit"
++    monkeypatch.setenv("ONNXVOICE_CACHE_DIR", str(environment_root))
++
++    manager = OnnxVoice(cache_dir=explicit_root, offline=True)
++
++    assert manager.store.root == explicit_root
++    assert manager.catalog.cache_dir == explicit_root / "catalogs"
++    assert manager.store.offline is True
++    assert manager.catalog.offline is True
++    with pytest.raises(OfflineError, match="requires network access"):
++        manager.catalog._read_source("https://example.invalid/catalog.json")
++
++    with pytest.raises(OfflineError, match="Network access disabled"):
++        manager.store._download(
++            "https://example.invalid/model.bin",
++            tmp_path / "download.bin",
++            expected_size=None,
++            ref="test:one",
++            artifact="model.bin",
++            role="model",
++            target="model.bin",
++            progress=None,
++        )
+diff --git a/tests/test_store_progress.py b/tests/test_store_progress.py
+index c524dd0..79eadaa 100644
+--- a/tests/test_store_progress.py
++++ b/tests/test_store_progress.py
+@@ -69,6 +69,7 @@ def test_fresh_install_events(tmp_path):
+     assert install_started.ref == item.ref
+     assert install_started.target is not None
+     assert Path(install_started.target) == store.install_path("test", "one")
++    assert install_started.total == len(b"model-bytes")
+
+     # Verify download_started
+     download_started = next(e for e in events if e.phase == "download_started")
+@@ -150,6 +151,8 @@ def test_already_installed_no_download_events(tmp_path):
+     assert "install_started" in phases
+     assert "install_completed" in phases
+
++    install_started = next(e for e in events if e.phase == "install_started")
++    assert install_started.total == len(b"model-bytes")
+     # Verify install_completed has "already installed" message
+     install_completed = events[-1]
+     assert install_completed.phase == "install_completed"
+@@ -305,6 +308,8 @@ def test_unknown_total(tmp_path):
+         events.append(event)
+
+     store.install(item, progress=capture)
++    install_started = next(e for e in events if e.phase == "install_started")
++    assert install_started.total is None
+
+     # Find download_started event
+     download_started = next(e for e in events if e.phase == "download_started")
+@@ -356,6 +361,8 @@ def test_multiple_artifacts(tmp_path):
+
+     store.install(item, progress=capture)
+
++    install_started = next(e for e in events if e.phase == "install_started")
++    assert install_started.total == len(payload1) + len(payload2)
+     # Verify we have events for both artifacts
+     artifact_events = [e for e in events if e.artifact is not None]
+     model_events = [e for e in artifact_events if e.artifact == "model.onnx"]
+@@ -369,3 +376,140 @@ def test_multiple_artifacts(tmp_path):
+         assert e.role == "model"
+     for e in config_events:
+         assert e.role == "config"
++
++
++def test_http_progress_falls_back_to_catalog_size(tmp_path, monkeypatch):
++    class Response:
++        headers = {}
++
++        def __init__(self):
++            self.chunks = iter((b"abc", b"def", b""))
++
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *_args):
++            return None
++
++        def read(self, _size):
++            return next(self.chunks)
++
++    response = Response()
++    monkeypatch.setattr(
++        "onnxvoice.store.urllib.request.urlopen",
++        lambda *_args, **_kwargs: response,
++    )
++    events: list[AssetProgress] = []
++    destination = tmp_path / "download.bin"
++
++    AssetStore(tmp_path / "cache")._download(
++        "https://example.invalid/model.bin",
++        destination,
++        expected_size=6,
++        ref="test:one",
++        artifact="model.bin",
++        role="model",
++        target=str(destination),
++        progress=events.append,
++    )
++
++    assert [event.completed for event in events] == [3, 6]
++    assert [event.total for event in events] == [6, 6]
++
++
++def test_install_started_interrupt_cleans_staging_and_preserves_exception(tmp_path):
++    item, _ = _make_item(tmp_path)
++    store = AssetStore(tmp_path / "cache")
++    phases: list[str] = []
++
++    def interrupt(event: AssetProgress) -> None:
++        phases.append(event.phase)
++        if event.phase == "install_started":
++            raise KeyboardInterrupt("cancel at start")
++        if event.phase == "install_failed":
++            raise RuntimeError("failure callback failed")
++
++    with pytest.raises(KeyboardInterrupt, match="cancel at start"):
++        store.install(item, progress=interrupt)
++
++    target = store.install_path("test", "one")
++    assert phases == ["install_started", "install_failed"]
++    assert not target.exists()
++    assert not list(target.parent.glob(".one-*"))
++    store.install(item)
++    assert store.is_installed("test", "one")
++
++
++def test_download_started_interrupt_cleans_staging_and_releases_lock(tmp_path):
++    item, _ = _make_item(tmp_path)
++    store = AssetStore(tmp_path / "cache")
++    phases: list[str] = []
++
++    def interrupt(event: AssetProgress) -> None:
++        phases.append(event.phase)
++        if event.phase == "download_started":
++            raise KeyboardInterrupt("cancel download")
++
++    with pytest.raises(KeyboardInterrupt, match="cancel download"):
++        store.install(item, progress=interrupt)
++
++    target = store.install_path("test", "one")
++    assert "install_failed" in phases
++    assert not target.exists()
++    assert not list(target.parent.glob(".one-*"))
++    store.install(item)
++    assert store.is_installed("test", "one")
++
++
++def test_replacement_interrupt_preserves_previous_install_and_retries(tmp_path):
++    old_item, _ = _make_item(tmp_path, payload=b"old model")
++    new_item, _ = _make_item(tmp_path, filename="replacement.onnx", payload=b"new model")
++    store = AssetStore(tmp_path / "cache")
++    existing = store.install(old_item)
++
++    def interrupt(event: AssetProgress) -> None:
++        if event.phase == "download_started":
++            raise KeyboardInterrupt("cancel replacement")
++
++    with pytest.raises(KeyboardInterrupt, match="cancel replacement"):
++        store.replace(existing, new_item, progress=interrupt)
++
++    target = store.install_path("test", "one")
++    assert (target / "model.onnx").read_bytes() == b"old model"
++    assert not list(target.parent.glob(".one-*"))
++    assert not list(target.parent.glob(".onnxvoice-backup-*"))
++
++    replacement = store.replace(existing, new_item)
++    assert replacement.artifact("model").path.read_bytes() == b"new model"
++
++
++def test_replacement_commit_interrupt_rolls_back_and_retries(tmp_path, monkeypatch):
++    import onnxvoice.store as store_module
++
++    old_item, _ = _make_item(tmp_path, payload=b"old model")
++    new_item, _ = _make_item(tmp_path, filename="replacement.onnx", payload=b"new model")
++    store = AssetStore(tmp_path / "cache")
++    existing = store.install(old_item)
++    target = store.install_path("test", "one")
++    real_replace = store_module.os.replace
++    interrupted = False
++
++    def interrupt_commit(source, destination):
++        nonlocal interrupted
++        if Path(destination) == target and not interrupted:
++            interrupted = True
++            raise KeyboardInterrupt("cancel replacement commit")
++        real_replace(source, destination)
++
++    monkeypatch.setattr(store_module.os, "replace", interrupt_commit)
++    with pytest.raises(KeyboardInterrupt, match="cancel replacement commit"):
++        store.replace(existing, new_item)
++
++    assert interrupted
++    assert (target / "model.onnx").read_bytes() == b"old model"
++    assert not list(target.parent.glob(".one-*"))
++    assert not list(target.parent.glob(".onnxvoice-backup-*"))
++
++    monkeypatch.setattr(store_module.os, "replace", real_replace)
++    replacement = store.replace(existing, new_item)
++    assert replacement.artifact("model").path.read_bytes() == b"new model"

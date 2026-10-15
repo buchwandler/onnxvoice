@@ -3,16 +3,16 @@ schema_version: 2
 object_type: release
 versioning:
   schema_version: 1
-  revision: 5
+  revision: 6
 version: v0.2.8
-status: planned
+status: released
 history_state: curated
 title: null
-released_at: null
+released_at: "2026-10-15"
 previous_version: v0.2.7
 cancel_reason: null
 superseded_by: null
-changelog_file: null
+changelog_file: docs/changelog.md
 boundary_ref: null
 source_refs: []
 source_count: null
