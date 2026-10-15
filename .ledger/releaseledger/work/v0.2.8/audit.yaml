@@ -1,0 +1,83 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.8
+git_base_ref: v0.2.7
+git_base_sha: 8d9608d4599fab5207767c67a9a84dfa77108d12
+git_head_ref: HEAD
+git_head_sha: 237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+git_range: 8d9608d4599fab5207767c67a9a84dfa77108d12..237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+commit_count: 2
+rows:
+  - sha: c44e2129afd3085da32ce22c9704d3d1f8f4078d
+    source_ref: git:c44e2129afd3085da32ce22c9704d3d1f8f4078d
+    short_sha: c44e212
+    changed_paths:
+      - README.md
+      - docs/cli.md
+      - docs/index.md
+      - docs/local-models.md
+      - docs/python-api.md
+      - docs/systems/index.md
+      - docs/systems/qwen3.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/__init__.py
+      - onnxvoice/catalog_tools/qwen3.py
+      - onnxvoice/catalog_tools/qwen3_seed.json
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/runtime.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/qwen3.py
+      - onnxvoice/systems/qwen3_audio.py
+      - onnxvoice/systems/qwen3_contract.py
+      - onnxvoice/systems/qwen3_generation.py
+      - onnxvoice/systems/qwen3_sampling.py
+      - onnxvoice/types.py
+      - pyproject.toml
+      - tests/fixtures/qwen3_log_mel_golden.json
+      - tests/test_qwen3_audio.py
+      - tests/test_qwen3_catalog.py
+      - tests/test_qwen3_contract.py
+      - tests/test_qwen3_generation.py
+      - tests/test_qwen3_integration.py
+      - tests/test_qwen3_local_open.py
+      - tests/test_runtime.py
+    stats:
+      files_changed: 31
+      insertions: 5602
+      deletions: 60
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: qwen3 engine support"
+  - sha: 237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+    source_ref: git:237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+    short_sha: 237a15e
+    changed_paths:
+      - .gitignore
+      - docs/systems/index.md
+      - docs/systems/qwen3-release-validation.md
+      - docs/systems/qwen3.md
+      - onnxvoice/catalog_tools/qwen3.py
+      - onnxvoice/systems/qwen3_contract.py
+      - pyproject.toml
+      - tests/test_qwen3_contract.py
+      - tests/test_qwen3_integration.py
+    stats:
+      files_changed: 9
+      insertions: 167
+      deletions: 20
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: validate Qwen3 WaveKat CPU execution"

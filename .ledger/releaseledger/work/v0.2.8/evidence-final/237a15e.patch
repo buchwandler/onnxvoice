@@ -1,0 +1,355 @@
+ .gitignore                               |  4 ++
+ docs/systems/index.md                    |  1 +
+ docs/systems/qwen3-release-validation.md | 45 +++++++++++++++++++
+ docs/systems/qwen3.md                    | 16 ++++---
+ onnxvoice/catalog_tools/qwen3.py         |  2 +-
+ onnxvoice/systems/qwen3_contract.py      |  8 ++--
+ pyproject.toml                           |  2 +-
+ tests/test_qwen3_contract.py             | 33 ++++++++++++--
+ tests/test_qwen3_integration.py          | 76 +++++++++++++++++++++++++++++---
+ 9 files changed, 167 insertions(+), 20 deletions(-)
+
+diff --git a/.gitignore b/.gitignore
+index f00ed82..f60707e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -151,6 +151,10 @@ activemq-data/
+ .env
+ .envrc
+ .venv
++
++.venv-qwen3-release/
++.qwen3-release-cache/
++.wheel-smoke/
+ env/
+ venv/
+ ENV/
+diff --git a/docs/systems/index.md b/docs/systems/index.md
+index 374c594..d29bfbf 100644
+--- a/docs/systems/index.md
++++ b/docs/systems/index.md
+@@ -28,4 +28,5 @@ kitten
+ inflect
+ sopro
+ qwen3
++qwen3-release-validation
+ ```
+diff --git a/docs/systems/qwen3-release-validation.md b/docs/systems/qwen3-release-validation.md
+new file mode 100644
+index 0000000..5104537
+--- /dev/null
++++ b/docs/systems/qwen3-release-validation.md
+@@ -0,0 +1,45 @@
++# Qwen3 real-model CPU validation
++
++This record captures ONNXVoice's four-profile release gate. It verifies that each pinned WaveKat model executes through ONNX Runtime's CPU provider and returns audio satisfying the integration test's runtime assertions. It is not a numerical parity or perceptual-quality assessment.
++
++## Environment
++
++- Validation date: 2026-10-15
++- OS: Linux x86_64 under WSL2, kernel `6.18.33.2-microsoft-standard-WSL2`
++- CPU: Intel Core Ultra 7 355, 8 logical CPUs exposed to WSL
++- RAM: 19 GiB reported by WSL; peak process memory was not measured
++- Python: 3.13.15
++- ONNX Runtime: 1.31.0
++- Available providers: `AzureExecutionProvider`, `CPUExecutionProvider`; the test asserted `CPUExecutionProvider` was active for every profile
++
++## Model sources
++
++The bundle catalog pins these upstream source revisions:
++
++| Bundle | Repository | Revision |
++| --- | --- | --- |
++| `base-0.6b` | `wavekat/Qwen3-TTS-0.6B-Base-ONNX` | `177cd39e2ddab0d4d7ce5152a7abc2d382621158` |
++| `voice-design-1.7b` | `wavekat/Qwen3-TTS-1.7B-VoiceDesign-ONNX` | `62c7863a68800d72bcee4f2931148c441571ace7` |
++
++## Gate and results
++
++The four pinned profiles were installed in the dedicated `.qwen3-release-cache`. The fail-closed command was:
++
++```bash
++ONNXVOICE_REQUIRE_QWEN3_REAL=1 \
++ONNXVOICE_TEST_CACHE=.qwen3-release-cache \
++.venv-qwen3-release/bin/python -m pytest -vv -m 'integration and resource_heavy' tests/test_qwen3_integration.py
++```
++
++| Profile | Result |
++| --- | --- |
++| VoiceDesign 1.7B FP32 | Passed |
++| VoiceDesign 1.7B INT4 | Passed |
++| Base 0.6B FP32 | Passed |
++| Base 0.6B INT4 | Passed |
++
++Pytest reported **4 passed, 4 deselected, 0 skipped, 0 failed** in **609.63 seconds**. The four deselected tests are unit tests without the selected integration/resource-heavy markers. Each executed profile returned non-empty finite, non-silent mono `float32` audio at 24 kHz, with active `CPUExecutionProvider`.
++
++The real models exposed a cache-output naming mismatch during initial execution: both `talker_decode` and `code_predictor` export `present_keys` and `present_values`. ONNXVoice's graph contract was corrected and offline regression coverage was added for both components.
++
++No output-reference comparison, listening assessment, peak-memory measurement, latency, or real-time-factor measurement was performed. These results make no parity, perceptual-equivalence, performance, or non-CPU platform claim.
+diff --git a/docs/systems/qwen3.md b/docs/systems/qwen3.md
+index cfaaf6b..5940aee 100644
+--- a/docs/systems/qwen3.md
++++ b/docs/systems/qwen3.md
+@@ -50,6 +50,7 @@ The text IDs must use the supported assistant chat wrapping, and the description
+
+ ```python
+ import numpy as np
++
+ # Assume runtime is an open Qwen3 adapter; the ID sequences come from the frontend.
+ result = runtime.infer(
+     text_ids,
+@@ -117,8 +118,12 @@ for component, filename in tokenizers.items():
+     files[f"tokenizer:{component}"] = root / "tokenizer" / filename
+
+ embeddings = [
+-    "text_embedding", "text_projection_fc1_weight", "text_projection_fc1_bias",
+-    "text_projection_fc2_weight", "text_projection_fc2_bias", "talker_codec_embedding",
++    "text_embedding",
++    "text_projection_fc1_weight",
++    "text_projection_fc1_bias",
++    "text_projection_fc2_weight",
++    "text_projection_fc2_bias",
++    "talker_codec_embedding",
+     *(f"cp_codec_embedding_{index}" for index in range(15)),
+ ]
+ for component in embeddings:
+@@ -169,7 +174,7 @@ onnxvoice catalog qwen3 build --output /tmp/qwen3-bundles.json \
+
+ ## Tests and parity limits
+
+-Offline unit tests cover catalog contracts, local inventories, graph signatures, deterministic sampling, fake-session generation, immutable Base conditioning, and the committed NumPy log-mel reference fixture. The CPU integration test is marked `integration` and `resource_heavy`; it exercises actual VoiceDesign and Base inference at both qualities when those bundles are already installed. It never downloads assets. Pytest's default discovery does not exclude integration markers, so use `-m "not integration"` for an offline-only suite; the explicit selector below runs these real-bundle cases:
++Offline unit tests cover catalog contracts, local inventories, graph signatures, deterministic sampling, fake-session generation, immutable Base conditioning, and the committed NumPy log-mel reference fixture. The CPU integration test is marked `integration` and `resource_heavy`; it exercises actual VoiceDesign and Base inference at both qualities when those bundles are already installed and never downloads assets. Without `ONNXVOICE_REQUIRE_QWEN3_REAL=1`, missing runtime or installations may be skipped for developer convenience. Set that variable for release verification; missing ONNX Runtime or any required profile then fails. Pytest's default discovery does not exclude integration markers, so use `-m "not integration"` for an offline-only suite.
+
+ ```bash
+ export ONNXVOICE_TEST_CACHE=/path/to/onnxvoice-cache
+@@ -178,7 +183,8 @@ for bundle in qwen3:voice-design-1.7b qwen3:base-0.6b; do
+     onnxvoice --cache-dir "$ONNXVOICE_TEST_CACHE" install "$bundle" --quality "$quality"
+   done
+ done
+-pytest -m "integration and resource_heavy" tests/test_qwen3_integration.py
++ONNXVOICE_REQUIRE_QWEN3_REAL=1 \
++pytest -vv -m "integration and resource_heavy" tests/test_qwen3_integration.py
+ ```
+
+-The test runs offline and skips a case if its matching installation is absent. A skip is **not** a model-inference or waveform-parity pass. Real-bundle graph execution, numerical comparisons against audited model outputs, and listening/perceptual assessment remain unverified until the pinned assets and reference evidence are available. Do not describe unit tests or the log-mel fixture as end-to-end speech parity.
++Real CPU WaveKat execution has been verified for all four advertised profiles. See [Qwen3 release validation](qwen3-release-validation.md) for the measured environment, source revisions, command, and results. The release gate checks non-empty finite non-silent mono float32 audio at 24 kHz and active `CPUExecutionProvider`. This confirms runtime graph execution, not numerical parity against another implementation. Audited output comparisons and listening/perceptual assessment remain unverified. Do not describe unit tests or the log-mel fixture as end-to-end speech parity.
+diff --git a/onnxvoice/catalog_tools/qwen3.py b/onnxvoice/catalog_tools/qwen3.py
+index 617cfc7..661aeab 100644
+--- a/onnxvoice/catalog_tools/qwen3.py
++++ b/onnxvoice/catalog_tools/qwen3.py
+@@ -20,7 +20,7 @@ DEFAULT_SEED_PATH = Path(__file__).with_name("qwen3_seed.json")
+ DEFAULT_CATALOG_URL = (
+     "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json"
+ )
+-USER_AGENT = "onnxvoice/0.3.0"
++USER_AGENT = "onnxvoice-qwen3-catalog"
+ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+diff --git a/onnxvoice/systems/qwen3_contract.py b/onnxvoice/systems/qwen3_contract.py
+index 689ccbd..ee600e3 100644
+--- a/onnxvoice/systems/qwen3_contract.py
++++ b/onnxvoice/systems/qwen3_contract.py
+@@ -469,8 +469,8 @@ def validate_graph_abi(
+         outputs = {
+             "logits": _TensorContract(f32, 3, (1, 1, config.talker_vocab_size)),
+             "hidden_states": _TensorContract(f32, 3, (1, 1, config.talker_hidden_size)),
+-            "past_keys": _TensorContract(f32, 5, cache),
+-            "past_values": _TensorContract(f32, 5, cache),
++            "present_keys": _TensorContract(f32, 5, cache),
++            "present_values": _TensorContract(f32, 5, cache),
+         }
+         _validate_named_specs(output_specs, outputs, component=component, direction="output")
+         return
+@@ -486,8 +486,8 @@ def validate_graph_abi(
+         _validate_named_specs(input_specs, inputs, component=component, direction="input")
+         outputs = {
+             "logits": _TensorContract(f32, 3, (1, seq, config.cp_vocab_size)),
+-            "past_keys": _TensorContract(f32, 5, cache),
+-            "past_values": _TensorContract(f32, 5, cache),
++            "present_keys": _TensorContract(f32, 5, cache),
++            "present_values": _TensorContract(f32, 5, cache),
+         }
+         _validate_named_specs(output_specs, outputs, component=component, direction="output")
+         return
+diff --git a/pyproject.toml b/pyproject.toml
+index 9c1061f..f17c294 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -82,7 +82,7 @@ dev = [
+
+ [tool.setuptools_scm]
+ write_to = "onnxvoice/_version.py"
+-fallback_version = "0.2.5"
++fallback_version = "0.2.8"
+
+ [tool.pytest.ini_options]
+ testpaths = ["tests"]
+diff --git a/tests/test_qwen3_contract.py b/tests/test_qwen3_contract.py
+index 9de7d23..a38a8e8 100644
+--- a/tests/test_qwen3_contract.py
++++ b/tests/test_qwen3_contract.py
+@@ -139,8 +139,8 @@ def _graph_specs(
+         outputs = (
+             _tensor("logits", f32, 1, 1, config.talker_vocab_size),
+             _tensor("hidden_states", f32, 1, 1, hidden),
+-            _tensor("past_keys", f32, *cache),
+-            _tensor("past_values", f32, *cache),
++            _tensor("present_keys", f32, *cache),
++            _tensor("present_values", f32, *cache),
+         )
+         return inputs, outputs
+     if component == "code_predictor":
+@@ -153,8 +153,8 @@ def _graph_specs(
+         )
+         outputs = (
+             _tensor("logits", f32, 1, "sequence", config.cp_vocab_size),
+-            _tensor("past_keys", f32, *cache),
+-            _tensor("past_values", f32, *cache),
++            _tensor("present_keys", f32, *cache),
++            _tensor("present_values", f32, *cache),
+         )
+         return inputs, outputs
+     if component == "vocoder":
+@@ -371,6 +371,31 @@ def test_qwen3_graph_contract_accepts_wavekat_specs(component: str) -> None:
+     validate_graph_abi(component, config, inputs, outputs)
+
+
++@pytest.mark.parametrize("component", ("talker_decode", "code_predictor"))
++def test_cache_graphs_require_present_cache_output_names(component: str) -> None:
++    config = Qwen3Config.from_mapping(_config())
++    inputs, outputs = _graph_specs(component, config)
++    expected_names = (
++        ("logits", "hidden_states", "present_keys", "present_values")
++        if component == "talker_decode"
++        else ("logits", "present_keys", "present_values")
++    )
++
++    assert tuple(spec.name for spec in outputs) == expected_names
++    invalid_outputs = tuple(
++        _tensor(
++            {"present_keys": "past_keys", "present_values": "past_values"}.get(
++                spec.name, spec.name
++            ),
++            spec.ort_type,
++            *spec.shape,
++        )
++        for spec in outputs
++    )
++    with pytest.raises(RuntimeContractError, match="names mismatch"):
++        validate_graph_abi(component, config, inputs, invalid_outputs)
++
++
+ def test_qwen3_graph_contract_rejects_names_dtypes_ranks_and_cache_layout() -> None:
+     config = Qwen3Config.from_mapping(_config())
+     inputs, outputs = _graph_specs("talker_decode", config)
+diff --git a/tests/test_qwen3_integration.py b/tests/test_qwen3_integration.py
+index de10a29..df1cf70 100644
+--- a/tests/test_qwen3_integration.py
++++ b/tests/test_qwen3_integration.py
+@@ -1,12 +1,39 @@
+ from __future__ import annotations
+
+ import os
++import sys
+
+ import numpy as np
+ import pytest
+
+ from onnxvoice import NotInstalledError, OnnxVoice
+
++_REQUIRE_REAL = os.environ.get("ONNXVOICE_REQUIRE_QWEN3_REAL") == "1"
++
++
++def _require_runtime() -> None:
++    try:
++        import onnxruntime  # noqa: F401
++    except ImportError:
++        message = (
++            "onnxruntime is required for the Qwen3 release gate"
++            if _REQUIRE_REAL
++            else "onnxruntime is not installed"
++        )
++        if _REQUIRE_REAL:
++            pytest.fail(message)
++        pytest.skip(message)
++
++
++def _resolve_or_skip(manager, ref: str, quality: str):
++    try:
++        return manager.resolve(ref, quality=quality)
++    except NotInstalledError:
++        message = f"{ref}:{quality} is not installed in the offline OnnxVoice store"
++        if _REQUIRE_REAL:
++            pytest.fail(message)
++        pytest.skip(message)
++
+
+ @pytest.mark.integration
+ @pytest.mark.resource_heavy
+@@ -21,15 +48,12 @@ from onnxvoice import NotInstalledError, OnnxVoice
+ )
+ def test_qwen3_real_bundle_cpu_inference(bundle: str, model_type: str, quality: str) -> None:
+     """Exercise actual WaveKat graphs when an offline managed bundle is installed."""
+-    pytest.importorskip("onnxruntime")
++    _require_runtime()
+     manager = OnnxVoice(
+         cache_dir=os.environ.get("ONNXVOICE_TEST_CACHE"),
+         offline=True,
+     )
+-    try:
+-        installation = manager.resolve(f"qwen3:{bundle}", quality=quality)
+-    except NotInstalledError:
+-        pytest.skip(f"qwen3:{bundle}:{quality} is not installed in the offline OnnxVoice store")
++    installation = _resolve_or_skip(manager, f"qwen3:{bundle}", quality)
+
+     adapter = manager.open(installation, providers="cpu")
+     try:
+@@ -87,6 +111,48 @@ def test_qwen3_real_bundle_cpu_inference(bundle: str, model_type: str, quality:
+         assert result.audio.dtype == np.float32
+         assert result.audio.ndim == 1 and result.audio.size > 0
+         assert np.isfinite(result.audio).all()
++        assert np.max(np.abs(result.audio)) > 1e-6
++        rms = float(np.sqrt(np.mean(np.square(result.audio, dtype=np.float64))))
++        assert rms > 1e-7
++        assert "CPUExecutionProvider" in result.metadata["providers_active"]
+         assert result.outputs["codes"].shape[1] == 16
+     finally:
+         adapter.close()
++
++
++def test_missing_runtime_skips_in_developer_mode(monkeypatch) -> None:
++    monkeypatch.setattr(sys.modules[__name__], "_REQUIRE_REAL", False)
++    monkeypatch.setitem(sys.modules, "onnxruntime", None)
++
++    with pytest.raises(pytest.skip.Exception, match="onnxruntime is not installed"):
++        _require_runtime()
++
++
++def test_missing_runtime_fails_in_release_mode(monkeypatch) -> None:
++    monkeypatch.setattr(sys.modules[__name__], "_REQUIRE_REAL", True)
++    monkeypatch.setitem(sys.modules, "onnxruntime", None)
++
++    with pytest.raises(pytest.fail.Exception, match="onnxruntime is required"):
++        _require_runtime()
++
++
++def test_missing_profile_skips_in_developer_mode(monkeypatch) -> None:
++    class MissingBundleManager:
++        def resolve(self, ref: str, quality: str) -> None:
++            raise NotInstalledError(f"{ref}:{quality}")
++
++    monkeypatch.setattr(sys.modules[__name__], "_REQUIRE_REAL", False)
++
++    with pytest.raises(pytest.skip.Exception, match="qwen3:voice-design-1.7b:int4"):
++        _resolve_or_skip(MissingBundleManager(), "qwen3:voice-design-1.7b", "int4")
++
++
++def test_missing_profile_fails_in_release_mode(monkeypatch) -> None:
++    class MissingBundleManager:
++        def resolve(self, ref: str, quality: str) -> None:
++            raise NotInstalledError(f"{ref}:{quality}")
++
++    monkeypatch.setattr(sys.modules[__name__], "_REQUIRE_REAL", True)
++
++    with pytest.raises(pytest.fail.Exception, match="qwen3:voice-design-1.7b:int4"):
++        _resolve_or_skip(MissingBundleManager(), "qwen3:voice-design-1.7b", "int4")

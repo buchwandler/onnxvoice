@@ -1,0 +1,17 @@
+rows:
+  - sha: d44d1877df3a94dd6f93b5ed482f6b92fac6e1bc
+    inspected: true
+    inspected_paths:
+      - .ledger/releaseledger/data/ledgers/main/events/events.jsonl
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.8/audit/commit-audit.yaml
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.8/entries/entry-0001.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.8/entries/entry-0002.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.8/release.md
+      - docs/changelog.md
+    observed_behavior: "Added the generated unreleased v0.2.8 changelog section and persisted the planned release record, accepted entries, and audit sheet. These release artifacts add no separate runtime behavior."
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Release-process metadata and generated changelog are intentionally not represented as a separate public behavior entry."
+    stale: false

@@ -1,0 +1,75 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.8
+git_base_ref: 8d9608d4599fab5207767c67a9a84dfa77108d12
+git_base_sha: 8d9608d4599fab5207767c67a9a84dfa77108d12
+git_head_ref: 237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+git_head_sha: 237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added managed Qwen3 WaveKat inference for Base and VoiceDesign profiles"
+    status: accepted
+    source_refs:
+      - git:c44e2129afd3085da32ce22c9704d3d1f8f4078d
+    paths:
+      - README.md
+      - docs/cli.md
+      - docs/index.md
+      - docs/local-models.md
+      - docs/python-api.md
+      - docs/systems/index.md
+      - docs/systems/qwen3.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/__init__.py
+      - onnxvoice/catalog_tools/qwen3.py
+      - onnxvoice/catalog_tools/qwen3_seed.json
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/runtime.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/qwen3.py
+      - onnxvoice/systems/qwen3_audio.py
+      - onnxvoice/systems/qwen3_contract.py
+      - onnxvoice/systems/qwen3_generation.py
+      - onnxvoice/systems/qwen3_sampling.py
+      - onnxvoice/types.py
+      - pyproject.toml
+      - tests/fixtures/qwen3_log_mel_golden.json
+      - tests/test_qwen3_audio.py
+      - tests/test_qwen3_catalog.py
+      - tests/test_qwen3_contract.py
+      - tests/test_qwen3_generation.py
+      - tests/test_qwen3_integration.py
+      - tests/test_qwen3_local_open.py
+      - tests/test_runtime.py
+    sources:
+      - git:c44e2129afd3085da32ce22c9704d3d1f8f4078d
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: fixed
+    summary: "Fixed WaveKat cache graph contracts for Base and VoiceDesign CPU inference"
+    status: accepted
+    source_refs:
+      - git:237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+    paths:
+      - .gitignore
+      - docs/systems/index.md
+      - docs/systems/qwen3-release-validation.md
+      - docs/systems/qwen3.md
+      - onnxvoice/catalog_tools/qwen3.py
+      - onnxvoice/systems/qwen3_contract.py
+      - pyproject.toml
+      - tests/test_qwen3_contract.py
+      - tests/test_qwen3_integration.py
+    sources:
+      - git:237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

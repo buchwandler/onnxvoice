@@ -16,9 +16,9 @@ This record captures ONNXVoice's four-profile release gate. It verifies that eac
 
 The bundle catalog pins these upstream source revisions:
 
-| Bundle | Repository | Revision |
-| --- | --- | --- |
-| `base-0.6b` | `wavekat/Qwen3-TTS-0.6B-Base-ONNX` | `177cd39e2ddab0d4d7ce5152a7abc2d382621158` |
+| Bundle              | Repository                                | Revision                                   |
+| ------------------- | ----------------------------------------- | ------------------------------------------ |
+| `base-0.6b`         | `wavekat/Qwen3-TTS-0.6B-Base-ONNX`        | `177cd39e2ddab0d4d7ce5152a7abc2d382621158` |
 | `voice-design-1.7b` | `wavekat/Qwen3-TTS-1.7B-VoiceDesign-ONNX` | `62c7863a68800d72bcee4f2931148c441571ace7` |
 
 ## Gate and results
@@ -31,12 +31,12 @@ ONNXVOICE_TEST_CACHE=.qwen3-release-cache \
 .venv-qwen3-release/bin/python -m pytest -vv -m 'integration and resource_heavy' tests/test_qwen3_integration.py
 ```
 
-| Profile | Result |
-| --- | --- |
+| Profile               | Result |
+| --------------------- | ------ |
 | VoiceDesign 1.7B FP32 | Passed |
 | VoiceDesign 1.7B INT4 | Passed |
-| Base 0.6B FP32 | Passed |
-| Base 0.6B INT4 | Passed |
+| Base 0.6B FP32        | Passed |
+| Base 0.6B INT4        | Passed |
 
 Pytest reported **4 passed, 4 deselected, 0 skipped, 0 failed** in **609.63 seconds**. The four deselected tests are unit tests without the selected integration/resource-heavy markers. Each executed profile returned non-empty finite, non-silent mono `float32` audio at 24 kHz, with active `CPUExecutionProvider`.
 

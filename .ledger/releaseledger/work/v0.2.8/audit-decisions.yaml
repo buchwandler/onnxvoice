@@ -1,0 +1,50 @@
+rows:
+  - sha: c44e2129afd3085da32ce22c9704d3d1f8f4078d
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/cli.md
+      - docs/index.md
+      - docs/local-models.md
+      - docs/python-api.md
+      - docs/systems/index.md
+      - docs/systems/qwen3.md
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/qwen3.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/runtime.py
+      - onnxvoice/systems/qwen3.py
+      - onnxvoice/systems/qwen3_audio.py
+      - onnxvoice/systems/qwen3_contract.py
+      - onnxvoice/systems/qwen3_generation.py
+      - onnxvoice/systems/qwen3_sampling.py
+      - tests/test_qwen3_catalog.py
+      - tests/test_qwen3_contract.py
+      - tests/test_qwen3_integration.py
+    observed_behavior: "Added the Qwen3 WaveKat managed catalog, installation, and runtime for Base and VoiceDesign. The API consumes frontend-tokenized IDs, and Base inference uses prepared speaker conditioning."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed the public API/docs, catalog/runtime integration, graph contracts, generation, and core tests; the release entry describes the resulting user-visible Qwen3 support."
+    stale: false
+  - sha: 237a15ee8ac0d2b257a8bf9c221a17252ad198c3
+    inspected: true
+    inspected_paths:
+      - .gitignore
+      - docs/systems/index.md
+      - docs/systems/qwen3-release-validation.md
+      - docs/systems/qwen3.md
+      - onnxvoice/catalog_tools/qwen3.py
+      - onnxvoice/systems/qwen3_contract.py
+      - pyproject.toml
+      - tests/test_qwen3_contract.py
+      - tests/test_qwen3_integration.py
+    observed_behavior: "Corrected talker_decode and code_predictor cache outputs to present_keys and present_values. Release mode now fails on missing runtime or profiles and checks non-silent output and active CPUExecutionProvider; all four pinned profiles passed."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "The entry covers the runtime correction and verified CPU profiles; documentation and package fallback version accompany the behavior change."
+    stale: false
