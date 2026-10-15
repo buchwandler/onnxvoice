@@ -8,7 +8,7 @@ import numpy as np
 
 from ..errors import RuntimeContractError
 from ..runtime import OnnxSession
-from ..types import InferenceResult, Installation, TensorSpec
+from ..types import InferenceResult, Installation, SequenceLengthContract, TensorSpec
 from .base import SystemAdapter
 
 
@@ -35,15 +35,40 @@ class PiperAdapter(SystemAdapter):
         return "sid" in self.session.input_names
 
     @property
-    def max_phonemes(self) -> int | None:
-        """Return the graph-declared Piper input sequence bound, if static."""
+    def phoneme_sequence_contract(self) -> SequenceLengthContract:
+        """Report graph evidence for the Piper phoneme sequence axis without inference."""
         spec = self._input_spec("input")
-        if spec is None or not isinstance(spec.shape, tuple) or len(spec.shape) < 2:
-            return None
-        value = spec.shape[1]
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            return None
-        return value
+        dimension: Any = None
+        if spec is not None:
+            shape = getattr(spec, "shape", None)
+            if isinstance(shape, tuple) and len(shape) >= 2:
+                dimension = shape[1]
+
+        if isinstance(dimension, str) and dimension.strip():
+            return SequenceLengthContract(
+                kind="variable",
+                axis=1,
+                dimension=dimension,
+                source="onnx.input.shape",
+            )
+        if isinstance(dimension, int) and not isinstance(dimension, bool) and dimension > 0:
+            return SequenceLengthContract(
+                kind="fixed",
+                axis=1,
+                dimension=dimension,
+                source="onnx.input.shape",
+            )
+        return SequenceLengthContract(
+            kind="unknown",
+            axis=1,
+            dimension=dimension,
+            source="onnx.input.shape",
+        )
+
+    @property
+    def max_phonemes(self) -> int | None:
+        """Compatibility API; graph dimensions do not establish a hard maximum."""
+        return None
 
     def _config(self) -> dict[str, Any]:
         if self._config_cache is not None:

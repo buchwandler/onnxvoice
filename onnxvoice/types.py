@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -373,6 +373,16 @@ class RuntimeDiagnostic:
     layout: str
     sessions: tuple[SessionDiagnostic, ...]
     properties: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceLengthContract:
+    """Authoritative graph evidence for one sequence axis."""
+
+    kind: Literal["variable", "fixed", "unknown"]
+    axis: int
+    dimension: int | str | None
+    source: str
 
 
 @dataclass(frozen=True, slots=True)

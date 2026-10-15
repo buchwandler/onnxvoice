@@ -24,9 +24,15 @@ finally:
 
 The runtime reads the sample rate from installation metadata or the Piper config, with a fallback when neither supplies it. A single-speaker model does not accept `speaker_id`; a multi-speaker model with a `sid` input requires it.
 
-## Graph-declared phoneme capacity
+## Sequence-axis contract
 
-`runtime.max_phonemes` reports only a hard sequence length declared by the active ONNX graph's Piper `input` tensor. Dynamic or otherwise ambiguous dimensions return `None`; this means no graph-declared fixed bound is available, not that capacity is infinite. OnnxVoice does not invent a practical text or phoneme limit.
+`runtime.phoneme_sequence_contract` reports the evidence for the active ONNX graph's Piper `input` sequence axis (`axis == 1`):
+
+- `variable`: the graph explicitly declares a non-empty symbolic dimension;
+- `fixed`: the graph declares an exact positive integer dimension;
+- `unknown`: the input metadata is missing, malformed, or otherwise not authoritative.
+
+The contract's `dimension` preserves the graph value when available, and `source` is `onnx.input.shape`. Inspecting it reads runtime graph metadata but never runs acoustic inference. `runtime.max_phonemes` remains only as a compatibility property and returns `None`: a static ONNX dimension is not treated as a maximum unless the runtime implements and documents padding for shorter sequences. OnnxVoice does not invent a practical text or phoneme limit.
 
 ## Open local files
 

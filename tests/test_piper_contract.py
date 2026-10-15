@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ class PiperSession:
 
     def __init__(self, names=None):
         self.input_names = tuple(names or self.input_names)
-        self.seen = None
+        self.seen: dict[str, np.ndarray] | None = None
 
     def run(self, inputs):
         self.seen = inputs
@@ -59,6 +60,7 @@ def test_piper_forwards_model_ready_speaker_id_and_graph_dtypes(tmp_path):
     assert adapter.requires_speaker_id is True
     assert result.sample_rate == 16000
     assert result.audio.dtype == np.float32
+    assert fake.seen is not None
     assert fake.seen["input"].dtype == np.int32
     assert fake.seen["scales"].dtype == np.float16
     assert fake.seen["sid"].dtype == np.int64
@@ -90,7 +92,7 @@ def test_piper_passes_provider_and_session_options(tmp_path, monkeypatch):
     options = object()
 
     class CapturingSession:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *_args, **kwargs):
             captured.update(kwargs)
 
     monkeypatch.setattr(piper_module, "OnnxSession", CapturingSession)
@@ -112,7 +114,7 @@ class NoInferencePiperSession:
         self.input_specs = tuple(input_specs)
         self.run_called = False
 
-    def run(self, inputs):
+    def run(self, _inputs):
         self.run_called = True
         raise AssertionError("capacity inspection must not execute inference")
 
@@ -124,27 +126,45 @@ def _capacity_adapter(tmp_path, input_specs):
     return adapter, fake
 
 
-def test_piper_max_phonemes_returns_none_for_dynamic_sequence_dimension(tmp_path):
-    adapter = PiperAdapter(_installation(tmp_path))
-    adapter._session = PiperSession()  # type: ignore[assignment]
-
-    assert adapter.max_phonemes is None
-
-
-def test_piper_max_phonemes_exposes_static_sequence_dimension(tmp_path):
-    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),))
-
-    assert adapter.max_phonemes == 256
-    assert fake.run_called is False
-
-
-@pytest.mark.parametrize("dimension", [None, "N", "256", 0, -1, True])
-def test_piper_max_phonemes_rejects_invalid_dimensions(tmp_path, dimension):
+@pytest.mark.parametrize("dimension", ["N", "phonemes", "sequence_length"])
+def test_piper_sequence_contract_reports_symbolic_axis_as_variable(tmp_path, dimension):
     adapter, fake = _capacity_adapter(
         tmp_path, (TensorSpec("input", "tensor(int32)", (1, dimension)),)
     )
 
-    assert adapter.max_phonemes is None
+    contract = adapter.phoneme_sequence_contract
+
+    assert contract.kind == "variable"
+    assert contract.dimension == dimension
+    assert contract.axis == 1
+    assert contract.source == "onnx.input.shape"
+    assert fake.run_called is False
+
+
+def test_piper_sequence_contract_reports_integer_axis_as_fixed(tmp_path):
+    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),))
+
+    contract = adapter.phoneme_sequence_contract
+
+    assert contract.kind == "fixed"
+    assert contract.dimension == 256
+    assert contract.axis == 1
+    assert contract.source == "onnx.input.shape"
+    assert fake.run_called is False
+
+
+@pytest.mark.parametrize("dimension", [None, True, 0, -1, ""])
+def test_piper_sequence_contract_classifies_unsupported_dimensions_as_unknown(tmp_path, dimension):
+    adapter, fake = _capacity_adapter(
+        tmp_path, (TensorSpec("input", "tensor(int32)", (1, dimension)),)
+    )
+
+    contract = adapter.phoneme_sequence_contract
+
+    assert contract.kind == "unknown"
+    assert contract.dimension == dimension
+    assert contract.axis == 1
+    assert contract.source == "onnx.input.shape"
     assert fake.run_called is False
 
 
@@ -152,20 +172,27 @@ def test_piper_max_phonemes_rejects_invalid_dimensions(tmp_path, dimension):
     "input_specs",
     [
         (),
+        (TensorSpec("other", "tensor(int32)", (1, 256)),),
         (TensorSpec("input", "tensor(int32)", ()),),
         (TensorSpec("input", "tensor(int32)", (256,)),),
-        (TensorSpec("input", "tensor(int32)", None),),  # type: ignore[arg-type]
+        (TensorSpec("input", "tensor(int32)", cast(Any, None)),),
+        (TensorSpec("input", "tensor(int32)", cast(Any, [])),),
     ],
 )
-def test_piper_max_phonemes_returns_none_for_missing_or_malformed_input_spec(tmp_path, input_specs):
+def test_piper_sequence_contract_is_unknown_for_missing_or_malformed_input(tmp_path, input_specs):
     adapter, fake = _capacity_adapter(tmp_path, input_specs)
 
-    assert adapter.max_phonemes is None
+    contract = adapter.phoneme_sequence_contract
+
+    assert contract.kind == "unknown"
+    assert contract.dimension is None
+    assert contract.axis == 1
+    assert contract.source == "onnx.input.shape"
     assert fake.run_called is False
 
 
-def test_piper_max_phonemes_never_runs_inference(tmp_path):
-    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 64)),))
+def test_piper_max_phonemes_does_not_treat_fixed_dimension_as_a_limit(tmp_path):
+    adapter, fake = _capacity_adapter(tmp_path, (TensorSpec("input", "tensor(int32)", (1, 256)),))
 
-    assert adapter.max_phonemes == 64
+    assert adapter.max_phonemes is None
     assert fake.run_called is False
