@@ -1,0 +1,32 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 103,
+      "deletions": 25,
+      "patch_file": "18718d2.patch",
+      "patch_sha256": "890a509cde203e55bab8479a6e2a5bfd7bf76a763542dc71ec9372a35957efa3",
+      "paths": [
+        "README.md",
+        "docs/getting-started.md",
+        "docs/pocket-downloads.md",
+        "onnxvoice/huggingface.py",
+        "pyproject.toml",
+        "tests/test_huggingface.py",
+        "tests/test_inflect_catalog.py",
+        "tests/test_inflect_local_open.py"
+      ],
+      "sha": "18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa",
+      "short_sha": "18718d2",
+      "source_ref": "git:18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa"
+    }
+  ],
+  "git_base_ref": "ac803d6b114bd23472f4c09aa08411226bd00fc3",
+  "git_base_sha": "ac803d6b114bd23472f4c09aa08411226bd00fc3",
+  "git_head_ref": "18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa",
+  "git_head_sha": "18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.10",
+  "schema_version": 1
+}

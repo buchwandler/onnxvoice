@@ -1,0 +1,19 @@
+rows:
+  - sha: 18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/getting-started.md
+      - docs/pocket-downloads.md
+      - onnxvoice/huggingface.py
+      - pyproject.toml
+      - tests/test_huggingface.py
+      - tests/test_inflect_catalog.py
+      - tests/test_inflect_local_open.py
+    observed_behavior: "Reviewed the Hugging Face transport, dependency extra, Inflect artifact routing, diagnostics, and tests. The change lets Hub-backed artifacts use a provider-neutral optional extra and reports missing or broken Hub imports without Pocket-specific guidance."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

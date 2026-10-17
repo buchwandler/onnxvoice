@@ -77,6 +77,7 @@ def test_nested_hub_import_error_is_not_reported_as_missing_dependency(
     assert "onnxvoice[huggingface]" not in str(raised.value)
     assert "pocket" not in str(raised.value).lower()
 
+
 def test_download_uses_exact_pinned_source_and_temporary_local_dir(
     monkeypatch, tmp_path: Path
 ) -> None:

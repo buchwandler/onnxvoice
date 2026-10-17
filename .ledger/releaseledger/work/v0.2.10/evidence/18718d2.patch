@@ -1,0 +1,316 @@
+ README.md                        |  2 +-
+ docs/getting-started.md          |  9 +++++++-
+ docs/pocket-downloads.md         |  2 +-
+ onnxvoice/huggingface.py         | 45 ++++++++++++++++++++++++++--------------
+ pyproject.toml                   |  1 +
+ tests/test_huggingface.py        | 45 +++++++++++++++++++++++++++++++++++++---
+ tests/test_inflect_catalog.py    |  8 +++++--
+ tests/test_inflect_local_open.py | 16 +++++++++++++-
+ 8 files changed, 103 insertions(+), 25 deletions(-)
+
+diff --git a/README.md b/README.md
+index cdcf9da..bb45448 100644
+--- a/README.md
++++ b/README.md
+@@ -20,7 +20,7 @@ python -m pip install "onnxvoice[directml]"
+ python -m pip install "onnxvoice[openvino]"
+ ```
+
+-For Pocket's optional Hugging Face voice-state downloads, add the `pocket` extra. See [Pocket download setup](docs/pocket-downloads.md).
++Hugging Face is an optional **download transport**, separate from runtime selection: use `onnxvoice[huggingface]` for transport only, or `onnxvoice[cpu,huggingface]` for CPU inference plus Hub downloads. Pocket users can continue using the compatible `onnxvoice[pocket]` extra (and add a runtime provider, e.g. `onnxvoice[pocket,cpu]`). See [Pocket download setup](docs/pocket-downloads.md).
+
+ Voicefolio owns cataloging, discovery, and download of reference WAVs. OnnxVoice's Pocket support is for ONNX bundles and predefined runtime voice states. See [Pocket download setup](docs/pocket-downloads.md).
+
+diff --git a/docs/getting-started.md b/docs/getting-started.md
+index 6470bf0..fd4154b 100644
+--- a/docs/getting-started.md
++++ b/docs/getting-started.md
+@@ -20,7 +20,14 @@ python -m pip install "onnxvoice[directml]"
+ python -m pip install "onnxvoice[openvino]"
+ ```
+
+-For Pocket's optional Hugging Face and safetensors support, install its extra with a runtime provider:
++Hugging Face download support is an engine-neutral transport extra; it does not install an inference runtime:
++
++```bash
++python -m pip install "onnxvoice[huggingface]"       # transport only
++python -m pip install "onnxvoice[cpu,huggingface]"   # CPU runtime plus Hub downloads
++```
++
++Pocket's existing extra remains compatible and includes `huggingface_hub` plus `safetensors`; add the runtime provider needed by your installation:
+
+ ```bash
+ python -m pip install "onnxvoice[pocket,cpu]"
+diff --git a/docs/pocket-downloads.md b/docs/pocket-downloads.md
+index 12f2287..683fbea 100644
+--- a/docs/pocket-downloads.md
++++ b/docs/pocket-downloads.md
+@@ -1,6 +1,6 @@
+ # Pocket downloads and Hugging Face access
+
+-Pocket model and voice-state downloads use the optional Hugging Face integration. Local bundles and assets already present in the OnnxVoice cache do not require `huggingface_hub` for opening or inference.
++Hugging Face is an optional, engine-neutral download transport used by any catalog artifact with a Hub source (including Inflect). The `huggingface` extra installs only `huggingface_hub`; local bundles and assets already present in the OnnxVoice cache do not require it for opening or inference.
+
+ ## Installation
+
+diff --git a/onnxvoice/huggingface.py b/onnxvoice/huggingface.py
+index 1d4b08e..af2f809 100644
+--- a/onnxvoice/huggingface.py
++++ b/onnxvoice/huggingface.py
+@@ -48,11 +48,19 @@ def download_huggingface_file(
+     """Download one pinned Hub file into caller-owned temporary storage."""
+     try:
+         hub = importlib.import_module("huggingface_hub")
++    except ModuleNotFoundError as exc:
++        if exc.name == "huggingface_hub":
++            raise OptionalDependencyError(
++                "Hugging Face downloads require 'huggingface_hub'; "
++                "install 'onnxvoice[huggingface]'."
++            ) from exc
++        raise AssetDownloadError(
++            "The Hugging Face client could not be imported because a dependency is missing."
++        ) from exc
+     except ImportError as exc:
+-        raise OptionalDependencyError(
+-            "Remote Pocket downloads require Hugging Face support. Install 'onnxvoice[pocket]'."
++        raise AssetDownloadError(
++            f"The Hugging Face client could not be imported ({type(exc).__name__})."
+         ) from exc
+-
+     try:
+         downloaded = hub.hf_hub_download(
+             repo_id=source.repository,
+@@ -87,30 +95,30 @@ def _raise_huggingface_error(
+
+     if _is_instance(exc, error_types["gated"]) or status == 403:
+         raise AssetPermissionError(
+-            f"Pocket asset {label} requires access to a gated Hugging Face repository. "
++            f"Hugging Face asset {label} requires access to a gated repository. "
+             "Accept or request access on the repository page, authenticate with "
+             "'hf auth login' or HF_TOKEN, verify with 'hf auth whoami', and retry."
+         ) from exc
+     if status == 401:
+         raise AssetAuthenticationError(
+-            f"Authentication is required to download Pocket asset {label}. "
++            f"Authentication is required to download Hugging Face asset {label}. "
+             "Authenticate with 'hf auth login' or configure HF_TOKEN, then retry."
+         ) from exc
+     if _is_instance(exc, error_types["offline"]) or (
+         offline and _is_instance(exc, error_types["local_entry"])
+     ):
+         raise OfflineError(
+-            f"Pocket asset {label} is not available in the local Hugging Face cache"
++            f"Hugging Face asset {label} is not available in the local cache"
+         ) from exc
+     if _is_instance(exc, error_types["missing"]) or status == 404:
+         raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
+     if offline:
+-        raise OfflineError(f"Pocket asset {label} could not be resolved while offline") from exc
++        raise OfflineError(f"Hugging Face asset {label} could not be resolved while offline") from exc
+
+     error_name = type(exc).__name__
+-    if error_name in {"GatedRepoError"}:
++    if error_name == "GatedRepoError":
+         raise AssetPermissionError(
+-            f"Pocket asset {label} requires access to a gated Hugging Face repository. "
++            f"Hugging Face asset {label} requires access to a gated repository. "
+             "Accept or request access on the repository page, authenticate with "
+             "'hf auth login' or HF_TOKEN, verify with 'hf auth whoami', and retry."
+         ) from exc
+@@ -123,14 +131,13 @@ def _raise_huggingface_error(
+         raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
+     if error_name == "LocalEntryNotFoundError":
+         raise OfflineError(
+-            f"Pocket asset {label} is not available in the local Hugging Face cache"
++            f"Hugging Face asset {label} is not available in the local cache"
+         ) from exc
+
+     raise AssetDownloadError(
+-        f"Could not download Pocket asset {label} from Hugging Face ({error_name})"
++        f"Could not download Hugging Face asset {label} ({error_name})"
+     ) from exc
+
+-
+ def _hub_error_types() -> dict[str, tuple[type[BaseException], ...]]:
+     modules: list[ModuleType] = []
+     for name in ("huggingface_hub.errors", "huggingface_hub.utils"):
+@@ -175,10 +182,16 @@ def _http_status(exc: BaseException) -> int | None:
+ def huggingface_diagnostics(*, offline: bool = False) -> dict[str, str | bool]:
+     try:
+         importlib.import_module("huggingface_hub")
+-    except ImportError:
+-        installed = False
++    except ModuleNotFoundError as exc:
++        hub_status = (
++            "not installed"
++            if exc.name == "huggingface_hub"
++            else f"import failed ({type(exc).__name__})"
++        )
++    except ImportError as exc:
++        hub_status = f"import failed ({type(exc).__name__})"
+     else:
+-        installed = True
++        hub_status = "installed"
+
+     token_path = os.environ.get("HF_TOKEN_PATH")
+     if token_path is None:
+@@ -201,7 +214,7 @@ def huggingface_diagnostics(*, offline: bool = False) -> dict[str, str | bool]:
+         "yes",
+     }
+     return {
+-        "huggingface_hub": "installed" if installed else "not installed",
++        "huggingface_hub": hub_status,
+         "credentials": "configured" if credentials else "not configured",
+         "offline": offline or offline_environment,
+         "implicit_token_disabled": implicit_token_disabled,
+diff --git a/pyproject.toml b/pyproject.toml
+index b4e7144..822d5e6 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -68,6 +68,7 @@ coreml = []  # Supplied by the supported macOS ONNX Runtime build.
+ nnapi = []  # Supplied by a compatible mobile ONNX Runtime build.
+ xnnpack = []  # Supplied by a compatible ONNX Runtime build.
+ mobile = []  # Convenience marker for platform-managed mobile providers.
++huggingface = ["huggingface_hub>=0.24,<2"]
+ pocket = ["huggingface_hub>=0.24,<2", "safetensors>=0.4,<1"]
+ inno = ["scipy>=1.10", "praat-parselmouth>=0.4.7"]
+ inno-export = ["onnx>=1.16", "safetensors>=0.4", "torch>=2.0"]
+diff --git a/tests/test_huggingface.py b/tests/test_huggingface.py
+index 6164a2b..848b3c0 100644
+--- a/tests/test_huggingface.py
++++ b/tests/test_huggingface.py
+@@ -15,7 +15,11 @@ from onnxvoice.errors import (
+     OfflineError,
+     OptionalDependencyError,
+ )
+-from onnxvoice.huggingface import HuggingFaceSource, download_huggingface_file
++from onnxvoice.huggingface import (
++    HuggingFaceSource,
++    download_huggingface_file,
++    huggingface_diagnostics,
++)
+
+
+ def _source() -> HuggingFaceSource:
+@@ -45,13 +49,33 @@ def test_missing_optional_dependency_has_install_instructions(monkeypatch, tmp_p
+
+     def import_without_hub(name: str, package: str | None = None):
+         if name == "huggingface_hub":
+-            raise ModuleNotFoundError(name)
++            raise ModuleNotFoundError("No module named 'huggingface_hub'", name=name)
+         return original_import(name, package)
+
+     monkeypatch.setattr(importlib, "import_module", import_without_hub)
+-    with pytest.raises(OptionalDependencyError, match=r"onnxvoice\[pocket\]"):
++    with pytest.raises(OptionalDependencyError, match=r"onnxvoice\[huggingface\]") as raised:
+         download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++    assert "pocket" not in str(raised.value).lower()
++
++
++def test_nested_hub_import_error_is_not_reported_as_missing_dependency(
++    monkeypatch, tmp_path: Path
++) -> None:
++    original_import = importlib.import_module
++    nested_error = ImportError("failed to import an installed Hub runtime dependency")
+
++    def import_with_nested_error(name: str, package: str | None = None):
++        if name == "huggingface_hub":
++            raise nested_error
++        return original_import(name, package)
++
++    monkeypatch.setattr(importlib, "import_module", import_with_nested_error)
++    with pytest.raises(AssetDownloadError) as raised:
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++
++    assert raised.value.__cause__ is nested_error
++    assert "onnxvoice[huggingface]" not in str(raised.value)
++    assert "pocket" not in str(raised.value).lower()
+
+ def test_download_uses_exact_pinned_source_and_temporary_local_dir(
+     monkeypatch, tmp_path: Path
+@@ -113,6 +137,7 @@ def test_http_errors_map_without_exposing_exception_text(
+     assert message in str(raised.value).lower()
+     assert secret not in str(raised.value)
+     assert secret not in repr(raised.value)
++    assert "Pocket asset" not in str(raised.value)
+
+
+ def test_missing_revision_exception_maps_to_asset_not_found(monkeypatch, tmp_path: Path) -> None:
+@@ -127,6 +152,20 @@ def test_missing_revision_exception_maps_to_asset_not_found(monkeypatch, tmp_pat
+         download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
+
+
++def test_diagnostics_report_hub_import_failure_accurately(monkeypatch) -> None:
++    original_import = importlib.import_module
++
++    def import_with_runtime_failure(name: str, package: str | None = None):
++        if name == "huggingface_hub":
++            raise ImportError("nested Hub runtime import failure")
++        return original_import(name, package)
++
++    monkeypatch.setattr(importlib, "import_module", import_with_runtime_failure)
++    report = huggingface_diagnostics()
++
++    assert report["huggingface_hub"] == "import failed (ImportError)"
++
++
+ def test_offline_local_cache_miss_maps_to_offline_error(monkeypatch, tmp_path: Path) -> None:
+     def download(**kwargs):
+         assert kwargs["local_files_only"] is True
+diff --git a/tests/test_inflect_catalog.py b/tests/test_inflect_catalog.py
+index 407ccc2..63093b5 100644
+--- a/tests/test_inflect_catalog.py
++++ b/tests/test_inflect_catalog.py
+@@ -85,8 +85,12 @@ def test_inflect_catalog_marks_split_runtime_layout() -> None:
+ def test_inflect_catalog_has_duration_and_decode_roles() -> None:
+     item = _parse_inflect(_catalog())[0]
+     assert {artifact.role for artifact in item.artifacts} == {"duration", "decode"}
+-    assert item.artifact("duration").metadata["source"]["path"] == "onnx/duration.onnx"
+-    assert item.artifact("decode").metadata["source"]["path"] == "onnx/decode.onnx"
++    for role in ("duration", "decode"):
++        source = item.artifact(role).metadata["source"]
++        assert source["provider"] == "huggingface"
++        assert source["repository"] == "owensong/Inflect-Nano-v2-ONNX"
++        assert source["revision"] == "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9"
++        assert source["path"] == f"onnx/{role}.onnx"
+
+
+ def test_inflect_voice_details_are_catalog_derived() -> None:
+diff --git a/tests/test_inflect_local_open.py b/tests/test_inflect_local_open.py
+index d0d580e..55be386 100644
+--- a/tests/test_inflect_local_open.py
++++ b/tests/test_inflect_local_open.py
+@@ -119,18 +119,32 @@ def test_inflect_managed_install_verifies_both_artifact_roles(
+     catalog_path = tmp_path / "models.json"
+     catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+
++    routed_sources: list[tuple[str, str, str]] = []
++
+     def download(source: Any, *, local_dir: Path, offline: bool) -> Path:
+         assert not offline
++        routed_sources.append((source.repository, source.revision, source.path))
+         destination = local_dir / Path(source.path).name
+         destination.write_bytes(payloads[destination.name])
+         return destination
+-
+     monkeypatch.setattr("onnxvoice.store.download_huggingface_file", download)
+     manager = OnnxVoice(
+         cache_dir=tmp_path / "cache",
+         catalog_sources={"inflect": str(catalog_path)},
+     )
+     installation = manager.install("inflect:nano-v2")
++    assert routed_sources == [
++        (
++            "owensong/Inflect-Nano-v2-ONNX",
++            "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9",
++            "onnx/duration.onnx",
++        ),
++        (
++            "owensong/Inflect-Nano-v2-ONNX",
++            "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9",
++            "onnx/decode.onnx",
++        ),
++    ]
+     assert {artifact.role for artifact in installation.artifacts} == {"duration", "decode"}
+     assert installation.require_artifact("duration").path.read_bytes() == payloads["duration.onnx"]
+     assert installation.require_artifact("decode").path.read_bytes() == payloads["decode.onnx"]

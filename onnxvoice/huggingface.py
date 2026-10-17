@@ -113,7 +113,9 @@ def _raise_huggingface_error(
     if _is_instance(exc, error_types["missing"]) or status == 404:
         raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
     if offline:
-        raise OfflineError(f"Hugging Face asset {label} could not be resolved while offline") from exc
+        raise OfflineError(
+            f"Hugging Face asset {label} could not be resolved while offline"
+        ) from exc
 
     error_name = type(exc).__name__
     if error_name == "GatedRepoError":
@@ -137,6 +139,7 @@ def _raise_huggingface_error(
     raise AssetDownloadError(
         f"Could not download Hugging Face asset {label} ({error_name})"
     ) from exc
+
 
 def _hub_error_types() -> dict[str, tuple[type[BaseException], ...]]:
     modules: list[ModuleType] = []

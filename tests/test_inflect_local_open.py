@@ -127,6 +127,7 @@ def test_inflect_managed_install_verifies_both_artifact_roles(
         destination = local_dir / Path(source.path).name
         destination.write_bytes(payloads[destination.name])
         return destination
+
     monkeypatch.setattr("onnxvoice.store.download_huggingface_file", download)
     manager = OnnxVoice(
         cache_dir=tmp_path / "cache",

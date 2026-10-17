@@ -1,0 +1,36 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.10
+git_base_ref: v0.2.9
+git_base_sha: ac803d6b114bd23472f4c09aa08411226bd00fc3
+git_head_ref: HEAD
+git_head_sha: 18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+git_range: ac803d6b114bd23472f4c09aa08411226bd00fc3..18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+commit_count: 1
+rows:
+  - sha: 18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+    source_ref: git:18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+    short_sha: 18718d2
+    changed_paths:
+      - README.md
+      - docs/getting-started.md
+      - docs/pocket-downloads.md
+      - onnxvoice/huggingface.py
+      - pyproject.toml
+      - tests/test_huggingface.py
+      - tests/test_inflect_catalog.py
+      - tests/test_inflect_local_open.py
+    stats:
+      files_changed: 8
+      insertions: 103
+      deletions: 25
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: Add engine-neutral Hugging Face transport extra

@@ -1,0 +1,31 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.10
+git_base_ref: ac803d6b114bd23472f4c09aa08411226bd00fc3
+git_base_sha: ac803d6b114bd23472f4c09aa08411226bd00fc3
+git_head_ref: 18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+git_head_sha: 18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added an engine-neutral Hugging Face transport extra for Hub-backed artifact downloads and diagnostics"
+    status: accepted
+    source_refs:
+      - git:18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+    paths:
+      - README.md
+      - docs/getting-started.md
+      - docs/pocket-downloads.md
+      - onnxvoice/huggingface.py
+      - pyproject.toml
+      - tests/test_huggingface.py
+      - tests/test_inflect_catalog.py
+      - tests/test_inflect_local_open.py
+    sources:
+      - git:18718d2f157f64b8bfaf8b37e25d1b9ccbda4daa
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
