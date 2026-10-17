@@ -119,18 +119,32 @@ def test_inflect_managed_install_verifies_both_artifact_roles(
     catalog_path = tmp_path / "models.json"
     catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
 
+    routed_sources: list[tuple[str, str, str]] = []
+
     def download(source: Any, *, local_dir: Path, offline: bool) -> Path:
         assert not offline
+        routed_sources.append((source.repository, source.revision, source.path))
         destination = local_dir / Path(source.path).name
         destination.write_bytes(payloads[destination.name])
         return destination
-
     monkeypatch.setattr("onnxvoice.store.download_huggingface_file", download)
     manager = OnnxVoice(
         cache_dir=tmp_path / "cache",
         catalog_sources={"inflect": str(catalog_path)},
     )
     installation = manager.install("inflect:nano-v2")
+    assert routed_sources == [
+        (
+            "owensong/Inflect-Nano-v2-ONNX",
+            "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9",
+            "onnx/duration.onnx",
+        ),
+        (
+            "owensong/Inflect-Nano-v2-ONNX",
+            "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9",
+            "onnx/decode.onnx",
+        ),
+    ]
     assert {artifact.role for artifact in installation.artifacts} == {"duration", "decode"}
     assert installation.require_artifact("duration").path.read_bytes() == payloads["duration.onnx"]
     assert installation.require_artifact("decode").path.read_bytes() == payloads["decode.onnx"]

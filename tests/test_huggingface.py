@@ -15,7 +15,11 @@ from onnxvoice.errors import (
     OfflineError,
     OptionalDependencyError,
 )
-from onnxvoice.huggingface import HuggingFaceSource, download_huggingface_file
+from onnxvoice.huggingface import (
+    HuggingFaceSource,
+    download_huggingface_file,
+    huggingface_diagnostics,
+)
 
 
 def _source() -> HuggingFaceSource:
@@ -45,13 +49,33 @@ def test_missing_optional_dependency_has_install_instructions(monkeypatch, tmp_p
 
     def import_without_hub(name: str, package: str | None = None):
         if name == "huggingface_hub":
-            raise ModuleNotFoundError(name)
+            raise ModuleNotFoundError("No module named 'huggingface_hub'", name=name)
         return original_import(name, package)
 
     monkeypatch.setattr(importlib, "import_module", import_without_hub)
-    with pytest.raises(OptionalDependencyError, match=r"onnxvoice\[pocket\]"):
+    with pytest.raises(OptionalDependencyError, match=r"onnxvoice\[huggingface\]") as raised:
+        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
+    assert "pocket" not in str(raised.value).lower()
+
+
+def test_nested_hub_import_error_is_not_reported_as_missing_dependency(
+    monkeypatch, tmp_path: Path
+) -> None:
+    original_import = importlib.import_module
+    nested_error = ImportError("failed to import an installed Hub runtime dependency")
+
+    def import_with_nested_error(name: str, package: str | None = None):
+        if name == "huggingface_hub":
+            raise nested_error
+        return original_import(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", import_with_nested_error)
+    with pytest.raises(AssetDownloadError) as raised:
         download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
 
+    assert raised.value.__cause__ is nested_error
+    assert "onnxvoice[huggingface]" not in str(raised.value)
+    assert "pocket" not in str(raised.value).lower()
 
 def test_download_uses_exact_pinned_source_and_temporary_local_dir(
     monkeypatch, tmp_path: Path
@@ -113,6 +137,7 @@ def test_http_errors_map_without_exposing_exception_text(
     assert message in str(raised.value).lower()
     assert secret not in str(raised.value)
     assert secret not in repr(raised.value)
+    assert "Pocket asset" not in str(raised.value)
 
 
 def test_missing_revision_exception_maps_to_asset_not_found(monkeypatch, tmp_path: Path) -> None:
@@ -125,6 +150,20 @@ def test_missing_revision_exception_maps_to_asset_not_found(monkeypatch, tmp_pat
     _install_hub(monkeypatch, download)
     with pytest.raises(AssetNotFoundError, match="asset not found"):
         download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
+
+
+def test_diagnostics_report_hub_import_failure_accurately(monkeypatch) -> None:
+    original_import = importlib.import_module
+
+    def import_with_runtime_failure(name: str, package: str | None = None):
+        if name == "huggingface_hub":
+            raise ImportError("nested Hub runtime import failure")
+        return original_import(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", import_with_runtime_failure)
+    report = huggingface_diagnostics()
+
+    assert report["huggingface_hub"] == "import failed (ImportError)"
 
 
 def test_offline_local_cache_miss_maps_to_offline_error(monkeypatch, tmp_path: Path) -> None:

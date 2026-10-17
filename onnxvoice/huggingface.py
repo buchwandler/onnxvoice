@@ -48,11 +48,19 @@ def download_huggingface_file(
     """Download one pinned Hub file into caller-owned temporary storage."""
     try:
         hub = importlib.import_module("huggingface_hub")
-    except ImportError as exc:
-        raise OptionalDependencyError(
-            "Remote Pocket downloads require Hugging Face support. Install 'onnxvoice[pocket]'."
+    except ModuleNotFoundError as exc:
+        if exc.name == "huggingface_hub":
+            raise OptionalDependencyError(
+                "Hugging Face downloads require 'huggingface_hub'; "
+                "install 'onnxvoice[huggingface]'."
+            ) from exc
+        raise AssetDownloadError(
+            "The Hugging Face client could not be imported because a dependency is missing."
         ) from exc
-
+    except ImportError as exc:
+        raise AssetDownloadError(
+            f"The Hugging Face client could not be imported ({type(exc).__name__})."
+        ) from exc
     try:
         downloaded = hub.hf_hub_download(
             repo_id=source.repository,
@@ -87,30 +95,30 @@ def _raise_huggingface_error(
 
     if _is_instance(exc, error_types["gated"]) or status == 403:
         raise AssetPermissionError(
-            f"Pocket asset {label} requires access to a gated Hugging Face repository. "
+            f"Hugging Face asset {label} requires access to a gated repository. "
             "Accept or request access on the repository page, authenticate with "
             "'hf auth login' or HF_TOKEN, verify with 'hf auth whoami', and retry."
         ) from exc
     if status == 401:
         raise AssetAuthenticationError(
-            f"Authentication is required to download Pocket asset {label}. "
+            f"Authentication is required to download Hugging Face asset {label}. "
             "Authenticate with 'hf auth login' or configure HF_TOKEN, then retry."
         ) from exc
     if _is_instance(exc, error_types["offline"]) or (
         offline and _is_instance(exc, error_types["local_entry"])
     ):
         raise OfflineError(
-            f"Pocket asset {label} is not available in the local Hugging Face cache"
+            f"Hugging Face asset {label} is not available in the local cache"
         ) from exc
     if _is_instance(exc, error_types["missing"]) or status == 404:
         raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
     if offline:
-        raise OfflineError(f"Pocket asset {label} could not be resolved while offline") from exc
+        raise OfflineError(f"Hugging Face asset {label} could not be resolved while offline") from exc
 
     error_name = type(exc).__name__
-    if error_name in {"GatedRepoError"}:
+    if error_name == "GatedRepoError":
         raise AssetPermissionError(
-            f"Pocket asset {label} requires access to a gated Hugging Face repository. "
+            f"Hugging Face asset {label} requires access to a gated repository. "
             "Accept or request access on the repository page, authenticate with "
             "'hf auth login' or HF_TOKEN, verify with 'hf auth whoami', and retry."
         ) from exc
@@ -123,13 +131,12 @@ def _raise_huggingface_error(
         raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
     if error_name == "LocalEntryNotFoundError":
         raise OfflineError(
-            f"Pocket asset {label} is not available in the local Hugging Face cache"
+            f"Hugging Face asset {label} is not available in the local cache"
         ) from exc
 
     raise AssetDownloadError(
-        f"Could not download Pocket asset {label} from Hugging Face ({error_name})"
+        f"Could not download Hugging Face asset {label} ({error_name})"
     ) from exc
-
 
 def _hub_error_types() -> dict[str, tuple[type[BaseException], ...]]:
     modules: list[ModuleType] = []
@@ -175,10 +182,16 @@ def _http_status(exc: BaseException) -> int | None:
 def huggingface_diagnostics(*, offline: bool = False) -> dict[str, str | bool]:
     try:
         importlib.import_module("huggingface_hub")
-    except ImportError:
-        installed = False
+    except ModuleNotFoundError as exc:
+        hub_status = (
+            "not installed"
+            if exc.name == "huggingface_hub"
+            else f"import failed ({type(exc).__name__})"
+        )
+    except ImportError as exc:
+        hub_status = f"import failed ({type(exc).__name__})"
     else:
-        installed = True
+        hub_status = "installed"
 
     token_path = os.environ.get("HF_TOKEN_PATH")
     if token_path is None:
@@ -201,7 +214,7 @@ def huggingface_diagnostics(*, offline: bool = False) -> dict[str, str | bool]:
         "yes",
     }
     return {
-        "huggingface_hub": "installed" if installed else "not installed",
+        "huggingface_hub": hub_status,
         "credentials": "configured" if credentials else "not configured",
         "offline": offline or offline_environment,
         "implicit_token_disabled": implicit_token_disabled,

@@ -20,7 +20,7 @@ python -m pip install "onnxvoice[directml]"
 python -m pip install "onnxvoice[openvino]"
 ```
 
-For Pocket's optional Hugging Face voice-state downloads, add the `pocket` extra. See [Pocket download setup](docs/pocket-downloads.md).
+Hugging Face is an optional **download transport**, separate from runtime selection: use `onnxvoice[huggingface]` for transport only, or `onnxvoice[cpu,huggingface]` for CPU inference plus Hub downloads. Pocket users can continue using the compatible `onnxvoice[pocket]` extra (and add a runtime provider, e.g. `onnxvoice[pocket,cpu]`). See [Pocket download setup](docs/pocket-downloads.md).
 
 Voicefolio owns cataloging, discovery, and download of reference WAVs. OnnxVoice's Pocket support is for ONNX bundles and predefined runtime voice states. See [Pocket download setup](docs/pocket-downloads.md).
 

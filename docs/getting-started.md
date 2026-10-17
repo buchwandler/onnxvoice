@@ -20,7 +20,14 @@ python -m pip install "onnxvoice[directml]"
 python -m pip install "onnxvoice[openvino]"
 ```
 
-For Pocket's optional Hugging Face and safetensors support, install its extra with a runtime provider:
+Hugging Face download support is an engine-neutral transport extra; it does not install an inference runtime:
+
+```bash
+python -m pip install "onnxvoice[huggingface]"       # transport only
+python -m pip install "onnxvoice[cpu,huggingface]"   # CPU runtime plus Hub downloads
+```
+
+Pocket's existing extra remains compatible and includes `huggingface_hub` plus `safetensors`; add the runtime provider needed by your installation:
 
 ```bash
 python -m pip install "onnxvoice[pocket,cpu]"

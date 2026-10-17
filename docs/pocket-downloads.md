@@ -1,6 +1,6 @@
 # Pocket downloads and Hugging Face access
 
-Pocket model and voice-state downloads use the optional Hugging Face integration. Local bundles and assets already present in the OnnxVoice cache do not require `huggingface_hub` for opening or inference.
+Hugging Face is an optional, engine-neutral download transport used by any catalog artifact with a Hub source (including Inflect). The `huggingface` extra installs only `huggingface_hub`; local bundles and assets already present in the OnnxVoice cache do not require it for opening or inference.
 
 ## Installation
 

@@ -85,8 +85,12 @@ def test_inflect_catalog_marks_split_runtime_layout() -> None:
 def test_inflect_catalog_has_duration_and_decode_roles() -> None:
     item = _parse_inflect(_catalog())[0]
     assert {artifact.role for artifact in item.artifacts} == {"duration", "decode"}
-    assert item.artifact("duration").metadata["source"]["path"] == "onnx/duration.onnx"
-    assert item.artifact("decode").metadata["source"]["path"] == "onnx/decode.onnx"
+    for role in ("duration", "decode"):
+        source = item.artifact(role).metadata["source"]
+        assert source["provider"] == "huggingface"
+        assert source["repository"] == "owensong/Inflect-Nano-v2-ONNX"
+        assert source["revision"] == "df3627e44c26192714c9dcba6b8e9b47e7a6e3d9"
+        assert source["path"] == f"onnx/{role}.onnx"
 
 
 def test_inflect_voice_details_are_catalog_derived() -> None:
