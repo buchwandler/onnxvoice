@@ -1,0 +1,21 @@
+rows:
+  - sha: 2836d4831f799139878289c5cc0b6a0e3e71512f
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/chatterbox.py
+      - onnxvoice/catalog_tools/chatterbox_seed.json
+      - onnxvoice/cli.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/chatterbox.py
+      - pyproject.toml
+      - tests/test_chatterbox_catalog.py
+      - tests/test_chatterbox_catalog_tools.py
+      - tests/test_chatterbox_runtime.py
+    observed_behavior: "Adds validated Chatterbox Nano v2 and Turbo catalog/profile selection with revision-pinned artifacts and integrity metadata; a deterministic catalog builder and verifier CLI; and a registered four-graph ONNX adapter that prepares reusable reference voice state and generates audio from model-ready token IDs. Focused tests cover catalog, CLI, runtime graph contracts, and generation. This is user-facing runtime/catalog functionality, not a complete text/audio frontend."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Inspected every changed source, package, and test path in the pinned v0.2.10..HEAD range; summary must be authored from reviewed behavior, not the commit subject."
+    stale: false

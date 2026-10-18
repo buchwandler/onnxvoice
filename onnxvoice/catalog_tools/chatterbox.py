@@ -184,7 +184,8 @@ def _validate_seed(seed: Any) -> Mapping[str, Any]:
         _require(isinstance(source, Mapping), f"{bundle_id}: source must be an object")
         repository = source.get("repository")
         _require(
-            isinstance(repository, str) and re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository),
+            isinstance(repository, str)
+            and re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository) is not None,
             f"{bundle_id}: invalid Hugging Face repository",
         )
         _require(

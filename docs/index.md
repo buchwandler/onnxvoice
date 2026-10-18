@@ -22,6 +22,7 @@ It deliberately does not own text normalization, G2P/phonemization, sentence pla
 - [Catalog voices and semantic references](voices.md)
 - [Inflect v2 runtime](systems/inflect.md)
 - [Qwen3-TTS WaveKat runtime](systems/qwen3.md)
+- [Chatterbox runtime](systems/chatterbox.md)
 - [Python usage](python-api.md)
 - [Storage and cache management](storage.md)
 - [ONNX Runtime providers](providers.md)

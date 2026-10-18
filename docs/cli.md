@@ -201,5 +201,12 @@ onnxvoice catalog qwen3 build --output catalog/bundles.json --source-output cata
 onnxvoice catalog qwen3 verify --catalog catalog/bundles.json --source catalog/source.json
 ```
 
+The Chatterbox catalog verifier checks the normalized bundle catalog against its pinned source snapshot:
+
+```bash
+onnxvoice catalog chatterbox verify --catalog ../chatterbox-onnx-bundles/catalog/bundles.json \\
+  --source ../chatterbox-onnx-bundles/catalog/source.json
+```
+
 Piper, Pocket, and Supertonic builders accept repository and revision options. The Kitten builder uses the normalized catalog as a seed manifest and refreshes each listed Hugging Face repository; it reads upstream `config.json` and artifact metadata. Build requires network access, while verification is offline. See [KittenTTS](systems/kitten.md) and `onnxvoice catalog <system> <action> --help` for details.
 Qwen3 catalog building fetches metadata and artifact integrity from the seed's pinned repositories; the output catalog and source manifest can be verified offline with `onnxvoice catalog qwen3 verify`. See [Qwen3-TTS WaveKat](systems/qwen3.md) for bundle profiles, runtime contracts, and parity status.

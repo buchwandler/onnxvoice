@@ -1,0 +1,2593 @@
+ onnxvoice/catalog.py                         | 356 +++++++++++-
+ onnxvoice/catalog_tools/chatterbox.py        | 417 ++++++++++++++
+ onnxvoice/catalog_tools/chatterbox_seed.json | 142 +++++
+ onnxvoice/cli.py                             |  28 +
+ onnxvoice/systems/__init__.py                |   4 +
+ onnxvoice/systems/chatterbox.py              | 798 +++++++++++++++++++++++++++
+ pyproject.toml                               |   2 +-
+ tests/test_chatterbox_catalog.py             | 222 ++++++++
+ tests/test_chatterbox_catalog_tools.py       | 159 ++++++
+ tests/test_chatterbox_runtime.py             | 317 +++++++++++
+ 10 files changed, 2443 insertions(+), 2 deletions(-)
+
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index e459c47..b98e0ec 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -74,6 +74,7 @@ DEFAULT_SOURCES = {
+     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
+     "inflect": "https://raw.githubusercontent.com/buchwandler/inflect-onnx-bundles/main/catalog/models.json",
+     "sopro": "https://raw.githubusercontent.com/buchwandler/sopro-onnx-bundles/main/catalog/bundles.json",
++    "chatterbox": "https://raw.githubusercontent.com/buchwandler/chatterbox-onnx-bundles/main/catalog/bundles.json",
+     "qwen3": "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json",
+ }
+ _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
+@@ -226,6 +227,8 @@ class CatalogClient:
+         """Return parsed catalog items for a system."""
+         system = system.lower()
+         raw = self.load_raw(system, refresh=refresh, progress=progress)
++        if system == "chatterbox":
++            return _parse_chatterbox(raw)
+         if system == "qwen3":
+             return _parse_qwen3(raw)
+         if system == "piper":
+@@ -260,6 +263,18 @@ class CatalogClient:
+         distribution select system-specific artifact variants.
+         """
+         system, item_id = parse_ref(ref)
++        if system == "chatterbox":
++            item = next(
++                (
++                    candidate
++                    for candidate in self.list(system, refresh=refresh, progress=progress)
++                    if candidate.id == item_id or item_id in candidate.aliases
++                ),
++                None,
++            )
++            if item is None:
++                raise AssetNotFoundError(f"Unknown catalog item: {ref}")
++            return _select_chatterbox_profile(item, quality)
+         if system == "qwen3":
+             item = next(
+                 (
+@@ -2614,6 +2629,345 @@ def _require_pocket_safe_id(value: str, label: str) -> None:
+         raise CatalogError(f"{label} is unsafe: {value!r}")
+
+
++_CHATTERBOX_COMPONENTS = frozenset(
++    {"speech_encoder", "embed_tokens", "language_model", "conditional_decoder"}
++)
++_CHATTERBOX_STATIC_ROLES = frozenset(
++    {
++        "tokenizer",
++        "model_config",
++        "tokenizer_config",
++        "generation_config",
++        "preprocessor_config",
++        "upstream_manifest",
++    }
++)
++_CHATTERBOX_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
++_CHATTERBOX_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
++_CHATTERBOX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++
++
++def _parse_chatterbox(data: Mapping[str, Any]) -> list[CatalogItem]:
++    """Parse and strictly validate the normalized Chatterbox bundle catalog."""
++    if not isinstance(data, Mapping) or set(data) != {"schema", "kind", "bundles"}:
++        raise CatalogError("Chatterbox catalog must contain exactly schema, kind, and bundles")
++    if type(data.get("schema")) is not int or data["schema"] != 1:
++        raise CatalogError("Chatterbox catalog schema must be 1")
++    if data.get("kind") != "chatterbox-onnx-bundle-catalog":
++        raise CatalogError("Unexpected Chatterbox catalog kind")
++    bundles = data.get("bundles")
++    if not isinstance(bundles, Mapping) or not bundles:
++        raise CatalogError("Chatterbox catalog bundles must be a non-empty mapping")
++    ids = set(bundles)
++    seen_aliases: set[str] = set()
++    result: list[CatalogItem] = []
++    for bundle_id, raw in sorted(bundles.items()):
++        if not isinstance(bundle_id, str) or _CHATTERBOX_SAFE_ID_RE.fullmatch(bundle_id) is None:
++            raise CatalogError(f"Unsafe Chatterbox bundle ID {bundle_id!r}")
++        if not isinstance(raw, Mapping) or raw.get("id") != bundle_id:
++            raise CatalogError(f"{bundle_id}: bundle must be an object with a matching id")
++        if raw.get("system") != "chatterbox":
++            raise CatalogError(f"{bundle_id}: system must be chatterbox")
++        aliases = raw.get("aliases", ())
++        if not isinstance(aliases, Sequence) or isinstance(aliases, (str, bytes)):
++            raise CatalogError(f"{bundle_id}: aliases must be a sequence")
++        normalized_aliases: list[str] = []
++        for alias in aliases:
++            if not isinstance(alias, str) or _CHATTERBOX_SAFE_ID_RE.fullmatch(alias) is None:
++                raise CatalogError(f"{bundle_id}: unsafe alias {alias!r}")
++            if alias == bundle_id or alias in ids or alias in seen_aliases:
++                raise CatalogError(f"{bundle_id}: duplicate or conflicting alias {alias!r}")
++            seen_aliases.add(alias)
++            normalized_aliases.append(alias)
++        language = raw.get("language")
++        sample_rate = raw.get("sample_rate")
++        if not isinstance(language, str) or not language:
++            raise CatalogError(f"{bundle_id}: language is required")
++        if type(sample_rate) is not int or sample_rate <= 0:
++            raise CatalogError(f"{bundle_id}: sample_rate must be a positive integer")
++        source = raw.get("source")
++        if not isinstance(source, Mapping) or set(source) != {
++            "provider",
++            "repository",
++            "requested_revision",
++            "revision",
++        }:
++            raise CatalogError(f"{bundle_id}: source fields are invalid")
++        repository, revision = source.get("repository"), source.get("revision")
++        requested = source.get("requested_revision")
++        if (
++            source.get("provider") != "huggingface"
++            or not isinstance(repository, str)
++            or re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository) is None
++        ):
++            raise CatalogError(f"{bundle_id}: invalid Hugging Face source")
++        if not isinstance(requested, str) or not requested:
++            raise CatalogError(f"{bundle_id}: requested source revision is required")
++        if not isinstance(revision, str) or _CHATTERBOX_SHA_RE.fullmatch(revision) is None:
++            raise CatalogError(f"{bundle_id}: source revision must be a lowercase 40-character SHA")
++        frontend = raw.get("frontend")
++        if not isinstance(frontend, Mapping) or frontend.get("tokenizer_role") != "tokenizer":
++            raise CatalogError(f"{bundle_id}: frontend must identify the tokenizer role")
++        tokenizer_contract = frontend.get("tokenizer_contract")
++        if not isinstance(tokenizer_contract, str) or not tokenizer_contract:
++            raise CatalogError(f"{bundle_id}: tokenizer contract is required")
++        runtime = raw.get("runtime")
++        if not isinstance(runtime, Mapping):
++            raise CatalogError(f"{bundle_id}: runtime metadata must be an object")
++        for field in (
++            "start_speech_token",
++            "stop_speech_token",
++            "silence_token",
++            "trailing_silence_tokens",
++            "default_max_new_tokens",
++        ):
++            if type(runtime.get(field)) is not int or runtime[field] < 0:
++                raise CatalogError(f"{bundle_id}: runtime {field} must be a non-negative integer")
++        penalty = runtime.get("default_repetition_penalty")
++        if (
++            isinstance(penalty, bool)
++            or not isinstance(penalty, (int, float))
++            or not math.isfinite(penalty)
++            or penalty <= 0
++        ):
++            raise CatalogError(f"{bundle_id}: invalid default repetition penalty")
++        profiles = raw.get("profiles")
++        if not isinstance(profiles, Mapping) or not profiles:
++            raise CatalogError(f"{bundle_id}: profiles must be a non-empty mapping")
++        default_profile = raw.get("default_profile")
++        if default_profile not in profiles:
++            raise CatalogError(f"{bundle_id}: default profile is not declared")
++        for profile_name, mapping in profiles.items():
++            if not isinstance(profile_name, str) or not _CHATTERBOX_SAFE_ID_RE.fullmatch(
++                profile_name
++            ):
++                raise CatalogError(f"{bundle_id}: unsafe profile {profile_name!r}")
++            if not isinstance(mapping, Mapping) or set(mapping) != _CHATTERBOX_COMPONENTS:
++                raise CatalogError(
++                    f"{bundle_id}/{profile_name}: profile must select four graph components"
++                )
++            if any(not isinstance(value, str) or not value for value in mapping.values()):
++                raise CatalogError(
++                    f"{bundle_id}/{profile_name}: component qualities must be strings"
++                )
++        raw_artifacts = raw.get("artifacts")
++        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
++            raise CatalogError(f"{bundle_id}: artifacts must be a sequence")
++        artifacts: list[Artifact] = []
++        seen_keys: set[tuple[str, str | None, str | None]] = set()
++        seen_paths: set[str] = set()
++        for entry in raw_artifacts:
++            required = {
++                "role",
++                "component",
++                "quality",
++                "filename",
++                "source_path",
++                "url",
++                "size",
++                "sha256",
++            }
++            if not isinstance(entry, Mapping) or set(entry) != required:
++                raise CatalogError(f"{bundle_id}: artifact fields are invalid")
++            role, component, quality = entry["role"], entry["component"], entry["quality"]
++            if role not in {"graph", "external_data", *_CHATTERBOX_STATIC_ROLES}:
++                raise CatalogError(f"{bundle_id}: unknown artifact role {role!r}")
++            if role in {"graph", "external_data"}:
++                if (
++                    component not in _CHATTERBOX_COMPONENTS
++                    or not isinstance(quality, str)
++                    or not quality
++                ):
++                    raise CatalogError(
++                        f"{bundle_id}: graph artifacts require component and quality"
++                    )
++            elif component is not None or quality is not None:
++                raise CatalogError(
++                    f"{bundle_id}/{role}: static artifacts cannot select component/quality"
++                )
++            path, filename = entry["source_path"], entry["filename"]
++            if not isinstance(path, str) or not isinstance(filename, str) or not filename:
++                raise CatalogError(f"{bundle_id}: artifact path and filename are required")
++            try:
++                validate_relative_path(path, field_name="Chatterbox source path")
++            except ValueError as exc:
++                raise CatalogError(str(exc)) from exc
++            if Path(path).name != filename or path in seen_paths:
++                raise CatalogError(f"{bundle_id}: invalid or duplicate artifact path {path!r}")
++            seen_paths.add(path)
++            if role == "graph" and not path.endswith(".onnx"):
++                raise CatalogError(f"{bundle_id}/{component}: graph path must end in .onnx")
++            if role == "external_data" and not (
++                path.endswith(".onnx_data") or path.endswith(".onnx.data")
++            ):
++                raise CatalogError(f"{bundle_id}/{component}: invalid external-data suffix")
++            key = (str(role), component, quality)
++            if key in seen_keys:
++                raise CatalogError(f"{bundle_id}: duplicate role/component/quality {key!r}")
++            seen_keys.add(key)
++            expected_url = (
++                f"https://huggingface.co/{repository}/resolve/{revision}/"
++                f"{urllib.parse.quote(path, safe='/')}?download=true"
++            )
++            if entry["url"] != expected_url:
++                raise CatalogError(
++                    f"{bundle_id}/{role}: URL is not pinned to the exact source revision"
++                )
++            size, sha256 = entry["size"], entry["sha256"]
++            if type(size) is not int or size <= 0:
++                raise CatalogError(f"{bundle_id}/{role}: size must be a positive integer")
++            if not isinstance(sha256, str) or _CHATTERBOX_SHA256_RE.fullmatch(sha256) is None:
++                raise CatalogError(f"{bundle_id}/{role}: sha256 must be lowercase 64-character hex")
++            metadata = {
++                "path": path,
++                "source": {
++                    "provider": "huggingface",
++                    "repository": repository,
++                    "revision": revision,
++                    "path": path,
++                },
++            }
++            artifacts.append(
++                Artifact(
++                    role=str(role),
++                    filename=filename,
++                    url=entry["url"],
++                    size=size,
++                    sha256=sha256,
++                    quality=quality,
++                    component=component,
++                    format="onnx" if role == "graph" else Path(filename).suffix.lstrip("."),
++                    metadata=metadata,
++                )
++            )
++        if sum(artifact.role == "tokenizer" for artifact in artifacts) != 1:
++            raise CatalogError(f"{bundle_id}: exactly one tokenizer artifact is required")
++        required_graph_keys = {
++            (component, profile[component])
++            for profile in profiles.values()
++            for component in _CHATTERBOX_COMPONENTS
++        }
++        actual_graph_keys = {
++            (artifact.component, artifact.quality)
++            for artifact in artifacts
++            if artifact.role == "graph"
++        }
++        if actual_graph_keys != required_graph_keys:
++            raise CatalogError(
++                f"{bundle_id}: catalog contains missing or unselected profile graphs"
++            )
++        if any(
++            (artifact.component, artifact.quality) not in required_graph_keys
++            for artifact in artifacts
++            if artifact.role == "external_data"
++        ):
++            raise CatalogError(
++                f"{bundle_id}: external data is not associated with a selected profile graph"
++            )
++        graph_keys = {(a.component, a.quality) for a in artifacts if a.role == "graph"}
++        for profile_name, mapping in profiles.items():
++            for component, quality in mapping.items():
++                if (component, quality) not in graph_keys:
++                    raise CatalogError(
++                        f"{bundle_id}/{profile_name}: missing {component} graph for {quality}"
++                    )
++                graph = next(
++                    a
++                    for a in artifacts
++                    if a.role == "graph" and a.component == component and a.quality == quality
++                )
++                companions = [
++                    a
++                    for a in artifacts
++                    if a.role == "external_data"
++                    and a.component == component
++                    and a.quality == quality
++                ]
++                if len(companions) > 1:
++                    raise CatalogError(
++                        f"{bundle_id}/{profile_name}: duplicate external-data companion"
++                    )
++                if companions and companions[0].metadata["path"] not in {
++                    graph.metadata["path"] + "_data",
++                    graph.metadata["path"] + ".data",
++                }:
++                    raise CatalogError(
++                        f"{bundle_id}/{profile_name}: graph/external-data paths do not match"
++                    )
++        item_metadata = {
++            "language": language,
++            "profiles": {name: dict(value) for name, value in profiles.items()},
++            "default_profile": default_profile,
++            "frontend": dict(frontend),
++            "runtime": dict(runtime),
++            "source": dict(source),
++            "source_repository": repository,
++            "source_revision": revision,
++        }
++        result.append(
++            CatalogItem(
++                system="chatterbox",
++                id=bundle_id,
++                kind="bundle",
++                artifacts=tuple(artifacts),
++                aliases=tuple(normalized_aliases),
++                sample_rate=sample_rate,
++                metadata=item_metadata,
++            )
++        )
++    return result
++
++
++def _select_chatterbox_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
++    profiles = item.metadata.get("profiles")
++    if not isinstance(profiles, Mapping):
++        raise CatalogError(f"Chatterbox bundle {item.id!r} has invalid profiles")
++    selected = quality or item.metadata.get("default_profile")
++    profile = profiles.get(selected) if isinstance(selected, str) else None
++    if not isinstance(profile, Mapping):
++        choices = ", ".join(sorted(str(name) for name in profiles))
++        raise AssetNotFoundError(
++            f"Unknown Chatterbox profile {selected!r}; available profiles: {choices}"
++        )
++    selected_artifacts = [
++        artifact for artifact in item.artifacts if artifact.role not in {"graph", "external_data"}
++    ]
++    for component in sorted(_CHATTERBOX_COMPONENTS):
++        target_quality = profile[component]
++        graph = [
++            a
++            for a in item.artifacts
++            if a.role == "graph" and a.component == component and a.quality == target_quality
++        ]
++        if len(graph) != 1:
++            raise CatalogError(
++                f"Profile {selected!r} requires one {component} graph for {target_quality!r}"
++            )
++        selected_artifacts.extend(graph)
++        selected_artifacts.extend(
++            a
++            for a in item.artifacts
++            if a.role == "external_data"
++            and a.component == component
++            and a.quality == target_quality
++        )
++    return CatalogItem(
++        system=item.system,
++        id=item.id,
++        kind=item.kind,
++        artifacts=tuple(selected_artifacts),
++        aliases=item.aliases,
++        sample_rate=item.sample_rate,
++        voices=item.voices,
++        default_voice=item.default_voice,
++        metadata={
++            **item.metadata,
++            "selected_quality": selected,
++            "runtime": {**dict(item.metadata.get("runtime") or {}), "profile": selected},
++        },
++    )
++
++
+ def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
+     """Select exactly one deterministic artifact for each Pocket profile role."""
+     profiles = item.metadata.get("profiles") or {}
+@@ -2678,7 +3032,7 @@ def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogIte
+
+
+ def _item_supports_quality(item: CatalogItem, quality: str) -> bool:
+-    if item.system in {"pocket", "sopro"}:
++    if item.system in {"pocket", "sopro", "chatterbox"}:
+         profiles = item.metadata.get("profiles") or {}
+         return isinstance(profiles, Mapping) and quality in profiles
+     return bool(
+diff --git a/onnxvoice/catalog_tools/chatterbox.py b/onnxvoice/catalog_tools/chatterbox.py
+new file mode 100644
+index 0000000..ff5d006
+--- /dev/null
++++ b/onnxvoice/catalog_tools/chatterbox.py
+@@ -0,0 +1,417 @@
++"""Build and verify deterministic, revision-pinned Chatterbox ONNX bundle catalogs."""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++import urllib.error
++import urllib.parse
++import urllib.request
++from collections.abc import Mapping
++from pathlib import Path, PurePosixPath
++from typing import Any, cast
++
++from ..catalog import _parse_chatterbox
++from ..errors import CatalogError as OnnxCatalogError
++
++DEFAULT_SEED_PATH = Path(__file__).with_name("chatterbox_seed.json")
++DEFAULT_CATALOG_URL = "https://raw.githubusercontent.com/buchwandler/chatterbox-onnx-bundles/main/catalog/bundles.json"
++USER_AGENT = "onnxvoice-chatterbox-catalog"
++_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
++_COMPONENTS = ("speech_encoder", "embed_tokens", "language_model", "conditional_decoder")
++
++
++class CatalogError(ValueError):
++    """Raised when a Chatterbox seed, upstream tree, or generated catalog is invalid."""
++
++
++def _require(condition: bool, message: str) -> None:
++    if not condition:
++        raise CatalogError(message)
++
++
++def _safe_path(value: Any, label: str) -> str:
++    _require(isinstance(value, str) and bool(value), f"{label}: path is required")
++    _require(not value.startswith("/") and "\\" not in value, f"{label}: unsafe path")
++    parts = PurePosixPath(value).parts
++    _require(all(part not in {"", ".", ".."} for part in parts), f"{label}: unsafe path")
++    _require(not re.match(r"^[A-Za-z]:", value), f"{label}: absolute paths are forbidden")
++    return cast(str, value)
++
++
++def huggingface_api_url(repository: str, revision: str) -> str:
++    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
++    rev = urllib.parse.quote(revision, safe="")
++    return f"https://huggingface.co/api/models/{repo}/revision/{rev}"
++
++
++def huggingface_tree_url(repository: str, revision: str) -> str:
++    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
++    rev = urllib.parse.quote(revision, safe="")
++    return f"https://huggingface.co/api/models/{repo}/tree/{rev}?recursive=true&expand=true"
++
++
++def huggingface_resolve_url(repository: str, revision: str, path: str) -> str:
++    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
++    asset = urllib.parse.quote(path, safe="/")
++    return f"https://huggingface.co/{repo}/resolve/{revision}/{asset}?download=true"
++
++
++def _read_url(url: str) -> bytes:
++    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
++    try:
++        with urllib.request.urlopen(request, timeout=120) as response:
++            return response.read()
++    except (OSError, urllib.error.URLError) as exc:
++        raise CatalogError(f"Unable to fetch {url}") from exc
++
++
++def resolve_revision(repository: str, revision: str) -> str:
++    """Resolve a branch or tag to an immutable lowercase 40-character commit."""
++    if _SHA_RE.fullmatch(revision):
++        return revision
++    try:
++        payload = json.loads(_read_url(huggingface_api_url(repository, revision)).decode("utf-8"))
++    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++        raise CatalogError("Hugging Face revision response is not valid JSON") from exc
++    resolved = payload.get("sha") if isinstance(payload, Mapping) else None
++    _require(
++        isinstance(resolved, str) and _SHA_RE.fullmatch(resolved) is not None,
++        "Unable to resolve an exact 40-character commit SHA",
++    )
++    return cast(str, resolved)
++
++
++def _repository_tree(repository: str, revision: str) -> dict[str, dict[str, Any]]:
++    url = huggingface_tree_url(repository, revision)
++    entries: dict[str, dict[str, Any]] = {}
++    while url:
++        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
++        try:
++            with urllib.request.urlopen(request, timeout=60) as response:
++                payload = response.read()
++                next_link = response.headers.get("Link", "")
++        except (OSError, urllib.error.URLError) as exc:
++            raise CatalogError(f"Unable to fetch repository tree for {revision}") from exc
++        try:
++            page = json.loads(payload.decode("utf-8"))
++        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++            raise CatalogError("Hugging Face repository tree is not valid JSON") from exc
++        _require(isinstance(page, list), "Hugging Face repository tree must be a list")
++        for entry in page:
++            if not isinstance(entry, Mapping) or not isinstance(entry.get("path"), str):
++                continue
++            path = _safe_path(entry["path"], "upstream artifact")
++            _require(path not in entries, f"Repository tree contains duplicate path {path!r}")
++            entries[path] = dict(entry)
++        match = re.search(r'<([^>]+)>;\s*rel="next"', next_link)
++        url = match.group(1) if match else ""
++    return entries
++
++
++def _stream_integrity(repository: str, revision: str, path: str) -> tuple[int, str]:
++    request = urllib.request.Request(
++        huggingface_resolve_url(repository, revision, path), headers={"User-Agent": USER_AGENT}
++    )
++    digest = hashlib.sha256()
++    size = 0
++    try:
++        with urllib.request.urlopen(request, timeout=120) as response:
++            while chunk := response.read(1024 * 1024):
++                digest.update(chunk)
++                size += len(chunk)
++    except (OSError, urllib.error.URLError) as exc:
++        raise CatalogError(f"Unable to read artifact integrity data for {path}") from exc
++    _require(size > 0, f"{path}: empty artifacts are not supported")
++    return size, digest.hexdigest()
++
++
++def _artifact_integrity(
++    repository: str, revision: str, path: str, metadata: Mapping[str, Any]
++) -> tuple[int, str]:
++    raw_size = metadata.get("size")
++    lfs = metadata.get("lfs")
++    raw_sha = lfs.get("oid") if isinstance(lfs, Mapping) else None
++    size = raw_size if type(raw_size) is int and raw_size > 0 else None
++    sha256 = raw_sha if isinstance(raw_sha, str) and _SHA256_RE.fullmatch(raw_sha) else None
++    if size is not None and sha256 is not None:
++        return size, sha256
++    downloaded_size, downloaded_sha = _stream_integrity(repository, revision, path)
++    _require(
++        size is None or size == downloaded_size, f"{path}: size disagrees with upstream metadata"
++    )
++    _require(
++        sha256 is None or sha256 == downloaded_sha, f"{path}: SHA-256 disagrees with upstream bytes"
++    )
++    return downloaded_size, downloaded_sha
++
++
++def _validate_seed(seed: Any) -> Mapping[str, Any]:
++    _require(isinstance(seed, Mapping), "Chatterbox seed must be an object")
++    _require(
++        type(seed.get("schema")) is int and seed.get("schema") == 1,
++        "Chatterbox seed schema must be 1",
++    )
++    _require(seed.get("kind") == "chatterbox-onnx-bundle-seed", "Unexpected Chatterbox seed kind")
++    bundles = seed.get("bundles")
++    _require(
++        isinstance(bundles, Mapping) and bool(bundles), "Seed bundles must be a non-empty mapping"
++    )
++    ids = set(bundles)
++    aliases: set[str] = set(ids)
++    for bundle_id, bundle in bundles.items():
++        _require(
++            isinstance(bundle_id, str) and _SAFE_ID_RE.fullmatch(bundle_id) is not None,
++            f"Unsafe Chatterbox bundle ID {bundle_id!r}",
++        )
++        _require(isinstance(bundle, Mapping), f"{bundle_id}: seed bundle must be an object")
++        _require(
++            bundle.get("id", bundle_id) == bundle_id, f"{bundle_id}: ID does not match map key"
++        )
++        raw_aliases = bundle.get("aliases", [])
++        _require(isinstance(raw_aliases, list), f"{bundle_id}: aliases must be a list")
++        for alias in raw_aliases:
++            _require(
++                isinstance(alias, str) and _SAFE_ID_RE.fullmatch(alias) is not None,
++                f"{bundle_id}: unsafe alias {alias!r}",
++            )
++            _require(alias not in aliases, f"Duplicate Chatterbox alias {alias!r}")
++            aliases.add(alias)
++        source = bundle.get("source")
++        _require(isinstance(source, Mapping), f"{bundle_id}: source must be an object")
++        repository = source.get("repository")
++        _require(
++            isinstance(repository, str) and re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository),
++            f"{bundle_id}: invalid Hugging Face repository",
++        )
++        _require(
++            source.get("provider") == "huggingface", f"{bundle_id}: provider must be huggingface"
++        )
++        _require(
++            isinstance(source.get("requested_revision"), str) and source["requested_revision"],
++            f"{bundle_id}: requested_revision is required",
++        )
++        _require(
++            isinstance(bundle.get("language"), str) and bundle["language"],
++            f"{bundle_id}: language is required",
++        )
++        _require(
++            type(bundle.get("sample_rate")) is int and bundle["sample_rate"] > 0,
++            f"{bundle_id}: sample_rate must be positive",
++        )
++        frontend = bundle.get("frontend")
++        _require(isinstance(frontend, Mapping), f"{bundle_id}: frontend is required")
++        _safe_path(frontend.get("tokenizer_path"), f"{bundle_id} tokenizer")
++        _require(
++            isinstance(frontend.get("tokenizer_contract"), str) and frontend["tokenizer_contract"],
++            f"{bundle_id}: tokenizer_contract is required",
++        )
++        runtime = bundle.get("runtime")
++        _require(isinstance(runtime, Mapping), f"{bundle_id}: runtime metadata is required")
++        profiles = bundle.get("profiles")
++        _require(
++            isinstance(profiles, Mapping) and bool(profiles), f"{bundle_id}: profiles are required"
++        )
++        _require(
++            bundle.get("default_profile") in profiles,
++            f"{bundle_id}: default_profile must name a profile",
++        )
++        for profile_name, profile in profiles.items():
++            _require(
++                isinstance(profile_name, str) and _SAFE_ID_RE.fullmatch(profile_name) is not None,
++                f"{bundle_id}: unsafe profile {profile_name!r}",
++            )
++            _require(
++                isinstance(profile, Mapping) and set(profile) == set(_COMPONENTS),
++                f"{bundle_id}/{profile_name}: must map exactly the four graph components",
++            )
++            for component, declaration in profile.items():
++                _require(
++                    isinstance(declaration, Mapping),
++                    f"{bundle_id}/{profile_name}/{component}: graph declaration must be an object",
++                )
++                _safe_path(declaration.get("path"), f"{bundle_id}/{profile_name}/{component}")
++                _require(
++                    isinstance(declaration.get("quality"), str) and declaration["quality"],
++                    f"{bundle_id}/{profile_name}/{component}: quality is required",
++                )
++        static = bundle.get("static_artifacts", {})
++        _require(isinstance(static, Mapping), f"{bundle_id}: static_artifacts must be an object")
++        for role, path in static.items():
++            _require(
++                isinstance(role, str) and role not in {"graph", "external_data"},
++                f"{bundle_id}: invalid static artifact role {role!r}",
++            )
++            _safe_path(path, f"{bundle_id}/{role}")
++    return cast(Mapping[str, Any], bundles)
++
++
++def _resolve_artifact(
++    repository: str, revision: str, path: str, tree: Mapping[str, Mapping[str, Any]]
++) -> dict[str, Any]:
++    _require(path in tree, f"Requested upstream artifact does not exist: {path}")
++    metadata = tree[path]
++    size, sha256 = _artifact_integrity(repository, revision, path, metadata)
++    return {
++        "path": path,
++        "url": huggingface_resolve_url(repository, revision, path),
++        "size": size,
++        "sha256": sha256,
++    }
++
++
++def build_catalog(seed: Any | None = None) -> dict[str, Any]:
++    """Resolve seed revisions and materialize a normalized deterministic catalog."""
++    if seed is None:
++        try:
++            seed = json.loads(DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
++        except (OSError, json.JSONDecodeError) as exc:
++            raise CatalogError(f"Unable to load Chatterbox seed: {DEFAULT_SEED_PATH}") from exc
++    seeds = _validate_seed(seed)
++    bundles: dict[str, Any] = {}
++    for bundle_id in sorted(seeds):
++        spec = seeds[bundle_id]
++        source_spec = spec["source"]
++        repository = source_spec["repository"]
++        requested = source_spec["requested_revision"]
++        revision = resolve_revision(repository, requested)
++        tree = _repository_tree(repository, revision)
++        artifacts: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
++
++        def add(
++            role: str,
++            component: str | None,
++            quality: str | None,
++            path: str,
++            *,
++            artifact_map: dict[tuple[str, str | None, str | None], dict[str, Any]] = artifacts,
++            bundle_name: str = bundle_id,
++            source_repository: str = repository,
++            source_revision: str = revision,
++            repository_tree: Mapping[str, Mapping[str, Any]] = tree,
++        ) -> None:
++            key = (role, component, quality)
++            existing = artifact_map.get(key)
++            if existing is not None:
++                _require(
++                    existing["source_path"] == path,
++                    f"{bundle_name}: duplicate artifact role/component/profile {key!r}",
++                )
++                return
++            record = _resolve_artifact(source_repository, source_revision, path, repository_tree)
++            artifact_map[key] = {
++                "role": role,
++                "component": component,
++                "quality": quality,
++                "filename": PurePosixPath(path).name,
++                "source_path": path,
++                "url": record["url"],
++                "size": record["size"],
++                "sha256": record["sha256"],
++            }
++
++        add("tokenizer", None, None, spec["frontend"]["tokenizer_path"])
++        for role, path in sorted(spec.get("static_artifacts", {}).items()):
++            add(role, None, None, path)
++        profile_maps: dict[str, dict[str, str]] = {}
++        for profile_name, profile in sorted(spec["profiles"].items()):
++            profile_maps[profile_name] = {}
++            for component in _COMPONENTS:
++                declaration = profile[component]
++                path, quality = declaration["path"], declaration["quality"]
++                add("graph", component, quality, path)
++                companions = [
++                    candidate for candidate in (path + "_data", path + ".data") if candidate in tree
++                ]
++                _require(
++                    len(companions) <= 1,
++                    f"{bundle_id}/{profile_name}/{component}: ambiguous external-data companions",
++                )
++                if companions:
++                    add("external_data", component, quality, companions[0])
++                profile_maps[profile_name][component] = quality
++        ordered_artifacts = sorted(
++            artifacts.values(),
++            key=lambda row: (
++                row["role"],
++                row["component"] or "",
++                row["quality"] or "",
++                row["source_path"],
++            ),
++        )
++        bundle = {
++            "id": bundle_id,
++            "system": "chatterbox",
++            "aliases": sorted(spec.get("aliases", [])),
++            "language": spec["language"],
++            "sample_rate": spec["sample_rate"],
++            "default_profile": spec["default_profile"],
++            "source": {
++                "provider": "huggingface",
++                "repository": repository,
++                "requested_revision": requested,
++                "revision": revision,
++            },
++            "frontend": dict(spec["frontend"]),
++            "runtime": dict(spec["runtime"]),
++            "profiles": profile_maps,
++            "artifacts": ordered_artifacts,
++        }
++        bundles[bundle_id] = bundle
++    catalog = {"schema": 1, "kind": "chatterbox-onnx-bundle-catalog", "bundles": bundles}
++    verify_catalog(catalog)
++    return catalog
++
++
++def build_source(catalog: Mapping[str, Any]) -> dict[str, Any]:
++    """Build deterministic source provenance and counts for a normalized catalog."""
++    try:
++        _parse_chatterbox(catalog)
++    except (TypeError, ValueError, OnnxCatalogError) as exc:
++        raise CatalogError(str(exc)) from exc
++    bundles = catalog["bundles"]
++    sources = []
++    artifact_count = 0
++    for bundle_id, bundle in sorted(bundles.items()):
++        artifact_count += len(bundle["artifacts"])
++        sources.append({"id": bundle_id, **dict(bundle["source"])})
++    return {
++        "schema": 1,
++        "kind": "chatterbox-onnx-source-snapshot",
++        "bundle_count": len(bundles),
++        "artifact_count": artifact_count,
++        "sources": sources,
++    }
++
++
++def verify_catalog(catalog: Any, source: Any | None = None) -> None:
++    """Verify normalized catalog structure and optional source summary offline."""
++    try:
++        _parse_chatterbox(catalog)
++    except (TypeError, ValueError, OnnxCatalogError) as exc:
++        raise CatalogError(str(exc)) from exc
++    if source is not None:
++        _require(isinstance(source, Mapping), "Chatterbox source metadata must be an object")
++        expected = build_source(cast(Mapping[str, Any], catalog))
++        _require(source == expected, "Source metadata does not match catalog revisions/counts")
++
++
++def load_catalog(path: Path, source_path: Path | None = None) -> dict[str, Any]:
++    """Load and verify a generated catalog and optional provenance file."""
++    try:
++        catalog = json.loads(path.read_text(encoding="utf-8"))
++        source = json.loads(source_path.read_text(encoding="utf-8")) if source_path else None
++    except (OSError, json.JSONDecodeError) as exc:
++        raise CatalogError(f"Unable to read Chatterbox catalog: {path}") from exc
++    verify_catalog(catalog, source)
++    return cast(dict[str, Any], catalog)
++
++
++def canonical_json(data: Any) -> bytes:
++    """Serialize JSON in deterministic compact key order for reproducible generation."""
++    return (
++        json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
++    ).encode()
+diff --git a/onnxvoice/catalog_tools/chatterbox_seed.json b/onnxvoice/catalog_tools/chatterbox_seed.json
+new file mode 100644
+index 0000000..9bf2417
+--- /dev/null
++++ b/onnxvoice/catalog_tools/chatterbox_seed.json
+@@ -0,0 +1,142 @@
++{
++  "schema": 1,
++  "kind": "chatterbox-onnx-bundle-seed",
++  "bundles": {
++    "nano-v2": {
++      "id": "nano-v2",
++      "aliases": ["nano", "nano-110m"],
++      "language": "en",
++      "sample_rate": 24000,
++      "default_profile": "cpu",
++      "source": {
++        "provider": "huggingface",
++        "repository": "KitsuMate/chatterbox-nano-v2-onnx",
++        "requested_revision": "main",
++        "license": "mit"
++      },
++      "frontend": {
++        "tokenizer_role": "tokenizer",
++        "tokenizer_path": "tokenizer.json",
++        "tokenizer_contract": "nano-v2"
++      },
++      "runtime": {
++        "start_speech_token": 6561,
++        "stop_speech_token": 6562,
++        "silence_token": 4299,
++        "trailing_silence_tokens": 3,
++        "default_max_new_tokens": 1024,
++        "default_repetition_penalty": 1.2
++      },
++      "static_artifacts": {
++        "tokenizer_config": "tokenizer_config.json",
++        "upstream_manifest": "manifest.json"
++      },
++      "profiles": {
++        "fp32": {
++          "speech_encoder": {
++            "path": "onnx/speech_encoder.onnx",
++            "quality": "fp32"
++          },
++          "embed_tokens": {
++            "path": "onnx/embed_tokens.onnx",
++            "quality": "fp32"
++          },
++          "language_model": {
++            "path": "onnx/language_model.onnx",
++            "quality": "fp32"
++          },
++          "conditional_decoder": {
++            "path": "onnx/conditional_decoder.onnx",
++            "quality": "fp32"
++          }
++        },
++        "cpu": {
++          "speech_encoder": {
++            "path": "onnx/speech_encoder.onnx",
++            "quality": "fp32"
++          },
++          "embed_tokens": {
++            "path": "onnx/embed_tokens.onnx",
++            "quality": "fp32"
++          },
++          "language_model": {
++            "path": "onnx/language_model_int8_mixed.onnx",
++            "quality": "int8_mixed"
++          },
++          "conditional_decoder": {
++            "path": "onnx/conditional_decoder_int8.onnx",
++            "quality": "int8"
++          }
++        }
++      }
++    },
++    "turbo": {
++      "id": "turbo",
++      "aliases": ["turbo-350m"],
++      "language": "en",
++      "sample_rate": 24000,
++      "default_profile": "fp32",
++      "source": {
++        "provider": "huggingface",
++        "repository": "ResembleAI/chatterbox-turbo-ONNX",
++        "requested_revision": "main",
++        "license": "mit"
++      },
++      "frontend": {
++        "tokenizer_role": "tokenizer",
++        "tokenizer_path": "tokenizer.json",
++        "tokenizer_contract": "turbo"
++      },
++      "runtime": {
++        "start_speech_token": 6561,
++        "stop_speech_token": 6562,
++        "silence_token": 4299,
++        "trailing_silence_tokens": 3,
++        "default_max_new_tokens": 1024,
++        "default_repetition_penalty": 1.2
++      },
++      "static_artifacts": {
++        "model_config": "config.json",
++        "generation_config": "generation_config.json"
++      },
++      "profiles": {
++        "fp32": {
++          "speech_encoder": {
++            "path": "onnx/speech_encoder.onnx",
++            "quality": "fp32"
++          },
++          "embed_tokens": {
++            "path": "onnx/embed_tokens.onnx",
++            "quality": "fp32"
++          },
++          "language_model": {
++            "path": "onnx/language_model.onnx",
++            "quality": "fp32"
++          },
++          "conditional_decoder": {
++            "path": "onnx/conditional_decoder.onnx",
++            "quality": "fp32"
++          }
++        },
++        "q4f16": {
++          "speech_encoder": {
++            "path": "onnx/speech_encoder_q4f16.onnx",
++            "quality": "q4f16"
++          },
++          "embed_tokens": {
++            "path": "onnx/embed_tokens_q4f16.onnx",
++            "quality": "q4f16"
++          },
++          "language_model": {
++            "path": "onnx/language_model_q4f16.onnx",
++            "quality": "q4f16"
++          },
++          "conditional_decoder": {
++            "path": "onnx/conditional_decoder_q4f16.onnx",
++            "quality": "q4f16"
++          }
++        }
++      }
++    }
++  }
++}
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 6dc6543..0022de9 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -7,6 +7,7 @@ from pathlib import Path
+ from typing import Any
+
+ from ._install_progress import InstallProgress
++from .catalog_tools import chatterbox as chatterbox_catalog_tools
+ from .catalog_tools import kitten as kitten_catalog_tools
+ from .catalog_tools import pocket as pocket_catalog_tools
+ from .catalog_tools import qwen3 as qwen3_catalog_tools
+@@ -275,6 +276,19 @@ def build_parser() -> argparse.ArgumentParser:
+     qwen3_verify_parser = qwen3_sub.add_parser("verify", help="Verify a Qwen3 catalog offline")
+     qwen3_verify_parser.add_argument("--catalog", type=Path, required=True)
+     qwen3_verify_parser.add_argument("--source", type=Path)
++    chatterbox_parser = catalog_sub.add_parser(
++        "chatterbox", help="Manage cleanroom Chatterbox ONNX bundles"
++    )
++    chatterbox_sub = chatterbox_parser.add_subparsers(dest="catalog_action", required=True)
++    chatterbox_build = chatterbox_sub.add_parser("build", help="Build a pinned Chatterbox catalog")
++    chatterbox_build.add_argument("--seed", type=Path, required=True)
++    chatterbox_build.add_argument("--output", type=Path, required=True)
++    chatterbox_build.add_argument("--source-output", type=Path, required=True)
++    chatterbox_verify = chatterbox_sub.add_parser(
++        "verify", help="Verify a Chatterbox catalog offline"
++    )
++    chatterbox_verify.add_argument("--catalog", type=Path, required=True)
++    chatterbox_verify.add_argument("--source", type=Path, required=True)
+     return parser
+
+
+@@ -947,6 +961,20 @@ def main(argv: list[str] | None = None) -> int:
+                     catalog = qwen3_catalog_tools.load_catalog(args.catalog, args.source)
+                     print(f"Verified {len(catalog['bundles'])} Qwen3 bundles")
+                     return 0
++            elif args.catalog_system == "chatterbox":
++                if args.catalog_action == "build":
++                    seed = json.loads(args.seed.read_text(encoding="utf-8"))
++                    catalog = chatterbox_catalog_tools.build_catalog(seed)
++                    source = chatterbox_catalog_tools.build_source(catalog)
++                    chatterbox_catalog_tools.verify_catalog(catalog, source)
++                    _write_json(args.output, catalog)
++                    _write_json(args.source_output, source)
++                    print(f"Wrote {len(catalog['bundles'])} Chatterbox bundles to {args.output}")
++                    return 0
++                if args.catalog_action == "verify":
++                    catalog = chatterbox_catalog_tools.load_catalog(args.catalog, args.source)
++                    print(f"Verified {len(catalog['bundles'])} Chatterbox bundles")
++                    return 0
+             else:
+                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
+
+diff --git a/onnxvoice/systems/__init__.py b/onnxvoice/systems/__init__.py
+index 92469b6..544ffa5 100644
+--- a/onnxvoice/systems/__init__.py
++++ b/onnxvoice/systems/__init__.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+
+ from ..errors import UnsupportedSystemError
+ from .base import SystemAdapter
++from .chatterbox import ChatterboxAdapter, ChatterboxVoiceState
+ from .inflect import InflectAdapter
+ from .kitten import KittenAdapter
+ from .kokoro import KokoroAdapter
+@@ -27,6 +28,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
+     KittenAdapter.system: KittenAdapter,
+     InflectAdapter.system: InflectAdapter,
+     Qwen3Adapter.system: Qwen3Adapter,
++    ChatterboxAdapter.system: ChatterboxAdapter,
+ }
+
+
+@@ -59,6 +61,8 @@ __all__ = [
+     "SoproStreamChunk",
+     "KittenAdapter",
+     "Qwen3Adapter",
++    "ChatterboxAdapter",
++    "ChatterboxVoiceState",
+     "Qwen3VoiceState",
+     "InflectAdapter",
+     "SplitKokoroRuntime",
+diff --git a/onnxvoice/systems/chatterbox.py b/onnxvoice/systems/chatterbox.py
+new file mode 100644
+index 0000000..f63bb1c
+--- /dev/null
++++ b/onnxvoice/systems/chatterbox.py
+@@ -0,0 +1,798 @@
++"""Cleanroom Chatterbox four-graph ONNX runtime adapter."""
++
++from __future__ import annotations
++
++import math
++import re
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass
++from typing import Any
++
++import numpy as np
++
++from ..errors import RuntimeContractError
++from ..runtime import OnnxSession
++from ..types import InferenceResult, Installation, TensorSpec
++from .base import SystemAdapter
++
++_STATE_KINDS = ("key", "value")
++_DTYPE_NAMES: dict[str, np.dtype[Any]] = {
++    "tensor(float)": np.dtype(np.float32),
++    "tensor(float16)": np.dtype(np.float16),
++    "tensor(double)": np.dtype(np.float64),
++    "tensor(int64)": np.dtype(np.int64),
++    "tensor(int32)": np.dtype(np.int32),
++    "tensor(int16)": np.dtype(np.int16),
++    "tensor(int8)": np.dtype(np.int8),
++    "tensor(uint8)": np.dtype(np.uint8),
++    "tensor(bool)": np.dtype(np.bool_),
++}
++
++
++@dataclass(frozen=True, slots=True, init=False)
++class ChatterboxVoiceState:
++    """Immutable encoder outputs reusable for multiple synthesis calls."""
++
++    cond_emb: np.ndarray
++    prompt_token: np.ndarray
++    speaker_embeddings: np.ndarray
++    speaker_features: np.ndarray
++
++    def __init__(
++        self,
++        cond_emb: Any,
++        prompt_token: Any,
++        speaker_embeddings: Any,
++        speaker_features: Any,
++    ) -> None:
++        for name, value, dtype in (
++            ("cond_emb", cond_emb, np.float32),
++            ("prompt_token", prompt_token, np.int64),
++            ("speaker_embeddings", speaker_embeddings, np.float32),
++            ("speaker_features", speaker_features, np.float32),
++        ):
++            array = np.array(value, dtype=dtype, copy=True, order="C")
++            if array.size == 0:
++                raise RuntimeContractError(f"Chatterbox voice {name} cannot be empty")
++            if name == "prompt_token":
++                if not np.issubdtype(np.asarray(value).dtype, np.integer):
++                    raise RuntimeContractError("Chatterbox prompt speech tokens must be integers")
++                if any(int(token) < 0 for token in array.ravel()):
++                    raise RuntimeContractError(
++                        "Chatterbox prompt speech tokens must be non-negative"
++                    )
++            elif not np.isfinite(array).all():
++                raise RuntimeContractError(f"Chatterbox voice {name} must be finite")
++            array.setflags(write=False)
++            object.__setattr__(self, name, array)
++
++
++@dataclass(frozen=True, slots=True)
++class ChatterboxGenerationConfig:
++    """Deterministic generation settings owned by the ONNX adapter."""
++
++    max_new_tokens: int = 1024
++    repetition_penalty: float = 1.2
++
++    def __post_init__(self) -> None:
++        if type(self.max_new_tokens) is not int or self.max_new_tokens <= 0:
++            raise ValueError("max_new_tokens must be a positive integer")
++        if (
++            isinstance(self.repetition_penalty, bool)
++            or not isinstance(self.repetition_penalty, (int, float))
++            or not math.isfinite(self.repetition_penalty)
++            or self.repetition_penalty <= 0
++        ):
++            raise ValueError("repetition_penalty must be a positive finite number")
++
++
++@dataclass(frozen=True, slots=True)
++class _KvBinding:
++    input_name: str
++    output_name: str
++    input_spec: TensorSpec
++    output_spec: TensorSpec
++    sequence_axis: int
++    dtype: np.dtype[Any]
++    layer: int
++    kind: str
++
++
++class ChatterboxAdapter(SystemAdapter):
++    """Lazy, graph-contract-checked adapter for Chatterbox Nano v2 and Turbo."""
++
++    system = "chatterbox"
++
++    def __init__(self, installation: Installation, **kwargs: Any) -> None:
++        super().__init__(installation, **kwargs)
++        self._sessions: dict[str, OnnxSession] = {}
++        runtime = installation.metadata.get("runtime") or {}
++        self._runtime = dict(runtime) if isinstance(runtime, Mapping) else {}
++        self._kv_bindings: tuple[_KvBinding, ...] | None = None
++        self._logits_output: str | None = None
++        sample_rate = installation.sample_rate
++        if sample_rate is None:
++            sample_rate = self._runtime.get("sample_rate")
++        if type(sample_rate) is not int or sample_rate <= 0:
++            raise RuntimeContractError(
++                "Chatterbox installation must declare a positive sample rate"
++            )
++        self._sample_rate: int = sample_rate
++        for field in ("start_speech_token", "stop_speech_token", "silence_token"):
++            if type(self._runtime.get(field)) is not int or self._runtime[field] < 0:
++                raise RuntimeContractError(f"Chatterbox runtime metadata is missing {field}")
++        if (
++            type(self._runtime.get("trailing_silence_tokens")) is not int
++            or self._runtime["trailing_silence_tokens"] < 0
++        ):
++            raise RuntimeContractError(
++                "Chatterbox runtime metadata has invalid trailing_silence_tokens"
++            )
++
++    @staticmethod
++    def _specs(session: Any, attribute: str, component: str) -> tuple[TensorSpec, ...]:
++        specs = getattr(session, attribute, None)
++        if not isinstance(specs, (tuple, list)) or not specs:
++            raise RuntimeContractError(f"Chatterbox {component} graph does not expose {attribute}")
++        if any(not isinstance(spec, TensorSpec) for spec in specs):
++            raise RuntimeContractError(
++                f"Chatterbox {component} graph has malformed tensor metadata"
++            )
++        names = [spec.name for spec in specs]
++        if len(names) != len(set(names)) or any(not name for name in names):
++            raise RuntimeContractError(
++                f"Chatterbox {component} graph has duplicate or empty tensor names"
++            )
++        return tuple(specs)
++
++    @staticmethod
++    def _require_names(actual: set[str], required: set[str], component: str) -> None:
++        missing = sorted(required - actual)
++        if missing:
++            raise RuntimeContractError(
++                f"Chatterbox {component} graph is missing required inputs: {', '.join(missing)}"
++            )
++
++    @staticmethod
++    def _dtype(spec: TensorSpec, component: str) -> np.dtype[Any]:
++        dtype = _DTYPE_NAMES.get(spec.ort_type)
++        if dtype is None:
++            raise RuntimeContractError(
++                f"Chatterbox {component} graph tensor {spec.name!r} uses unsupported dtype {spec.ort_type!r}"
++            )
++        return dtype
++
++    @classmethod
++    def _require_dtype(cls, spec: TensorSpec, component: str, kind: str) -> None:
++        dtype = cls._dtype(spec, component)
++        if kind == "floating":
++            valid = np.issubdtype(dtype, np.floating)
++        elif kind == "integer":
++            valid = np.issubdtype(dtype, np.integer)
++        elif kind == "mask":
++            valid = np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.bool_)
++        else:
++            raise ValueError(f"Unknown tensor dtype category {kind!r}")
++        if not valid:
++            raise RuntimeContractError(
++                f"Chatterbox {component} tensor {spec.name!r} must use a {kind} dtype, got {spec.ort_type!r}"
++            )
++
++    @staticmethod
++    def _named_outputs(
++        session: Any, outputs: Sequence[Any], component: str
++    ) -> dict[str, np.ndarray]:
++        specs = ChatterboxAdapter._specs(session, "output_specs", component)
++        if len(outputs) != len(specs):
++            raise RuntimeContractError(
++                f"Chatterbox {component} returned {len(outputs)} outputs for {len(specs)} declared outputs"
++            )
++        result: dict[str, np.ndarray] = {}
++        try:
++            for spec, value in zip(specs, outputs, strict=True):
++                array = np.asarray(value)
++                expected_dtype = _DTYPE_NAMES.get(spec.ort_type)
++                if expected_dtype is not None and array.dtype != expected_dtype:
++                    raise RuntimeContractError(
++                        f"Chatterbox {component} output {spec.name!r} dtype {array.dtype} "
++                        f"does not match declared {spec.ort_type}"
++                    )
++                result[spec.name] = array
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError(
++                f"Chatterbox {component} returned malformed outputs"
++            ) from exc
++        return result
++
++    @staticmethod
++    def _find_named_output(
++        outputs: Mapping[str, np.ndarray], candidates: Sequence[str], *, label: str
++    ) -> str:
++        by_fold = {name.casefold(): name for name in outputs}
++        for candidate in candidates:
++            if candidate.casefold() in by_fold:
++                return by_fold[candidate.casefold()]
++        if len(outputs) == 1:
++            return next(iter(outputs))
++        raise RuntimeContractError(
++            f"Chatterbox {label} output is not identifiable from graph metadata: {', '.join(outputs)}"
++        )
++
++    @staticmethod
++    def _kv_signature(name: str) -> tuple[int, str] | None:
++        folded = name.casefold()
++        if "past" not in folded and "present" not in folded:
++            return None
++        kind_matches = re.findall(r"(?:^|[._/])(key|value)(?:$|[._/])", folded)
++        layer_match = re.search(r"(?:past|present)[^0-9]*([0-9]+)", folded)
++        if not kind_matches or layer_match is None:
++            raise RuntimeContractError(f"Unrecognized Chatterbox KV tensor name {name!r}")
++        return int(layer_match.group(1)), kind_matches[-1]
++
++    @staticmethod
++    def _past_input(name: str) -> bool:
++        folded = name.casefold()
++        return "past_key_values" in folded or "past." in folded or folded.startswith("past_")
++
++    @staticmethod
++    def _sequence_axis(spec: TensorSpec) -> int:
++        if len(spec.shape) < 3:
++            raise RuntimeContractError(
++                f"Chatterbox KV tensor {spec.name!r} must have rank at least 3"
++            )
++        named = [
++            axis
++            for axis, dim in enumerate(spec.shape)
++            if isinstance(dim, str)
++            and any(part in dim.casefold() for part in ("seq", "past", "cache"))
++        ]
++        if len(named) != 1 or named[0] == 0:
++            raise RuntimeContractError(
++                f"Chatterbox KV tensor {spec.name!r} has no unique named sequence dimension"
++            )
++        return named[0]
++
++    def _validate_language_model(self, session: Any) -> None:
++        if self._kv_bindings is not None:
++            return
++        inputs = self._specs(session, "input_specs", "language_model")
++        outputs = self._specs(session, "output_specs", "language_model")
++        input_names = {spec.name for spec in inputs}
++        self._require_names(input_names, {"inputs_embeds", "attention_mask"}, "language_model")
++        input_specs = {spec.name: spec for spec in inputs}
++        self._require_dtype(input_specs["inputs_embeds"], "language_model", "floating")
++        self._require_dtype(input_specs["attention_mask"], "language_model", "mask")
++        if "position_ids" in input_specs:
++            self._require_dtype(input_specs["position_ids"], "language_model", "integer")
++        past_specs = [spec for spec in inputs if self._past_input(spec.name)]
++        signatures: dict[tuple[int, str], TensorSpec] = {}
++        for spec in past_specs:
++            signature = self._kv_signature(spec.name)
++            self._require_dtype(spec, "language_model", "floating")
++            if signature is None or signature in signatures:
++                raise RuntimeContractError("Chatterbox language_model has ambiguous past-KV inputs")
++            signatures[signature] = spec
++        if not signatures:
++            raise RuntimeContractError(
++                "Chatterbox language_model graph declares no past-key/value inputs"
++            )
++        layers = {layer for layer, _ in signatures}
++        expected_signatures = {(layer, kind) for layer in layers for kind in _STATE_KINDS}
++        if (
++            not layers
++            or layers != set(range(max(layers) + 1))
++            or set(signatures) != expected_signatures
++        ):
++            raise RuntimeContractError(
++                "Chatterbox language_model past-KV inputs must contain complete key/value layers"
++            )
++        present_specs: dict[tuple[int, str], TensorSpec] = {}
++        for spec in outputs:
++            if "present" not in spec.name.casefold():
++                continue
++            signature = self._kv_signature(spec.name)
++            if signature is None or signature in present_specs:
++                raise RuntimeContractError(
++                    "Chatterbox language_model has ambiguous present-KV outputs"
++                )
++            present_specs[signature] = spec
++        if set(signatures) != set(present_specs):
++            raise RuntimeContractError(
++                "Chatterbox language_model past/present KV layouts do not match"
++            )
++        bindings: list[_KvBinding] = []
++        for signature in sorted(signatures):
++            input_spec = signatures[signature]
++            output_spec = present_specs[signature]
++            sequence_axis = self._sequence_axis(input_spec)
++            if self._sequence_axis(output_spec) != sequence_axis:
++                raise RuntimeContractError("Chatterbox past/present KV sequence axes differ")
++            if (
++                isinstance(input_spec.shape[sequence_axis], int)
++                and input_spec.shape[sequence_axis] > 0
++            ):
++                raise RuntimeContractError("Chatterbox past-KV sequence dimension must be dynamic")
++            input_dtype = self._dtype(input_spec, "language_model")
++            output_dtype = _DTYPE_NAMES.get(output_spec.ort_type)
++            if output_dtype != input_dtype:
++                raise RuntimeContractError(
++                    f"Chatterbox KV input/output dtype mismatch for {input_spec.name!r}"
++                )
++            bindings.append(
++                _KvBinding(
++                    input_spec.name,
++                    output_spec.name,
++                    input_spec,
++                    output_spec,
++                    sequence_axis,
++                    input_dtype,
++                    signature[0],
++                    signature[1],
++                )
++            )
++        non_kv_outputs = [
++            spec.name
++            for spec in outputs
++            if spec.name not in {item.name for item in present_specs.values()}
++        ]
++        if not non_kv_outputs:
++            raise RuntimeContractError("Chatterbox language_model graph has no logits output")
++        logits = self._find_named_output(
++            {name: np.empty(0) for name in non_kv_outputs},
++            ("logits", "speech_logits"),
++            label="language_model logits",
++        )
++        logits_spec = next(spec for spec in outputs if spec.name == logits)
++        self._require_dtype(logits_spec, "language_model", "floating")
++        allowed = {
++            "inputs_embeds",
++            "attention_mask",
++            "position_ids",
++            *(spec.name for spec in past_specs),
++        }
++        unexpected_inputs = input_names - allowed
++        if unexpected_inputs:
++            raise RuntimeContractError(
++                "Chatterbox language_model declares unsupported inputs: "
++                + ", ".join(sorted(unexpected_inputs))
++            )
++        self._kv_bindings = tuple(bindings)
++        self._logits_output = logits
++
++    def _validate_graph(self, component: str, session: Any) -> None:
++        inputs = self._specs(session, "input_specs", component)
++        outputs = self._specs(session, "output_specs", component)
++        names = {spec.name for spec in inputs}
++        output_names = {spec.name for spec in outputs}
++        if component == "speech_encoder":
++            self._require_names(names, {"audio_values"}, component)
++            required_outputs = {
++                "cond_emb",
++                "prompt_token",
++                "speaker_embeddings",
++                "speaker_features",
++            }
++            missing = required_outputs - output_names
++            if missing:
++                raise RuntimeContractError(
++                    "Chatterbox speech_encoder is missing required outputs: "
++                    + ", ".join(sorted(missing))
++                )
++            if names != {"audio_values"}:
++                raise RuntimeContractError("Chatterbox speech_encoder declares unsupported inputs")
++            input_specs = {spec.name: spec for spec in inputs}
++            output_specs = {spec.name: spec for spec in outputs}
++            self._require_dtype(input_specs["audio_values"], component, "floating")
++            self._require_dtype(output_specs["cond_emb"], component, "floating")
++            self._require_dtype(output_specs["prompt_token"], component, "integer")
++            self._require_dtype(output_specs["speaker_embeddings"], component, "floating")
++            self._require_dtype(output_specs["speaker_features"], component, "floating")
++        elif component == "embed_tokens":
++            self._require_names(names, {"input_ids"}, component)
++            input_specs = {spec.name: spec for spec in inputs}
++            output_specs = {spec.name: spec for spec in outputs}
++            self._require_dtype(input_specs["input_ids"], component, "integer")
++            if "position_ids" in input_specs:
++                self._require_dtype(input_specs["position_ids"], component, "integer")
++            output_name = self._find_named_output(
++                {name: np.empty(0) for name in output_names},
++                ("inputs_embeds", "embeddings", "token_embeddings"),
++                label="embed_tokens",
++            )
++            self._require_dtype(output_specs[output_name], component, "floating")
++            if names - {"input_ids", "position_ids"}:
++                raise RuntimeContractError("Chatterbox embed_tokens declares unsupported inputs")
++            self._find_named_output(
++                {name: np.empty(0) for name in output_names},
++                ("inputs_embeds", "embeddings", "token_embeddings"),
++                label="embed_tokens",
++            )
++        elif component == "language_model":
++            self._validate_language_model(session)
++        elif component == "conditional_decoder":
++            self._require_names(
++                names, {"speech_tokens", "speaker_embeddings", "speaker_features"}, component
++            )
++            input_specs = {spec.name: spec for spec in inputs}
++            output_specs = {spec.name: spec for spec in outputs}
++            self._require_dtype(input_specs["speech_tokens"], component, "integer")
++            self._require_dtype(input_specs["speaker_embeddings"], component, "floating")
++            self._require_dtype(input_specs["speaker_features"], component, "floating")
++            output_name = self._find_named_output(
++                {name: np.empty(0) for name in output_names},
++                ("audio", "waveform", "wav", "output"),
++                label="decoder audio",
++            )
++            self._require_dtype(output_specs[output_name], component, "floating")
++            if names != {"speech_tokens", "speaker_embeddings", "speaker_features"}:
++                raise RuntimeContractError(
++                    "Chatterbox conditional_decoder declares unsupported inputs"
++                )
++            self._find_named_output(
++                {name: np.empty(0) for name in output_names},
++                ("audio", "waveform", "wav", "output"),
++                label="conditional_decoder",
++            )
++        else:
++            raise RuntimeContractError(f"Unknown Chatterbox graph component {component!r}")
++
++    def _get_session(self, component: str) -> OnnxSession:
++        existing = self._sessions.get(component)
++        if existing is not None:
++            return existing
++        matches = self.installation.artifacts_for("graph", component=component)
++        if len(matches) != 1:
++            raise RuntimeContractError(
++                f"Chatterbox installation requires exactly one {component} graph; found {len(matches)}"
++            )
++        session = OnnxSession(
++            matches[0].path,
++            component=component,
++            providers=self.providers,
++            provider_options=self.provider_options,
++            session_options=self.session_options,
++        )
++        try:
++            self._validate_graph(component, session)
++        except Exception:
++            session.close()
++            raise
++        self._sessions[component] = session
++        return session
++
++    @staticmethod
++    def _run(session: Any, feeds: dict[str, np.ndarray], component: str) -> dict[str, np.ndarray]:
++        try:
++            values = session.run(feeds)
++        except Exception as exc:
++            raise RuntimeContractError(f"Chatterbox {component} inference failed: {exc}") from exc
++        if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
++            raise RuntimeContractError(f"Chatterbox {component} returned invalid outputs")
++        return ChatterboxAdapter._named_outputs(session, values, component)
++
++    @staticmethod
++    def _cast_feed(value: Any, spec: TensorSpec, component: str) -> np.ndarray:
++        return np.ascontiguousarray(
++            np.asarray(value, dtype=ChatterboxAdapter._dtype(spec, component))
++        )
++
++    @staticmethod
++    def _output(
++        outputs: Mapping[str, np.ndarray], candidates: Sequence[str], *, label: str
++    ) -> np.ndarray:
++        name = ChatterboxAdapter._find_named_output(outputs, candidates, label=label)
++        return outputs[name]
++
++    def prepare_voice(self, audio_values: np.ndarray) -> ChatterboxVoiceState:
++        """Encode normalized, native-rate mono audio once for reusable conditioning."""
++        audio = np.asarray(audio_values, dtype=np.float32)
++        if audio.ndim != 1 or audio.size == 0 or not np.isfinite(audio).all():
++            raise RuntimeContractError(
++                "Chatterbox reference audio must be non-empty finite mono float32"
++            )
++        session = self._get_session("speech_encoder")
++        specs = {spec.name: spec for spec in self._specs(session, "input_specs", "speech_encoder")}
++        audio_spec = specs["audio_values"]
++        if len(audio_spec.shape) == 2:
++            feed_audio = audio.reshape(1, -1)
++        elif len(audio_spec.shape) == 1:
++            feed_audio = audio
++        else:
++            raise RuntimeContractError(
++                f"Chatterbox speech_encoder audio_values rank {len(audio_spec.shape)} is unsupported"
++            )
++        outputs = self._run(
++            session,
++            {"audio_values": self._cast_feed(feed_audio, audio_spec, "speech_encoder")},
++            "speech_encoder",
++        )
++        return ChatterboxVoiceState(
++            cond_emb=self._output(outputs, ("cond_emb",), label="conditioning embedding"),
++            prompt_token=self._output(outputs, ("prompt_token",), label="prompt speech token"),
++            speaker_embeddings=self._output(
++                outputs, ("speaker_embeddings",), label="speaker embeddings"
++            ),
++            speaker_features=self._output(outputs, ("speaker_features",), label="speaker features"),
++        )
++
++    @staticmethod
++    def _validate_token_ids(token_ids: Sequence[int]) -> np.ndarray:
++        if isinstance(token_ids, (str, bytes)):
++            raise RuntimeContractError("Chatterbox token IDs must be a non-empty integer sequence")
++        try:
++            values = np.asarray(list(token_ids))
++        except (TypeError, ValueError, OverflowError) as exc:
++            raise RuntimeContractError(
++                "Chatterbox token IDs must be a non-empty integer sequence"
++            ) from exc
++        if values.ndim != 1 or values.size == 0 or not np.issubdtype(values.dtype, np.integer):
++            raise RuntimeContractError("Chatterbox token IDs must be a non-empty integer sequence")
++        if np.any(values < 0):
++            raise RuntimeContractError("Chatterbox token IDs must be non-negative")
++        return np.ascontiguousarray(values.astype(np.int64, copy=False)[None, :])
++
++    def _embed(self, token_ids: np.ndarray, position: int) -> np.ndarray:
++        session = self._get_session("embed_tokens")
++        specs = {spec.name: spec for spec in self._specs(session, "input_specs", "embed_tokens")}
++        feeds = {"input_ids": self._cast_feed(token_ids, specs["input_ids"], "embed_tokens")}
++        if "position_ids" in specs:
++            shape = specs["position_ids"].shape
++            positions = np.arange(position, position + token_ids.shape[-1], dtype=np.int64)
++            positions = positions.reshape((1,) * max(0, len(shape) - 1) + (positions.size,))
++            feeds["position_ids"] = self._cast_feed(
++                positions, specs["position_ids"], "embed_tokens"
++            )
++        outputs = self._run(session, feeds, "embed_tokens")
++        embeddings = self._output(
++            outputs, ("inputs_embeds", "embeddings", "token_embeddings"), label="token embeddings"
++        )
++        if (
++            embeddings.ndim != 3
++            or embeddings.shape[0] != 1
++            or embeddings.shape[1] != token_ids.shape[-1]
++        ):
++            raise RuntimeContractError(
++                "Chatterbox embed_tokens returned malformed embedding dimensions"
++            )
++        if not np.isfinite(embeddings).all():
++            raise RuntimeContractError("Chatterbox embed_tokens returned non-finite values")
++        return np.ascontiguousarray(embeddings)
++
++    @staticmethod
++    def _empty_kv(binding: _KvBinding) -> np.ndarray:
++        shape: list[int] = []
++        for axis, dimension in enumerate(binding.input_spec.shape):
++            if axis == 0:
++                shape.append(1)
++            elif axis == binding.sequence_axis:
++                shape.append(0)
++            elif isinstance(dimension, int) and dimension > 0:
++                shape.append(dimension)
++            else:
++                raise RuntimeContractError(
++                    f"Chatterbox KV input {binding.input_name!r} has an unresolved non-sequence dimension"
++                )
++        return np.zeros(tuple(shape), dtype=binding.dtype)
++
++    @staticmethod
++    def _position_ids(shape: tuple[Any, ...], start: int, length: int) -> np.ndarray:
++        if not 1 <= len(shape) <= 3:
++            raise RuntimeContractError("Chatterbox position_ids must have rank 1, 2, or 3")
++        positions = np.arange(start, start + length, dtype=np.int64)
++        return positions.reshape((1,) * (len(shape) - 1) + (length,))
++
++    @staticmethod
++    def _present_outputs(
++        outputs: Mapping[str, np.ndarray],
++        bindings: Sequence[_KvBinding],
++        cache: Mapping[str, np.ndarray],
++        input_length: int,
++    ) -> dict[str, np.ndarray]:
++        updated: dict[str, np.ndarray] = {}
++        for binding in bindings:
++            value = np.asarray(outputs[binding.output_name])
++            previous = cache[binding.input_name]
++            if value.ndim != previous.ndim:
++                raise RuntimeContractError(
++                    f"Chatterbox present KV {binding.output_name!r} has invalid rank"
++                )
++            expected_length = previous.shape[binding.sequence_axis] + input_length
++            if value.shape[binding.sequence_axis] != expected_length:
++                raise RuntimeContractError(
++                    f"Chatterbox present KV {binding.output_name!r} has sequence length "
++                    f"{value.shape[binding.sequence_axis]}, expected {expected_length}"
++                )
++            for axis, (actual, expected) in enumerate(
++                zip(value.shape, previous.shape, strict=True)
++            ):
++                if axis != binding.sequence_axis and actual != expected:
++                    raise RuntimeContractError(
++                        f"Chatterbox present KV {binding.output_name!r} shape changed"
++                    )
++            if not np.isfinite(value).all():
++                raise RuntimeContractError(
++                    f"Chatterbox present KV {binding.output_name!r} is non-finite"
++                )
++            updated[binding.input_name] = np.ascontiguousarray(value, dtype=binding.dtype)
++        return updated
++
++    @staticmethod
++    def _penalize(logits: np.ndarray, generated: Sequence[int], penalty: float) -> np.ndarray:
++        scores = np.asarray(logits, dtype=np.float32).copy()
++        for token in set(generated):
++            if token < 0 or token >= scores.size:
++                raise RuntimeContractError(
++                    "Chatterbox generated token is outside the logits vocabulary"
++                )
++            if scores[token] < 0:
++                scores[token] *= penalty
++            else:
++                scores[token] /= penalty
++        return scores
++
++    def _language_step(
++        self,
++        embeddings: np.ndarray,
++        mask: np.ndarray,
++        positions: np.ndarray | None,
++        cache: Mapping[str, np.ndarray],
++    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
++        session = self._get_session("language_model")
++        self._validate_language_model(session)
++        specs = {spec.name: spec for spec in self._specs(session, "input_specs", "language_model")}
++        feeds = {
++            "inputs_embeds": self._cast_feed(embeddings, specs["inputs_embeds"], "language_model"),
++            "attention_mask": self._cast_feed(mask, specs["attention_mask"], "language_model"),
++            **cache,
++        }
++        if positions is not None:
++            feeds["position_ids"] = self._cast_feed(
++                positions, specs["position_ids"], "language_model"
++            )
++        outputs = self._run(session, feeds, "language_model")
++        assert self._logits_output is not None and self._kv_bindings is not None
++        logits = np.asarray(outputs[self._logits_output], dtype=np.float32)
++        if logits.ndim != 3 or logits.shape[0] != 1 or logits.shape[1] < 1 or logits.shape[2] < 1:
++            raise RuntimeContractError("Chatterbox language_model returned malformed logits")
++        if not np.isfinite(logits).all():
++            raise RuntimeContractError("Chatterbox language_model returned non-finite logits")
++        updated = self._present_outputs(outputs, self._kv_bindings, cache, embeddings.shape[1])
++        return logits[0, -1], updated
++
++    def _decode(
++        self,
++        generated: Sequence[int],
++        voice_state: ChatterboxVoiceState,
++    ) -> np.ndarray:
++        start_token = self._runtime["start_speech_token"]
++        stop_token = self._runtime["stop_speech_token"]
++        speech = list(generated)
++        if speech and speech[0] == start_token:
++            speech = speech[1:]
++        if speech and speech[-1] == stop_token:
++            speech = speech[:-1]
++        silence = [self._runtime["silence_token"]] * self._runtime["trailing_silence_tokens"]
++        prompt = np.asarray(voice_state.prompt_token, dtype=np.int64).reshape(-1).tolist()
++        decoder_tokens = np.asarray([prompt + speech + silence], dtype=np.int64)
++        session = self._get_session("conditional_decoder")
++        specs = {
++            spec.name: spec for spec in self._specs(session, "input_specs", "conditional_decoder")
++        }
++        feeds = {
++            "speech_tokens": self._cast_feed(
++                decoder_tokens, specs["speech_tokens"], "conditional_decoder"
++            ),
++            "speaker_embeddings": self._cast_feed(
++                voice_state.speaker_embeddings, specs["speaker_embeddings"], "conditional_decoder"
++            ),
++            "speaker_features": self._cast_feed(
++                voice_state.speaker_features, specs["speaker_features"], "conditional_decoder"
++            ),
++        }
++        outputs = self._run(session, feeds, "conditional_decoder")
++        audio = self._output(outputs, ("audio", "waveform", "wav", "output"), label="decoder audio")
++        audio = np.asarray(audio, dtype=np.float32)
++        while audio.ndim > 1 and audio.shape[0] == 1:
++            audio = audio[0]
++        if audio.ndim == 2 and audio.shape[0] == 1:
++            audio = audio[0]
++        if audio.ndim != 1 or audio.size == 0 or not np.isfinite(audio).all():
++            raise RuntimeContractError("Chatterbox conditional_decoder returned invalid mono audio")
++        return np.ascontiguousarray(audio, dtype=np.float32)
++
++    def infer(
++        self,
++        token_ids: Sequence[int],
++        *,
++        voice_state: ChatterboxVoiceState | None = None,
++        max_new_tokens: int | None = None,
++        repetition_penalty: float | None = None,
++        **kwargs: Any,
++    ) -> InferenceResult:
++        """Generate speech greedily from model-ready text token IDs and prepared voice state."""
++        if kwargs:
++            raise TypeError(
++                f"Unsupported Chatterbox inference options: {', '.join(sorted(kwargs))}"
++            )
++        if not isinstance(voice_state, ChatterboxVoiceState):
++            raise RuntimeContractError("Chatterbox inference requires a ChatterboxVoiceState")
++        ids = self._validate_token_ids(token_ids)
++        config = ChatterboxGenerationConfig(
++            max_new_tokens=(
++                max_new_tokens
++                if max_new_tokens is not None
++                else self._runtime.get("default_max_new_tokens", 1024)
++            ),
++            repetition_penalty=(
++                repetition_penalty
++                if repetition_penalty is not None
++                else self._runtime.get("default_repetition_penalty", 1.2)
++            ),
++        )
++        self._get_session("embed_tokens")
++        lm_session = self._get_session("language_model")
++        self._validate_language_model(lm_session)
++        assert self._kv_bindings is not None
++        cache = {binding.input_name: self._empty_kv(binding) for binding in self._kv_bindings}
++        generated = [self._runtime["start_speech_token"]]
++        current_ids = ids
++        mask: np.ndarray | None = None
++        position_offset = 0
++        stopped = False
++        cond = np.asarray(voice_state.cond_emb, dtype=np.float32)
++        for step in range(config.max_new_tokens):
++            embeddings = self._embed(current_ids, position_offset)
++            if step == 0:
++                if cond.ndim != 3 or cond.shape[0] != 1 or not np.isfinite(cond).all():
++                    raise RuntimeContractError(
++                        "Chatterbox conditioning embedding has invalid shape or values"
++                    )
++                target_dtype = embeddings.dtype
++                if cond.shape[-1] != embeddings.shape[-1]:
++                    raise RuntimeContractError(
++                        "Chatterbox conditioning and token embedding widths differ"
++                    )
++                first = np.asarray(cond, dtype=target_dtype)
++                embeddings = np.concatenate((first, embeddings), axis=1)
++                mask = np.ones((1, embeddings.shape[1]), dtype=np.int64)
++                position_offset = embeddings.shape[1]
++            else:
++                assert mask is not None
++                mask = np.concatenate(
++                    (mask, np.ones((mask.shape[0], 1), dtype=mask.dtype)), axis=-1
++                )
++            lm_specs = {
++                spec.name: spec for spec in self._specs(lm_session, "input_specs", "language_model")
++            }
++            positions = None
++            if "position_ids" in lm_specs:
++                positions = self._position_ids(
++                    lm_specs["position_ids"].shape,
++                    0 if step == 0 else position_offset,
++                    embeddings.shape[1],
++                )
++            logits, cache = self._language_step(embeddings, mask, positions, cache)
++            scores = self._penalize(logits, generated, float(config.repetition_penalty))
++            next_token = int(np.argmax(scores))
++            generated.append(next_token)
++            if next_token == self._runtime["stop_speech_token"]:
++                stopped = True
++                break
++            current_ids = np.asarray([[next_token]], dtype=np.int64)
++            if step > 0:
++                position_offset += embeddings.shape[1]
++        audio = self._decode(generated, voice_state)
++        return InferenceResult(
++            audio=audio,
++            sample_rate=self._sample_rate,
++            outputs={"speech_tokens": np.asarray(generated, dtype=np.int64)},
++            metadata={
++                "profile": self._runtime.get("profile")
++                or self.installation.metadata.get("selected_quality"),
++                "generated_tokens": len(generated) - 1,
++                "stopped_on_eos": stopped,
++                "max_new_tokens": config.max_new_tokens,
++                "repetition_penalty": float(config.repetition_penalty),
++                "sample_rate": self._sample_rate,
++            },
++        )
+diff --git a/pyproject.toml b/pyproject.toml
+index 822d5e6..c72169b 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -7,7 +7,7 @@ where = ["."]
+ include = ["onnxvoice*"]
+
+ [tool.setuptools.package-data]
+-onnxvoice = ["py.typed", "catalog_tools/qwen3_seed.json"]
++onnxvoice = ["py.typed", "catalog_tools/qwen3_seed.json", "catalog_tools/chatterbox_seed.json"]
+
+ [project]
+ name = "onnxvoice"
+diff --git a/tests/test_chatterbox_catalog.py b/tests/test_chatterbox_catalog.py
+new file mode 100644
+index 0000000..1edd2e9
+--- /dev/null
++++ b/tests/test_chatterbox_catalog.py
+@@ -0,0 +1,222 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++import pytest
++
++from onnxvoice.catalog import DEFAULT_SOURCES, CatalogClient, _parse_chatterbox
++from onnxvoice.catalog_tools import chatterbox
++from onnxvoice.errors import AssetNotFoundError, CatalogError
++
++REVISION = "a" * 40
++DIGEST = "b" * 64
++COMPONENTS = ("speech_encoder", "embed_tokens", "language_model", "conditional_decoder")
++
++
++def seed() -> dict[str, Any]:
++    return {
++        "schema": 1,
++        "kind": "chatterbox-onnx-bundle-seed",
++        "bundles": {
++            "nano-v2": {
++                "aliases": ["nano"],
++                "language": "en",
++                "sample_rate": 24000,
++                "default_profile": "cpu",
++                "source": {
++                    "provider": "huggingface",
++                    "repository": "owner/nano",
++                    "requested_revision": REVISION,
++                },
++                "frontend": {
++                    "tokenizer_role": "tokenizer",
++                    "tokenizer_path": "tokenizer.json",
++                    "tokenizer_contract": "nano-v2",
++                },
++                "runtime": {
++                    "start_speech_token": 6561,
++                    "stop_speech_token": 6562,
++                    "silence_token": 4299,
++                    "trailing_silence_tokens": 3,
++                    "default_max_new_tokens": 1024,
++                    "default_repetition_penalty": 1.2,
++                },
++                "profiles": {
++                    "fp32": {
++                        component: {"path": f"onnx/{component}.onnx", "quality": "fp32"}
++                        for component in COMPONENTS
++                    },
++                    "cpu": {
++                        "speech_encoder": {"path": "onnx/speech_encoder.onnx", "quality": "fp32"},
++                        "embed_tokens": {"path": "onnx/embed_tokens.onnx", "quality": "fp32"},
++                        "language_model": {
++                            "path": "onnx/language_model_int8.onnx",
++                            "quality": "int8_mixed",
++                        },
++                        "conditional_decoder": {
++                            "path": "onnx/conditional_decoder_int8.onnx",
++                            "quality": "int8",
++                        },
++                    },
++                },
++            }
++        },
++    }
++
++
++def mock_tree(monkeypatch: pytest.MonkeyPatch, source_seed: dict[str, Any]) -> None:
++    paths = {"tokenizer.json"}
++    for bundle in source_seed["bundles"].values():
++        for profile in bundle["profiles"].values():
++            for declaration in profile.values():
++                path = declaration["path"]
++                paths.add(path)
++                if path.endswith("language_model.onnx"):
++                    paths.add(path + "_data")
++                if path.endswith("language_model_int8.onnx"):
++                    paths.add(path + ".data")
++    tree = {
++        path: {"path": path, "type": "file", "size": 4, "lfs": {"oid": DIGEST}} for path in paths
++    }
++    monkeypatch.setattr(chatterbox, "_repository_tree", lambda repository, revision: tree)
++
++
++def test_default_source_and_alias_profile_selection(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    raw_seed = seed()
++    mock_tree(monkeypatch, raw_seed)
++    catalog = chatterbox.build_catalog(raw_seed)
++    assert DEFAULT_SOURCES["chatterbox"].endswith(
++        "chatterbox-onnx-bundles/main/catalog/bundles.json"
++    )
++    items = _parse_chatterbox(catalog)
++    assert [item.ref for item in items] == ["chatterbox:nano-v2"]
++    catalog_path = tmp_path / "catalog.json"
++    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path, sources={"chatterbox": str(catalog_path)})
++
++    cpu = client.resolve("chatterbox:nano", quality="cpu")
++    assert cpu.selected_quality == "cpu"
++    assert cpu.metadata["frontend"]["tokenizer_contract"] == "nano-v2"
++    assert {a.component: a.quality for a in cpu.artifacts if a.role == "graph"} == {
++        "speech_encoder": "fp32",
++        "embed_tokens": "fp32",
++        "language_model": "int8_mixed",
++        "conditional_decoder": "int8",
++    }
++    assert {a.component for a in cpu.artifacts if a.role == "external_data"} == {"language_model"}
++    assert all(
++        a.quality != "fp32" or a.component in {"speech_encoder", "embed_tokens"}
++        for a in cpu.artifacts
++        if a.role == "graph"
++    )
++    fp32 = client.resolve("chatterbox:nano-v2", quality="fp32")
++    assert {a.quality for a in fp32.artifacts if a.role == "graph"} == {"fp32"}
++    with pytest.raises(AssetNotFoundError):
++        client.resolve("chatterbox:nano", quality="q4f16")
++
++
++def test_builder_creates_explicit_pinned_artifacts_and_source_counts(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    raw_seed = seed()
++    mock_tree(monkeypatch, raw_seed)
++    catalog = chatterbox.build_catalog(raw_seed)
++    source = chatterbox.build_source(catalog)
++    chatterbox.verify_catalog(catalog, source)
++    assert source["bundle_count"] == 1
++    assert source["artifact_count"] == len(catalog["bundles"]["nano-v2"]["artifacts"])
++    for artifact in catalog["bundles"]["nano-v2"]["artifacts"]:
++        assert f"/resolve/{REVISION}/" in artifact["url"]
++        assert len(artifact["sha256"]) == 64 and artifact["size"] > 0
++    assert chatterbox.canonical_json(catalog) == chatterbox.canonical_json(
++        json.loads(chatterbox.canonical_json(catalog))
++    )
++
++
++def test_builder_rejects_duplicate_alias_and_unsafe_paths() -> None:
++    duplicate = seed()
++    duplicate["bundles"]["nano-v2"]["aliases"] = ["turbo"]
++    duplicate["bundles"]["turbo"] = {"aliases": ["turbo"]}
++    with pytest.raises(chatterbox.CatalogError, match="Duplicate"):
++        chatterbox._validate_seed(duplicate)
++
++    unsafe = seed()
++    unsafe["bundles"]["nano-v2"]["profiles"]["fp32"]["speech_encoder"]["path"] = "../escape.onnx"
++    with pytest.raises(chatterbox.CatalogError, match="unsafe"):
++        chatterbox._validate_seed(unsafe)
++
++
++def test_parser_rejects_non_pinned_urls_bad_integrity_and_bad_revisions(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    raw_seed = seed()
++    mock_tree(monkeypatch, raw_seed)
++    catalog = chatterbox.build_catalog(raw_seed)
++    malformed = json.loads(json.dumps(catalog))
++    malformed["bundles"]["nano-v2"]["source"]["revision"] = "main"
++    with pytest.raises(CatalogError, match="revision"):
++        _parse_chatterbox(malformed)
++
++    malformed = json.loads(json.dumps(catalog))
++    malformed["bundles"]["nano-v2"]["artifacts"][0]["url"] = (
++        "https://huggingface.co/owner/nano/resolve/main/tokenizer.json"
++    )
++    with pytest.raises(CatalogError, match="pinned"):
++        _parse_chatterbox(malformed)
++
++    malformed = json.loads(json.dumps(catalog))
++    malformed["bundles"]["nano-v2"]["artifacts"][0]["sha256"] = "bad"
++    with pytest.raises(CatalogError, match="sha256"):
++        _parse_chatterbox(malformed)
++
++    malformed = json.loads(json.dumps(catalog))
++    malformed["bundles"]["nano-v2"]["artifacts"][0]["size"] = 0
++    with pytest.raises(CatalogError, match="size"):
++        _parse_chatterbox(malformed)
++
++
++def test_parser_rejects_alias_collisions_and_mismatched_external_data(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    raw_seed = seed()
++    mock_tree(monkeypatch, raw_seed)
++    catalog = chatterbox.build_catalog(raw_seed)
++    malformed = json.loads(json.dumps(catalog))
++    malformed["bundles"]["nano-v2"]["aliases"] = ["nano", "nano"]
++    with pytest.raises(CatalogError, match="alias"):
++        _parse_chatterbox(malformed)
++
++    malformed = json.loads(json.dumps(catalog))
++    for artifact in malformed["bundles"]["nano-v2"]["artifacts"]:
++        if artifact["role"] == "external_data":
++            artifact["source_path"] = "onnx/unrelated.onnx.data"
++            artifact["filename"] = "unrelated.onnx.data"
++            artifact["url"] = (
++                f"https://huggingface.co/owner/nano/resolve/{REVISION}/onnx/unrelated.onnx.data?download=true"
++            )
++            break
++    with pytest.raises(CatalogError, match="match"):
++        _parse_chatterbox(malformed)
++
++
++def test_parser_rejects_unselected_profile_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
++    raw_seed = seed()
++    mock_tree(monkeypatch, raw_seed)
++    catalog = chatterbox.build_catalog(raw_seed)
++    extra = json.loads(json.dumps(catalog))
++    bundle = extra["bundles"]["nano-v2"]
++    graph = next(item for item in bundle["artifacts"] if item["role"] == "graph")
++    unused = json.loads(json.dumps(graph))
++    unused["quality"] = "unsupported"
++    unused["source_path"] = "onnx/language_model_unsupported.onnx"
++    unused["filename"] = "language_model_unsupported.onnx"
++    unused["url"] = (
++        f"https://huggingface.co/owner/nano/resolve/{REVISION}/onnx/language_model_unsupported.onnx?download=true"
++    )
++    bundle["artifacts"].append(unused)
++    with pytest.raises(CatalogError, match="unselected"):
++        _parse_chatterbox(extra)
+diff --git a/tests/test_chatterbox_catalog_tools.py b/tests/test_chatterbox_catalog_tools.py
+new file mode 100644
+index 0000000..955e937
+--- /dev/null
++++ b/tests/test_chatterbox_catalog_tools.py
+@@ -0,0 +1,159 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++from onnxvoice import cli
++from onnxvoice.catalog_tools import chatterbox
++
++REVISION = "a" * 40
++DIGEST = "b" * 64
++COMPONENTS = ("speech_encoder", "embed_tokens", "language_model", "conditional_decoder")
++
++
++def catalog_fixture() -> dict[str, Any]:
++    repository = "owner/turbo"
++    artifacts = []
++    for component in COMPONENTS:
++        path = f"onnx/{component}.onnx"
++        artifacts.append(
++            {
++                "role": "graph",
++                "component": component,
++                "quality": "fp32",
++                "filename": f"{component}.onnx",
++                "source_path": path,
++                "url": chatterbox.huggingface_resolve_url(repository, REVISION, path),
++                "size": 4,
++                "sha256": DIGEST,
++            }
++        )
++    tokenizer_path = "tokenizer.json"
++    artifacts.append(
++        {
++            "role": "tokenizer",
++            "component": None,
++            "quality": None,
++            "filename": tokenizer_path,
++            "source_path": tokenizer_path,
++            "url": chatterbox.huggingface_resolve_url(repository, REVISION, tokenizer_path),
++            "size": 4,
++            "sha256": DIGEST,
++        }
++    )
++    return {
++        "schema": 1,
++        "kind": "chatterbox-onnx-bundle-catalog",
++        "bundles": {
++            "turbo": {
++                "id": "turbo",
++                "system": "chatterbox",
++                "aliases": [],
++                "language": "en",
++                "sample_rate": 24000,
++                "default_profile": "fp32",
++                "source": {
++                    "provider": "huggingface",
++                    "repository": repository,
++                    "requested_revision": "main",
++                    "revision": REVISION,
++                },
++                "frontend": {"tokenizer_role": "tokenizer", "tokenizer_contract": "turbo"},
++                "runtime": {
++                    "start_speech_token": 6561,
++                    "stop_speech_token": 6562,
++                    "silence_token": 4299,
++                    "trailing_silence_tokens": 3,
++                    "default_max_new_tokens": 1024,
++                    "default_repetition_penalty": 1.2,
++                },
++                "profiles": {"fp32": dict.fromkeys(COMPONENTS, "fp32")},
++                "artifacts": artifacts,
++            }
++        },
++    }
++
++
++def test_catalog_cli_build_and_verify_are_offline_for_generated_data(
++    tmp_path: Path, monkeypatch, capsys
++) -> None:
++    catalog = catalog_fixture()
++    seed_path = tmp_path / "seed.json"
++    seed_path.write_text("{}", encoding="utf-8")
++    catalog_path = tmp_path / "bundles.json"
++    source_path = tmp_path / "source.json"
++    monkeypatch.setattr(chatterbox, "build_catalog", lambda seed: catalog)
++
++    assert (
++        cli.main(
++            [
++                "catalog",
++                "chatterbox",
++                "build",
++                "--seed",
++                str(seed_path),
++                "--output",
++                str(catalog_path),
++                "--source-output",
++                str(source_path),
++            ]
++        )
++        == 0
++    )
++    assert "Wrote 1 Chatterbox bundles" in capsys.readouterr().out
++    first_catalog = catalog_path.read_bytes()
++    first_source = source_path.read_bytes()
++    assert (
++        cli.main(
++            [
++                "catalog",
++                "chatterbox",
++                "build",
++                "--seed",
++                str(seed_path),
++                "--output",
++                str(catalog_path),
++                "--source-output",
++                str(source_path),
++            ]
++        )
++        == 0
++    )
++    assert catalog_path.read_bytes() == first_catalog
++    assert source_path.read_bytes() == first_source
++
++    assert (
++        cli.main(
++            [
++                "catalog",
++                "chatterbox",
++                "verify",
++                "--catalog",
++                str(catalog_path),
++                "--source",
++                str(source_path),
++            ]
++        )
++        == 0
++    )
++    assert "Verified 1 Chatterbox bundles" in capsys.readouterr().out
++
++    invalid = json.loads(source_path.read_text(encoding="utf-8"))
++    invalid["artifact_count"] += 1
++    source_path.write_text(json.dumps(invalid), encoding="utf-8")
++    assert (
++        cli.main(
++            [
++                "catalog",
++                "chatterbox",
++                "verify",
++                "--catalog",
++                str(catalog_path),
++                "--source",
++                str(source_path),
++            ]
++        )
++        == 2
++    )
++    assert "Source metadata does not match" in capsys.readouterr().err
+diff --git a/tests/test_chatterbox_runtime.py b/tests/test_chatterbox_runtime.py
+new file mode 100644
+index 0000000..8d77740
+--- /dev/null
++++ b/tests/test_chatterbox_runtime.py
+@@ -0,0 +1,317 @@
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import pytest
++
++from onnxvoice import OnnxVoice
++from onnxvoice.errors import RuntimeContractError
++from onnxvoice.systems import get_adapter
++from onnxvoice.systems.chatterbox import ChatterboxAdapter, ChatterboxVoiceState
++from onnxvoice.types import Installation, InstalledArtifact, TensorSpec
++
++_RUNTIME = {
++    "start_speech_token": 1,
++    "stop_speech_token": 2,
++    "silence_token": 4,
++    "trailing_silence_tokens": 3,
++    "default_max_new_tokens": 4,
++    "default_repetition_penalty": 1.2,
++    "sample_rate": 24000,
++    "profile": "fp32",
++}
++
++
++class FakeSession:
++    instances: list[Any] = []
++    lm_step = 0
++    stop_after_first = True
++    include_position_ids = True
++    broken_cache_contract = False
++    nan_logits = False
++
++    def __init__(self, model: str | Path, **kwargs: Any) -> None:
++        self.model = Path(model)
++        self.component = self.model.stem
++        self.calls: list[dict[str, np.ndarray]] = []
++        self.closed = False
++        self.input_specs, self.output_specs = self._contract()
++        self.__class__.instances.append(self)
++
++    def _contract(self) -> tuple[tuple[TensorSpec, ...], tuple[TensorSpec, ...]]:
++        float32 = "tensor(float)"
++        int64 = "tensor(int64)"
++        float16 = "tensor(float16)"
++        if self.component == "speech_encoder":
++            return (
++                (TensorSpec("audio_values", float32, (1, "samples")),),
++                (
++                    TensorSpec("cond_emb", float32, (1, 1, 2)),
++                    TensorSpec("prompt_token", int64, (1, 2)),
++                    TensorSpec("speaker_embeddings", float32, (1, 2)),
++                    TensorSpec("speaker_features", float32, (1, 2)),
++                ),
++            )
++        if self.component == "embed_tokens":
++            return (
++                (TensorSpec("input_ids", int64, (1, "sequence")),),
++                (TensorSpec("inputs_embeds", float32, (1, "sequence", 2)),),
++            )
++        if self.component == "language_model":
++            inputs = [
++                TensorSpec("inputs_embeds", float32, (1, "sequence", 2)),
++                TensorSpec("attention_mask", int64, (1, "total_sequence")),
++            ]
++            if self.include_position_ids:
++                inputs.append(TensorSpec("position_ids", int64, (1, "sequence")))
++            inputs.extend(
++                (
++                    TensorSpec("past_key_values.0.key", float16, (1, 2, "past_sequence", 2)),
++                    TensorSpec("past_key_values.0.value", float16, (1, 2, "past_sequence", 2)),
++                )
++            )
++            outputs = [TensorSpec("logits", float32, (1, "sequence", 5))]
++            outputs.append(TensorSpec("present.0.key", float16, (1, 2, "total_sequence", 2)))
++            if not self.broken_cache_contract:
++                outputs.append(TensorSpec("present.0.value", float16, (1, 2, "total_sequence", 2)))
++            return tuple(inputs), tuple(outputs)
++        if self.component == "conditional_decoder":
++            return (
++                (
++                    TensorSpec("speech_tokens", int64, (1, "tokens")),
++                    TensorSpec("speaker_embeddings", float32, (1, 2)),
++                    TensorSpec("speaker_features", float32, (1, 2)),
++                ),
++                (TensorSpec("waveform", float32, (1, 1, 4)),),
++            )
++        raise AssertionError(f"unexpected graph {self.component}")
++
++    def run(self, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
++        self.calls.append({name: np.array(value, copy=True) for name, value in feeds.items()})
++        if self.component == "speech_encoder":
++            return [
++                np.ones((1, 1, 2), np.float32),
++                np.asarray([[8, 9]], np.int64),
++                np.ones((1, 2), np.float32),
++                np.full((1, 2), 2, np.float32),
++            ]
++        if self.component == "embed_tokens":
++            ids = feeds["input_ids"].astype(np.float32)
++            return [np.repeat(ids[:, :, None], 2, axis=2)]
++        if self.component == "language_model":
++            total = feeds["past_key_values.0.key"].shape[2] + feeds["inputs_embeds"].shape[1]
++            logits = np.zeros((1, feeds["inputs_embeds"].shape[1], 5), np.float32)
++            if self.stop_after_first and self.lm_step > 0:
++                logits[:, -1, 2] = 5
++            else:
++                logits[:, -1, 3] = 5
++            if self.nan_logits:
++                logits[0, -1, 3] = np.nan
++            self.__class__.lm_step += 1
++            key = np.zeros((1, 2, total, 2), np.float16)
++            value = np.ones((1, 2, total, 2), np.float16)
++            if self.broken_cache_contract:
++                return [logits, key]
++            return [logits, key, value]
++        if self.component == "conditional_decoder":
++            return [np.asarray([[[0.1, 0.2, 0.3, 0.4]]], np.float32)]
++        raise AssertionError(f"unexpected graph {self.component}")
++
++    def close(self) -> None:
++        self.closed = True
++
++
++def _adapter() -> ChatterboxAdapter:
++    artifacts = tuple(
++        InstalledArtifact(
++            role="graph",
++            filename=f"{name}.onnx",
++            path=Path(f"/fake/{name}.onnx"),
++            sha256="0" * 64,
++            size=1,
++            component=name,
++        )
++        for name in ("speech_encoder", "embed_tokens", "language_model", "conditional_decoder")
++    )
++    installation = Installation(
++        system="chatterbox",
++        id="chatterbox-nano-v2",
++        kind="model",
++        path=Path("/fake"),
++        artifacts=artifacts,
++        sample_rate=24000,
++        metadata={"runtime": dict(_RUNTIME), "selected_quality": "fp32"},
++    )
++    return ChatterboxAdapter(installation)
++
++
++def _reset_fake() -> None:
++    FakeSession.instances = []
++    FakeSession.lm_step = 0
++    FakeSession.stop_after_first = True
++    FakeSession.include_position_ids = True
++    FakeSession.broken_cache_contract = False
++    FakeSession.nan_logits = False
++
++
++def _session(component: str) -> FakeSession:
++    return next(session for session in FakeSession.instances if session.component == component)
++
++
++def test_open_local_uses_generic_role_component_artifacts(tmp_path: Path) -> None:
++    files = {}
++    for component in ("speech_encoder", "embed_tokens", "language_model", "conditional_decoder"):
++        path = tmp_path / f"{component}.onnx"
++        path.touch()
++        files[f"graph:{component}"] = path
++
++    adapter = OnnxVoice.open_local(
++        system="chatterbox",
++        files=files,
++        metadata={"runtime": dict(_RUNTIME), "selected_quality": "fp32"},
++        sample_rate=24000,
++    )
++
++    assert isinstance(adapter, ChatterboxAdapter)
++    assert {artifact.component for artifact in adapter.installation.artifacts} == {
++        "speech_encoder",
++        "embed_tokens",
++        "language_model",
++        "conditional_decoder",
++    }
++
++
++def test_chatterbox_adapter_is_registered() -> None:
++    assert get_adapter("chatterbox") is ChatterboxAdapter
++
++
++def test_voice_state_is_immutable_and_checks_prompt_tokens() -> None:
++    state = ChatterboxVoiceState(
++        np.ones((1, 1, 2), np.float32),
++        np.asarray([[8, 9]], np.int64),
++        np.ones((1, 2), np.float32),
++        np.ones((1, 2), np.float32),
++    )
++    assert not state.cond_emb.flags.writeable
++    with pytest.raises(ValueError):
++        state.cond_emb[0, 0, 0] = 2
++    with pytest.raises(RuntimeContractError, match="must be integers"):
++        ChatterboxVoiceState(np.ones((1, 1, 2)), [1.5], np.ones((1, 2)), np.ones((1, 2)))
++
++
++def test_prepare_voice_and_reusable_state_run_all_four_graphs(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    _reset_fake()
++    monkeypatch.setattr("onnxvoice.systems.chatterbox.OnnxSession", FakeSession)
++    adapter = _adapter()
++    state = adapter.prepare_voice(np.arange(5, dtype=np.float32))
++    assert _session("speech_encoder").calls[0]["audio_values"].shape == (1, 5)
++    assert state.prompt_token.tolist() == [[8, 9]]
++    first = adapter.infer([10, 11], voice_state=state, max_new_tokens=4)
++    second = adapter.infer([12], voice_state=state, max_new_tokens=1)
++
++    assert first.audio.tolist() == pytest.approx([0.1, 0.2, 0.3, 0.4])
++    assert first.sample_rate == 24000
++    assert first.metadata["generated_tokens"] == 2
++    assert first.metadata["stopped_on_eos"] is True
++    assert second.metadata["generated_tokens"] == 1
++    assert len(FakeSession.instances) == 4
++    assert len(_session("speech_encoder").calls) == 1
++    assert {session.component for session in FakeSession.instances} == {
++        "speech_encoder",
++        "embed_tokens",
++        "language_model",
++        "conditional_decoder",
++    }
++    adapter.close()
++    assert all(session.closed for session in FakeSession.instances)
++
++
++def test_kv_dtype_optional_positions_and_decoder_silence(monkeypatch: pytest.MonkeyPatch) -> None:
++    _reset_fake()
++    FakeSession.include_position_ids = False
++    monkeypatch.setattr("onnxvoice.systems.chatterbox.OnnxSession", FakeSession)
++    adapter = _adapter()
++    state = adapter.prepare_voice(np.ones(8, np.float32))
++    result = adapter.infer([5, 6], voice_state=state, max_new_tokens=4)
++
++    language_model = _session("language_model")
++    assert language_model.calls[0]["past_key_values.0.key"].dtype == np.float16
++    assert language_model.calls[0]["past_key_values.0.value"].dtype == np.float16
++    assert "position_ids" not in language_model.calls[0]
++    assert language_model.calls[0]["attention_mask"].shape == (1, 3)
++    assert language_model.calls[1]["attention_mask"].shape == (1, 4)
++    decoder_tokens = _session("conditional_decoder").calls[0]["speech_tokens"].tolist()[0]
++    assert decoder_tokens == [8, 9, 3, 4, 4, 4]
++    assert result.outputs["speech_tokens"].tolist() == [1, 3, 2]
++
++
++def test_position_ids_follow_generation_positions(monkeypatch: pytest.MonkeyPatch) -> None:
++    _reset_fake()
++    monkeypatch.setattr("onnxvoice.systems.chatterbox.OnnxSession", FakeSession)
++    adapter = _adapter()
++    state = adapter.prepare_voice(np.ones(8, np.float32))
++    adapter.infer([5, 6], voice_state=state, max_new_tokens=4)
++
++    calls = _session("language_model").calls
++    assert calls[0]["position_ids"].tolist() == [[0, 1, 2]]
++    assert calls[1]["position_ids"].tolist() == [[3]]
++
++
++def test_hard_generation_limit_appends_exactly_three_silence_tokens(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    _reset_fake()
++    FakeSession.stop_after_first = False
++    monkeypatch.setattr("onnxvoice.systems.chatterbox.OnnxSession", FakeSession)
++    adapter = _adapter()
++    state = adapter.prepare_voice(np.ones(8, np.float32))
++    result = adapter.infer([5], voice_state=state, max_new_tokens=2)
++
++    assert result.metadata["generated_tokens"] == 2
++    assert result.metadata["stopped_on_eos"] is False
++    assert _session("conditional_decoder").calls[0]["speech_tokens"].tolist()[0] == [
++        8,
++        9,
++        3,
++        3,
++        4,
++        4,
++        4,
++    ]
++
++
++def test_repetition_penalty_matches_greedy_formula() -> None:
++    scores = ChatterboxAdapter._penalize(np.asarray([-2.0, 3.0, 1.0]), [0, 1, 1], 2.0)
++    assert scores.tolist() == pytest.approx([-4.0, 1.5, 1.0])
++
++
++def test_non_finite_logits_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
++    _reset_fake()
++    FakeSession.nan_logits = True
++    monkeypatch.setattr("onnxvoice.systems.chatterbox.OnnxSession", FakeSession)
++    adapter = _adapter()
++    state = adapter.prepare_voice(np.ones(8, np.float32))
++
++    with pytest.raises(RuntimeContractError, match="non-finite logits"):
++        adapter.infer([5], voice_state=state, max_new_tokens=2)
++
++
++def test_bad_kv_contract_fails_before_generation(monkeypatch: pytest.MonkeyPatch) -> None:
++    _reset_fake()
++    FakeSession.broken_cache_contract = True
++    monkeypatch.setattr("onnxvoice.systems.chatterbox.OnnxSession", FakeSession)
++    adapter = _adapter()
++
++    with pytest.raises(RuntimeContractError, match="past/present KV layouts do not match"):
++        adapter._get_session("language_model")
++
++
++def test_all_sessions_are_lazy_until_a_graph_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
++    _reset_fake()
++    monkeypatch.setattr("onnxvoice.systems.chatterbox.OnnxSession", FakeSession)
++    adapter = _adapter()
++    assert FakeSession.instances == []
++    adapter.prepare_voice(np.ones(4, np.float32))
++    assert [session.component for session in FakeSession.instances] == ["speech_encoder"]

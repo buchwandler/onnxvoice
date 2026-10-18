@@ -1,0 +1,34 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 2443,
+      "deletions": 2,
+      "patch_file": "2836d48.patch",
+      "patch_sha256": "8eb99cb9d788d700ac73c1c2b37ee3bbf2356789defd98c3ff0d65f99befab3f",
+      "paths": [
+        "onnxvoice/catalog.py",
+        "onnxvoice/catalog_tools/chatterbox.py",
+        "onnxvoice/catalog_tools/chatterbox_seed.json",
+        "onnxvoice/cli.py",
+        "onnxvoice/systems/__init__.py",
+        "onnxvoice/systems/chatterbox.py",
+        "pyproject.toml",
+        "tests/test_chatterbox_catalog.py",
+        "tests/test_chatterbox_catalog_tools.py",
+        "tests/test_chatterbox_runtime.py"
+      ],
+      "sha": "2836d4831f799139878289c5cc0b6a0e3e71512f",
+      "short_sha": "2836d48",
+      "source_ref": "git:2836d4831f799139878289c5cc0b6a0e3e71512f"
+    }
+  ],
+  "git_base_ref": "d8f4963531875223002ffa4455360c18f07ee88f",
+  "git_base_sha": "d8f4963531875223002ffa4455360c18f07ee88f",
+  "git_head_ref": "2836d4831f799139878289c5cc0b6a0e3e71512f",
+  "git_head_sha": "2836d4831f799139878289c5cc0b6a0e3e71512f",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.11",
+  "schema_version": 1
+}

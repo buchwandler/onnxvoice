@@ -35,6 +35,8 @@ InferenceResult(audio, sample_rate, timings, outputs, metadata)
 The Kokoro adapter dispatches from catalog runtime metadata. A single layout owns one ONNX session. `split-onnx-v1` owns prosody, curves, and decoder sessions and keeps source generation, duration expansion, and STFT preparation inside OnnxVoice. Both layouts expose the same `infer(token_ids, style=..., speed=..., seed=...)` contract.
 The Kitten adapter accepts model-ready token IDs, a caller-selected style tensor, and speed. It validates the graph ABI, applies the required 5,000-sample output trim, and returns mono audio at 24 kHz; KittenSynth remains responsible for text processing and style selection.
 
+The Chatterbox adapter owns its `speech_encoder`, `embed_tokens`, `language_model`, and `conditional_decoder` graph sessions, plus reference-state preparation and token generation. A frontend such as ChatterboxSynth owns text tokenization, reference WAV decoding/resampling, and the public synthesis API; see [Chatterbox](systems/chatterbox.md) for the exact bundle and input contract.
+
 ## Installation metadata
 
 Catalog and manifest metadata retain the runtime layout, selected distribution, sample rate, maximum token count, required components, style dimensions, and declared timing output. Artifacts are queried by role, component, and quality rather than by filename conventions. Explicit distribution selection receives a distinct cache identity.

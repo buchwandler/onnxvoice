@@ -53,6 +53,14 @@ onnxvoice info piper:en_US-lessac-medium
 onnxvoice cache info
 ```
 
+### Chatterbox runtime
+
+Install a managed Chatterbox bundle with the CPU profile, then follow the [Chatterbox system guide](systems/chatterbox.md) for the frontend/runtime boundary and Python example:
+
+```bash
+onnxvoice install chatterbox:nano-v2 --quality cpu
+```
+
 `list` combines catalog and installed inventory. `installed` is local-only and does not access the network. Use `onnxvoice --offline installed` to make the no-network intent explicit.
 
 ## First Python workflow

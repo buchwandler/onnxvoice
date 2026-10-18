@@ -1,0 +1,58 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 3
+release_version: v0.2.11
+git_base_ref: v0.2.10
+git_base_sha: d8f4963531875223002ffa4455360c18f07ee88f
+git_head_ref: HEAD
+git_head_sha: 2836d4831f799139878289c5cc0b6a0e3e71512f
+git_range: d8f4963531875223002ffa4455360c18f07ee88f..2836d4831f799139878289c5cc0b6a0e3e71512f
+commit_count: 1
+rows:
+  - sha: 2836d4831f799139878289c5cc0b6a0e3e71512f
+    source_ref: git:2836d4831f799139878289c5cc0b6a0e3e71512f
+    short_sha: 2836d48
+    changed_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/chatterbox.py
+      - onnxvoice/catalog_tools/chatterbox_seed.json
+      - onnxvoice/cli.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/chatterbox.py
+      - pyproject.toml
+      - tests/test_chatterbox_catalog.py
+      - tests/test_chatterbox_catalog_tools.py
+      - tests/test_chatterbox_runtime.py
+    stats:
+      files_changed: 10
+      insertions: 2443
+      deletions: 2
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/chatterbox.py
+      - onnxvoice/catalog_tools/chatterbox_seed.json
+      - onnxvoice/cli.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/chatterbox.py
+      - pyproject.toml
+      - tests/test_chatterbox_catalog.py
+      - tests/test_chatterbox_catalog_tools.py
+      - tests/test_chatterbox_runtime.py
+    observed_behavior:
+      Adds validated Chatterbox Nano v2 and Turbo catalog/profile selection
+      with revision-pinned artifacts and integrity metadata; a deterministic catalog
+      builder and verifier CLI; and a registered four-graph ONNX adapter that prepares
+      reusable reference voice state and generates audio from model-ready token IDs.
+      Focused tests cover catalog, CLI, runtime graph contracts, and generation. This
+      is user-facing runtime/catalog functionality, not a complete text/audio frontend.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: add support for chatterbox"
+    target_entry_id: entry-0001
+    notes:
+      Inspected every changed source, package, and test path in the pinned v0.2.10..HEAD
+      range; summary must be authored from reviewed behavior, not the commit subject.

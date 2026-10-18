@@ -75,6 +75,10 @@ runtime = OnnxVoice.open_local(
 
 No catalog access, store registration, or file copy occurs. For multi-component layouts, provide named `artifacts=` or system-specific `files=` mappings. See [Local models](local-models.md).
 
+## Chatterbox
+
+OnnxVoice manages Chatterbox bundles and runs the four-graph adapter. The tokenizer frontend, reference WAV handling, and user-facing synthesis API belong to ChatterboxSynth; see the [Chatterbox system guide](systems/chatterbox.md) for managed/local opening and the model-ready token and reference-state contract.
+
 ## Qwen3 WaveKat
 
 Qwen3 requires its WaveKat tokenizer/chat frontend to provide model-ready token IDs. OnnxVoice owns Qwen3 catalog/install/runtime and exposes VoiceDesign inference, Base reference preparation, `Qwen3VoiceState`, graph/provider diagnostics, and local bundle opening. See [Qwen3-TTS WaveKat](systems/qwen3.md) for the exact ID, audio, bundle, and provider contracts; use [Qwen3Synth](https://github.com/buchwandler/qwen3synth) for the text/WAV/profile workflow.
