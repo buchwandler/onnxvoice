@@ -74,6 +74,7 @@ DEFAULT_SOURCES = {
     "kitten": "https://raw.githubusercontent.com/buchwandler/kitten-onnx-bundles/main/catalog/models.json",
     "inflect": "https://raw.githubusercontent.com/buchwandler/inflect-onnx-bundles/main/catalog/models.json",
     "sopro": "https://raw.githubusercontent.com/buchwandler/sopro-onnx-bundles/main/catalog/bundles.json",
+    "chatterbox": "https://raw.githubusercontent.com/buchwandler/chatterbox-onnx-bundles/main/catalog/bundles.json",
     "qwen3": "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json",
 }
 _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
@@ -226,6 +227,8 @@ class CatalogClient:
         """Return parsed catalog items for a system."""
         system = system.lower()
         raw = self.load_raw(system, refresh=refresh, progress=progress)
+        if system == "chatterbox":
+            return _parse_chatterbox(raw)
         if system == "qwen3":
             return _parse_qwen3(raw)
         if system == "piper":
@@ -260,6 +263,18 @@ class CatalogClient:
         distribution select system-specific artifact variants.
         """
         system, item_id = parse_ref(ref)
+        if system == "chatterbox":
+            item = next(
+                (
+                    candidate
+                    for candidate in self.list(system, refresh=refresh, progress=progress)
+                    if candidate.id == item_id or item_id in candidate.aliases
+                ),
+                None,
+            )
+            if item is None:
+                raise AssetNotFoundError(f"Unknown catalog item: {ref}")
+            return _select_chatterbox_profile(item, quality)
         if system == "qwen3":
             item = next(
                 (
@@ -2614,6 +2629,345 @@ def _require_pocket_safe_id(value: str, label: str) -> None:
         raise CatalogError(f"{label} is unsafe: {value!r}")
 
 
+_CHATTERBOX_COMPONENTS = frozenset(
+    {"speech_encoder", "embed_tokens", "language_model", "conditional_decoder"}
+)
+_CHATTERBOX_STATIC_ROLES = frozenset(
+    {
+        "tokenizer",
+        "model_config",
+        "tokenizer_config",
+        "generation_config",
+        "preprocessor_config",
+        "upstream_manifest",
+    }
+)
+_CHATTERBOX_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_CHATTERBOX_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_CHATTERBOX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _parse_chatterbox(data: Mapping[str, Any]) -> list[CatalogItem]:
+    """Parse and strictly validate the normalized Chatterbox bundle catalog."""
+    if not isinstance(data, Mapping) or set(data) != {"schema", "kind", "bundles"}:
+        raise CatalogError("Chatterbox catalog must contain exactly schema, kind, and bundles")
+    if type(data.get("schema")) is not int or data["schema"] != 1:
+        raise CatalogError("Chatterbox catalog schema must be 1")
+    if data.get("kind") != "chatterbox-onnx-bundle-catalog":
+        raise CatalogError("Unexpected Chatterbox catalog kind")
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Mapping) or not bundles:
+        raise CatalogError("Chatterbox catalog bundles must be a non-empty mapping")
+    ids = set(bundles)
+    seen_aliases: set[str] = set()
+    result: list[CatalogItem] = []
+    for bundle_id, raw in sorted(bundles.items()):
+        if not isinstance(bundle_id, str) or _CHATTERBOX_SAFE_ID_RE.fullmatch(bundle_id) is None:
+            raise CatalogError(f"Unsafe Chatterbox bundle ID {bundle_id!r}")
+        if not isinstance(raw, Mapping) or raw.get("id") != bundle_id:
+            raise CatalogError(f"{bundle_id}: bundle must be an object with a matching id")
+        if raw.get("system") != "chatterbox":
+            raise CatalogError(f"{bundle_id}: system must be chatterbox")
+        aliases = raw.get("aliases", ())
+        if not isinstance(aliases, Sequence) or isinstance(aliases, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: aliases must be a sequence")
+        normalized_aliases: list[str] = []
+        for alias in aliases:
+            if not isinstance(alias, str) or _CHATTERBOX_SAFE_ID_RE.fullmatch(alias) is None:
+                raise CatalogError(f"{bundle_id}: unsafe alias {alias!r}")
+            if alias == bundle_id or alias in ids or alias in seen_aliases:
+                raise CatalogError(f"{bundle_id}: duplicate or conflicting alias {alias!r}")
+            seen_aliases.add(alias)
+            normalized_aliases.append(alias)
+        language = raw.get("language")
+        sample_rate = raw.get("sample_rate")
+        if not isinstance(language, str) or not language:
+            raise CatalogError(f"{bundle_id}: language is required")
+        if type(sample_rate) is not int or sample_rate <= 0:
+            raise CatalogError(f"{bundle_id}: sample_rate must be a positive integer")
+        source = raw.get("source")
+        if not isinstance(source, Mapping) or set(source) != {
+            "provider",
+            "repository",
+            "requested_revision",
+            "revision",
+        }:
+            raise CatalogError(f"{bundle_id}: source fields are invalid")
+        repository, revision = source.get("repository"), source.get("revision")
+        requested = source.get("requested_revision")
+        if (
+            source.get("provider") != "huggingface"
+            or not isinstance(repository, str)
+            or re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository) is None
+        ):
+            raise CatalogError(f"{bundle_id}: invalid Hugging Face source")
+        if not isinstance(requested, str) or not requested:
+            raise CatalogError(f"{bundle_id}: requested source revision is required")
+        if not isinstance(revision, str) or _CHATTERBOX_SHA_RE.fullmatch(revision) is None:
+            raise CatalogError(f"{bundle_id}: source revision must be a lowercase 40-character SHA")
+        frontend = raw.get("frontend")
+        if not isinstance(frontend, Mapping) or frontend.get("tokenizer_role") != "tokenizer":
+            raise CatalogError(f"{bundle_id}: frontend must identify the tokenizer role")
+        tokenizer_contract = frontend.get("tokenizer_contract")
+        if not isinstance(tokenizer_contract, str) or not tokenizer_contract:
+            raise CatalogError(f"{bundle_id}: tokenizer contract is required")
+        runtime = raw.get("runtime")
+        if not isinstance(runtime, Mapping):
+            raise CatalogError(f"{bundle_id}: runtime metadata must be an object")
+        for field in (
+            "start_speech_token",
+            "stop_speech_token",
+            "silence_token",
+            "trailing_silence_tokens",
+            "default_max_new_tokens",
+        ):
+            if type(runtime.get(field)) is not int or runtime[field] < 0:
+                raise CatalogError(f"{bundle_id}: runtime {field} must be a non-negative integer")
+        penalty = runtime.get("default_repetition_penalty")
+        if (
+            isinstance(penalty, bool)
+            or not isinstance(penalty, (int, float))
+            or not math.isfinite(penalty)
+            or penalty <= 0
+        ):
+            raise CatalogError(f"{bundle_id}: invalid default repetition penalty")
+        profiles = raw.get("profiles")
+        if not isinstance(profiles, Mapping) or not profiles:
+            raise CatalogError(f"{bundle_id}: profiles must be a non-empty mapping")
+        default_profile = raw.get("default_profile")
+        if default_profile not in profiles:
+            raise CatalogError(f"{bundle_id}: default profile is not declared")
+        for profile_name, mapping in profiles.items():
+            if not isinstance(profile_name, str) or not _CHATTERBOX_SAFE_ID_RE.fullmatch(
+                profile_name
+            ):
+                raise CatalogError(f"{bundle_id}: unsafe profile {profile_name!r}")
+            if not isinstance(mapping, Mapping) or set(mapping) != _CHATTERBOX_COMPONENTS:
+                raise CatalogError(
+                    f"{bundle_id}/{profile_name}: profile must select four graph components"
+                )
+            if any(not isinstance(value, str) or not value for value in mapping.values()):
+                raise CatalogError(
+                    f"{bundle_id}/{profile_name}: component qualities must be strings"
+                )
+        raw_artifacts = raw.get("artifacts")
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{bundle_id}: artifacts must be a sequence")
+        artifacts: list[Artifact] = []
+        seen_keys: set[tuple[str, str | None, str | None]] = set()
+        seen_paths: set[str] = set()
+        for entry in raw_artifacts:
+            required = {
+                "role",
+                "component",
+                "quality",
+                "filename",
+                "source_path",
+                "url",
+                "size",
+                "sha256",
+            }
+            if not isinstance(entry, Mapping) or set(entry) != required:
+                raise CatalogError(f"{bundle_id}: artifact fields are invalid")
+            role, component, quality = entry["role"], entry["component"], entry["quality"]
+            if role not in {"graph", "external_data", *_CHATTERBOX_STATIC_ROLES}:
+                raise CatalogError(f"{bundle_id}: unknown artifact role {role!r}")
+            if role in {"graph", "external_data"}:
+                if (
+                    component not in _CHATTERBOX_COMPONENTS
+                    or not isinstance(quality, str)
+                    or not quality
+                ):
+                    raise CatalogError(
+                        f"{bundle_id}: graph artifacts require component and quality"
+                    )
+            elif component is not None or quality is not None:
+                raise CatalogError(
+                    f"{bundle_id}/{role}: static artifacts cannot select component/quality"
+                )
+            path, filename = entry["source_path"], entry["filename"]
+            if not isinstance(path, str) or not isinstance(filename, str) or not filename:
+                raise CatalogError(f"{bundle_id}: artifact path and filename are required")
+            try:
+                validate_relative_path(path, field_name="Chatterbox source path")
+            except ValueError as exc:
+                raise CatalogError(str(exc)) from exc
+            if Path(path).name != filename or path in seen_paths:
+                raise CatalogError(f"{bundle_id}: invalid or duplicate artifact path {path!r}")
+            seen_paths.add(path)
+            if role == "graph" and not path.endswith(".onnx"):
+                raise CatalogError(f"{bundle_id}/{component}: graph path must end in .onnx")
+            if role == "external_data" and not (
+                path.endswith(".onnx_data") or path.endswith(".onnx.data")
+            ):
+                raise CatalogError(f"{bundle_id}/{component}: invalid external-data suffix")
+            key = (str(role), component, quality)
+            if key in seen_keys:
+                raise CatalogError(f"{bundle_id}: duplicate role/component/quality {key!r}")
+            seen_keys.add(key)
+            expected_url = (
+                f"https://huggingface.co/{repository}/resolve/{revision}/"
+                f"{urllib.parse.quote(path, safe='/')}?download=true"
+            )
+            if entry["url"] != expected_url:
+                raise CatalogError(
+                    f"{bundle_id}/{role}: URL is not pinned to the exact source revision"
+                )
+            size, sha256 = entry["size"], entry["sha256"]
+            if type(size) is not int or size <= 0:
+                raise CatalogError(f"{bundle_id}/{role}: size must be a positive integer")
+            if not isinstance(sha256, str) or _CHATTERBOX_SHA256_RE.fullmatch(sha256) is None:
+                raise CatalogError(f"{bundle_id}/{role}: sha256 must be lowercase 64-character hex")
+            metadata = {
+                "path": path,
+                "source": {
+                    "provider": "huggingface",
+                    "repository": repository,
+                    "revision": revision,
+                    "path": path,
+                },
+            }
+            artifacts.append(
+                Artifact(
+                    role=str(role),
+                    filename=filename,
+                    url=entry["url"],
+                    size=size,
+                    sha256=sha256,
+                    quality=quality,
+                    component=component,
+                    format="onnx" if role == "graph" else Path(filename).suffix.lstrip("."),
+                    metadata=metadata,
+                )
+            )
+        if sum(artifact.role == "tokenizer" for artifact in artifacts) != 1:
+            raise CatalogError(f"{bundle_id}: exactly one tokenizer artifact is required")
+        required_graph_keys = {
+            (component, profile[component])
+            for profile in profiles.values()
+            for component in _CHATTERBOX_COMPONENTS
+        }
+        actual_graph_keys = {
+            (artifact.component, artifact.quality)
+            for artifact in artifacts
+            if artifact.role == "graph"
+        }
+        if actual_graph_keys != required_graph_keys:
+            raise CatalogError(
+                f"{bundle_id}: catalog contains missing or unselected profile graphs"
+            )
+        if any(
+            (artifact.component, artifact.quality) not in required_graph_keys
+            for artifact in artifacts
+            if artifact.role == "external_data"
+        ):
+            raise CatalogError(
+                f"{bundle_id}: external data is not associated with a selected profile graph"
+            )
+        graph_keys = {(a.component, a.quality) for a in artifacts if a.role == "graph"}
+        for profile_name, mapping in profiles.items():
+            for component, quality in mapping.items():
+                if (component, quality) not in graph_keys:
+                    raise CatalogError(
+                        f"{bundle_id}/{profile_name}: missing {component} graph for {quality}"
+                    )
+                graph = next(
+                    a
+                    for a in artifacts
+                    if a.role == "graph" and a.component == component and a.quality == quality
+                )
+                companions = [
+                    a
+                    for a in artifacts
+                    if a.role == "external_data"
+                    and a.component == component
+                    and a.quality == quality
+                ]
+                if len(companions) > 1:
+                    raise CatalogError(
+                        f"{bundle_id}/{profile_name}: duplicate external-data companion"
+                    )
+                if companions and companions[0].metadata["path"] not in {
+                    graph.metadata["path"] + "_data",
+                    graph.metadata["path"] + ".data",
+                }:
+                    raise CatalogError(
+                        f"{bundle_id}/{profile_name}: graph/external-data paths do not match"
+                    )
+        item_metadata = {
+            "language": language,
+            "profiles": {name: dict(value) for name, value in profiles.items()},
+            "default_profile": default_profile,
+            "frontend": dict(frontend),
+            "runtime": dict(runtime),
+            "source": dict(source),
+            "source_repository": repository,
+            "source_revision": revision,
+        }
+        result.append(
+            CatalogItem(
+                system="chatterbox",
+                id=bundle_id,
+                kind="bundle",
+                artifacts=tuple(artifacts),
+                aliases=tuple(normalized_aliases),
+                sample_rate=sample_rate,
+                metadata=item_metadata,
+            )
+        )
+    return result
+
+
+def _select_chatterbox_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
+    profiles = item.metadata.get("profiles")
+    if not isinstance(profiles, Mapping):
+        raise CatalogError(f"Chatterbox bundle {item.id!r} has invalid profiles")
+    selected = quality or item.metadata.get("default_profile")
+    profile = profiles.get(selected) if isinstance(selected, str) else None
+    if not isinstance(profile, Mapping):
+        choices = ", ".join(sorted(str(name) for name in profiles))
+        raise AssetNotFoundError(
+            f"Unknown Chatterbox profile {selected!r}; available profiles: {choices}"
+        )
+    selected_artifacts = [
+        artifact for artifact in item.artifacts if artifact.role not in {"graph", "external_data"}
+    ]
+    for component in sorted(_CHATTERBOX_COMPONENTS):
+        target_quality = profile[component]
+        graph = [
+            a
+            for a in item.artifacts
+            if a.role == "graph" and a.component == component and a.quality == target_quality
+        ]
+        if len(graph) != 1:
+            raise CatalogError(
+                f"Profile {selected!r} requires one {component} graph for {target_quality!r}"
+            )
+        selected_artifacts.extend(graph)
+        selected_artifacts.extend(
+            a
+            for a in item.artifacts
+            if a.role == "external_data"
+            and a.component == component
+            and a.quality == target_quality
+        )
+    return CatalogItem(
+        system=item.system,
+        id=item.id,
+        kind=item.kind,
+        artifacts=tuple(selected_artifacts),
+        aliases=item.aliases,
+        sample_rate=item.sample_rate,
+        voices=item.voices,
+        default_voice=item.default_voice,
+        metadata={
+            **item.metadata,
+            "selected_quality": selected,
+            "runtime": {**dict(item.metadata.get("runtime") or {}), "profile": selected},
+        },
+    )
+
+
 def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
     """Select exactly one deterministic artifact for each Pocket profile role."""
     profiles = item.metadata.get("profiles") or {}
@@ -2678,7 +3032,7 @@ def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogIte
 
 
 def _item_supports_quality(item: CatalogItem, quality: str) -> bool:
-    if item.system in {"pocket", "sopro"}:
+    if item.system in {"pocket", "sopro", "chatterbox"}:
         profiles = item.metadata.get("profiles") or {}
         return isinstance(profiles, Mapping) and quality in profiles
     return bool(

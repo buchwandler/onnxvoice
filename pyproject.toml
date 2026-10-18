@@ -7,7 +7,7 @@ where = ["."]
 include = ["onnxvoice*"]
 
 [tool.setuptools.package-data]
-onnxvoice = ["py.typed", "catalog_tools/qwen3_seed.json"]
+onnxvoice = ["py.typed", "catalog_tools/qwen3_seed.json", "catalog_tools/chatterbox_seed.json"]
 
 [project]
 name = "onnxvoice"

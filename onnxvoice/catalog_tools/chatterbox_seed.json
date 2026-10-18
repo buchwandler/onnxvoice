@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "kind": "chatterbox-onnx-bundle-seed",
+  "bundles": {
+    "nano-v2": {
+      "id": "nano-v2",
+      "aliases": ["nano", "nano-110m"],
+      "language": "en",
+      "sample_rate": 24000,
+      "default_profile": "cpu",
+      "source": {
+        "provider": "huggingface",
+        "repository": "KitsuMate/chatterbox-nano-v2-onnx",
+        "requested_revision": "main",
+        "license": "mit"
+      },
+      "frontend": {
+        "tokenizer_role": "tokenizer",
+        "tokenizer_path": "tokenizer.json",
+        "tokenizer_contract": "nano-v2"
+      },
+      "runtime": {
+        "start_speech_token": 6561,
+        "stop_speech_token": 6562,
+        "silence_token": 4299,
+        "trailing_silence_tokens": 3,
+        "default_max_new_tokens": 1024,
+        "default_repetition_penalty": 1.2
+      },
+      "static_artifacts": {
+        "tokenizer_config": "tokenizer_config.json",
+        "upstream_manifest": "manifest.json"
+      },
+      "profiles": {
+        "fp32": {
+          "speech_encoder": {
+            "path": "onnx/speech_encoder.onnx",
+            "quality": "fp32"
+          },
+          "embed_tokens": {
+            "path": "onnx/embed_tokens.onnx",
+            "quality": "fp32"
+          },
+          "language_model": {
+            "path": "onnx/language_model.onnx",
+            "quality": "fp32"
+          },
+          "conditional_decoder": {
+            "path": "onnx/conditional_decoder.onnx",
+            "quality": "fp32"
+          }
+        },
+        "cpu": {
+          "speech_encoder": {
+            "path": "onnx/speech_encoder.onnx",
+            "quality": "fp32"
+          },
+          "embed_tokens": {
+            "path": "onnx/embed_tokens.onnx",
+            "quality": "fp32"
+          },
+          "language_model": {
+            "path": "onnx/language_model_int8_mixed.onnx",
+            "quality": "int8_mixed"
+          },
+          "conditional_decoder": {
+            "path": "onnx/conditional_decoder_int8.onnx",
+            "quality": "int8"
+          }
+        }
+      }
+    },
+    "turbo": {
+      "id": "turbo",
+      "aliases": ["turbo-350m"],
+      "language": "en",
+      "sample_rate": 24000,
+      "default_profile": "fp32",
+      "source": {
+        "provider": "huggingface",
+        "repository": "ResembleAI/chatterbox-turbo-ONNX",
+        "requested_revision": "main",
+        "license": "mit"
+      },
+      "frontend": {
+        "tokenizer_role": "tokenizer",
+        "tokenizer_path": "tokenizer.json",
+        "tokenizer_contract": "turbo"
+      },
+      "runtime": {
+        "start_speech_token": 6561,
+        "stop_speech_token": 6562,
+        "silence_token": 4299,
+        "trailing_silence_tokens": 3,
+        "default_max_new_tokens": 1024,
+        "default_repetition_penalty": 1.2
+      },
+      "static_artifacts": {
+        "model_config": "config.json",
+        "generation_config": "generation_config.json"
+      },
+      "profiles": {
+        "fp32": {
+          "speech_encoder": {
+            "path": "onnx/speech_encoder.onnx",
+            "quality": "fp32"
+          },
+          "embed_tokens": {
+            "path": "onnx/embed_tokens.onnx",
+            "quality": "fp32"
+          },
+          "language_model": {
+            "path": "onnx/language_model.onnx",
+            "quality": "fp32"
+          },
+          "conditional_decoder": {
+            "path": "onnx/conditional_decoder.onnx",
+            "quality": "fp32"
+          }
+        },
+        "q4f16": {
+          "speech_encoder": {
+            "path": "onnx/speech_encoder_q4f16.onnx",
+            "quality": "q4f16"
+          },
+          "embed_tokens": {
+            "path": "onnx/embed_tokens_q4f16.onnx",
+            "quality": "q4f16"
+          },
+          "language_model": {
+            "path": "onnx/language_model_q4f16.onnx",
+            "quality": "q4f16"
+          },
+          "conditional_decoder": {
+            "path": "onnx/conditional_decoder_q4f16.onnx",
+            "quality": "q4f16"
+          }
+        }
+      }
+    }
+  }
+}

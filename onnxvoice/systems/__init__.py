@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..errors import UnsupportedSystemError
 from .base import SystemAdapter
+from .chatterbox import ChatterboxAdapter, ChatterboxVoiceState
 from .inflect import InflectAdapter
 from .kitten import KittenAdapter
 from .kokoro import KokoroAdapter
@@ -27,6 +28,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
     KittenAdapter.system: KittenAdapter,
     InflectAdapter.system: InflectAdapter,
     Qwen3Adapter.system: Qwen3Adapter,
+    ChatterboxAdapter.system: ChatterboxAdapter,
 }
 
 
@@ -59,6 +61,8 @@ __all__ = [
     "SoproStreamChunk",
     "KittenAdapter",
     "Qwen3Adapter",
+    "ChatterboxAdapter",
+    "ChatterboxVoiceState",
     "Qwen3VoiceState",
     "InflectAdapter",
     "SplitKokoroRuntime",

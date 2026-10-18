@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ._install_progress import InstallProgress
+from .catalog_tools import chatterbox as chatterbox_catalog_tools
 from .catalog_tools import kitten as kitten_catalog_tools
 from .catalog_tools import pocket as pocket_catalog_tools
 from .catalog_tools import qwen3 as qwen3_catalog_tools
@@ -275,6 +276,19 @@ def build_parser() -> argparse.ArgumentParser:
     qwen3_verify_parser = qwen3_sub.add_parser("verify", help="Verify a Qwen3 catalog offline")
     qwen3_verify_parser.add_argument("--catalog", type=Path, required=True)
     qwen3_verify_parser.add_argument("--source", type=Path)
+    chatterbox_parser = catalog_sub.add_parser(
+        "chatterbox", help="Manage cleanroom Chatterbox ONNX bundles"
+    )
+    chatterbox_sub = chatterbox_parser.add_subparsers(dest="catalog_action", required=True)
+    chatterbox_build = chatterbox_sub.add_parser("build", help="Build a pinned Chatterbox catalog")
+    chatterbox_build.add_argument("--seed", type=Path, required=True)
+    chatterbox_build.add_argument("--output", type=Path, required=True)
+    chatterbox_build.add_argument("--source-output", type=Path, required=True)
+    chatterbox_verify = chatterbox_sub.add_parser(
+        "verify", help="Verify a Chatterbox catalog offline"
+    )
+    chatterbox_verify.add_argument("--catalog", type=Path, required=True)
+    chatterbox_verify.add_argument("--source", type=Path, required=True)
     return parser
 
 
@@ -946,6 +960,20 @@ def main(argv: list[str] | None = None) -> int:
                 if args.catalog_action == "verify":
                     catalog = qwen3_catalog_tools.load_catalog(args.catalog, args.source)
                     print(f"Verified {len(catalog['bundles'])} Qwen3 bundles")
+                    return 0
+            elif args.catalog_system == "chatterbox":
+                if args.catalog_action == "build":
+                    seed = json.loads(args.seed.read_text(encoding="utf-8"))
+                    catalog = chatterbox_catalog_tools.build_catalog(seed)
+                    source = chatterbox_catalog_tools.build_source(catalog)
+                    chatterbox_catalog_tools.verify_catalog(catalog, source)
+                    _write_json(args.output, catalog)
+                    _write_json(args.source_output, source)
+                    print(f"Wrote {len(catalog['bundles'])} Chatterbox bundles to {args.output}")
+                    return 0
+                if args.catalog_action == "verify":
+                    catalog = chatterbox_catalog_tools.load_catalog(args.catalog, args.source)
+                    print(f"Verified {len(catalog['bundles'])} Chatterbox bundles")
                     return 0
             else:
                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
