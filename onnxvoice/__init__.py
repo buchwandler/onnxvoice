@@ -25,6 +25,7 @@ from .manager import OnnxVoice
 from .runtime import OnnxSession, available_providers
 from .store import AssetStore
 from .systems import (
+    Kitten2Adapter,
     KokoroCloningRuntime,
     KokoroReferenceState,
     KokoroVoicePack,
@@ -156,6 +157,7 @@ __all__ = [
     "VoiceMetadata",
     "register_adapter",
     "registered_systems",
+    "Kitten2Adapter",
     "SplitKokoroRuntime",
     "Qwen3VoiceState",
     "SoproAdapter",

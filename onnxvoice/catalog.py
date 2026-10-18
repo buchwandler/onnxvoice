@@ -66,6 +66,9 @@ POCKET_QUALIFIED_ROLES = frozenset(
     }
 )
 
+_KITTEN2_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_KITTEN2_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_KITTEN2_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DEFAULT_SOURCES = {
     "piper": "https://raw.githubusercontent.com/buchwandler/piper-onnx-voices/main/catalog/voices.json",
     "kokoro": "https://raw.githubusercontent.com/buchwandler/kokoro-onnx-models/main/catalog/models.json",
@@ -76,6 +79,7 @@ DEFAULT_SOURCES = {
     "sopro": "https://raw.githubusercontent.com/buchwandler/sopro-onnx-bundles/main/catalog/bundles.json",
     "chatterbox": "https://raw.githubusercontent.com/buchwandler/chatterbox-onnx-bundles/main/catalog/bundles.json",
     "qwen3": "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json",
+    "kitten2": "https://raw.githubusercontent.com/buchwandler/kitten2-onnx-bundles/main/catalog/bundles.json",
 }
 _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
     {
@@ -231,6 +235,8 @@ class CatalogClient:
             return _parse_chatterbox(raw)
         if system == "qwen3":
             return _parse_qwen3(raw)
+        if system == "kitten2":
+            return _parse_kitten2(raw)
         if system == "piper":
             return _parse_piper(raw)
         if system == "kokoro":
@@ -3054,4 +3060,198 @@ def filter_items(
         result = [item for item in result if matches_language(item.metadata, language)]
     if quality:
         result = [item for item in result if _item_supports_quality(item, quality)]
+    return result
+
+
+
+def _parse_kitten2(data: Any) -> list[CatalogItem]:
+    """Parse pinned Kitten2 bundle catalog records without adapting the legacy Kitten schema."""
+    if not isinstance(data, Mapping) or set(data) != {"schema", "kind", "bundles"}:
+        raise CatalogError("Kitten2 catalog must contain exactly schema, kind, and bundles")
+    if type(data.get("schema")) is not int or data.get("schema") != 1:
+        raise CatalogError("Kitten2 catalog schema must be 1")
+    if data.get("kind") != "kitten2-onnx-bundle-catalog":
+        raise CatalogError(f"Unexpected Kitten2 catalog kind: {data.get('kind')!r}")
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Mapping) or not bundles:
+        raise CatalogError("Kitten2 catalog bundles must be a non-empty object")
+
+    all_names = set(bundles)
+    result: list[CatalogItem] = []
+    for bundle_id in sorted(bundles):
+        if not isinstance(bundle_id, str) or _KITTEN2_ID_RE.fullmatch(bundle_id) is None:
+            raise CatalogError(f"Unsafe Kitten2 bundle ID: {bundle_id!r}")
+        raw = bundles[bundle_id]
+        if not isinstance(raw, Mapping):
+            raise CatalogError(f"{bundle_id}: bundle entry must be an object")
+        required_fields = {
+            "id",
+            "aliases",
+            "name",
+            "layout",
+            "sample_rate",
+            "default_voice",
+            "voices",
+            "source",
+            "runtime",
+            "artifacts",
+        }
+        if not required_fields.issubset(raw) or set(raw) - (required_fields | {"metadata"}):
+            raise CatalogError(f"{bundle_id}: Kitten2 bundle fields do not match the catalog contract")
+        if raw.get("id") != bundle_id:
+            raise CatalogError(f"{bundle_id}: bundle map key does not match id")
+        layout = raw.get("layout")
+        if layout != "kitten2-onnx-bundle-v1":
+            raise CatalogError(f"{bundle_id}: unsupported Kitten2 layout {layout!r}")
+        sample_rate = raw.get("sample_rate")
+        if type(sample_rate) is not int or sample_rate != 24000:
+            raise CatalogError(f"{bundle_id}: sample_rate must be 24000")
+        name = raw.get("name")
+        if not isinstance(name, str) or not name:
+            raise CatalogError(f"{bundle_id}: name must be a non-empty string")
+
+        aliases_raw = raw.get("aliases")
+        if not isinstance(aliases_raw, list):
+            raise CatalogError(f"{bundle_id}: aliases must be a list")
+        aliases: list[str] = []
+        for alias in aliases_raw:
+            if not isinstance(alias, str) or _KITTEN2_ID_RE.fullmatch(alias) is None:
+                raise CatalogError(f"{bundle_id}: unsafe alias {alias!r}")
+            if alias in all_names:
+                raise CatalogError(f"{bundle_id}: duplicate or ambiguous alias {alias!r}")
+            all_names.add(alias)
+            aliases.append(alias)
+
+        source = raw.get("source")
+        if not isinstance(source, Mapping) or set(source) != {
+            "provider",
+            "repository",
+            "revision",
+            "license",
+        }:
+            raise CatalogError(
+                f"{bundle_id}: source must contain provider, repository, revision, and license"
+            )
+        repository = source.get("repository")
+        if (
+            not isinstance(repository, str)
+            or re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository) is None
+        ):
+            raise CatalogError(f"{bundle_id}: invalid Hugging Face repository")
+        if source.get("provider") != "huggingface":
+            raise CatalogError(f"{bundle_id}: source provider must be huggingface")
+        revision = source.get("revision")
+        if not isinstance(revision, str) or _KITTEN2_SHA_RE.fullmatch(revision) is None:
+            raise CatalogError(
+                f"{bundle_id}: source revision must be a lowercase 40-character commit SHA"
+            )
+        license_name = source.get("license")
+        if not isinstance(license_name, str) or not license_name:
+            raise CatalogError(f"{bundle_id}: source license is required")
+
+        runtime = raw.get("runtime")
+        if not isinstance(runtime, Mapping) or runtime.get("bundle_format") != layout:
+            raise CatalogError(f"{bundle_id}: runtime bundle_format must match the Kitten2 layout")
+        metadata_raw = raw.get("metadata", {})
+        if not isinstance(metadata_raw, Mapping):
+            raise CatalogError(f"{bundle_id}: metadata must be an object")
+        voices_raw = raw.get("voices")
+        if not isinstance(voices_raw, list) or not voices_raw:
+            raise CatalogError(f"{bundle_id}: voices must be a non-empty list")
+        voices: list[str] = []
+        for voice in voices_raw:
+            if not isinstance(voice, str) or _KITTEN2_ID_RE.fullmatch(voice) is None:
+                raise CatalogError(f"{bundle_id}: unsafe voice name {voice!r}")
+            if voice in voices:
+                raise CatalogError(f"{bundle_id}: duplicate voice name {voice!r}")
+            voices.append(voice)
+        default_voice = raw.get("default_voice")
+        if not isinstance(default_voice, str) or default_voice not in voices:
+            raise CatalogError(f"{bundle_id}: default_voice must name a declared voice")
+
+        raw_artifacts = raw.get("artifacts")
+        if not isinstance(raw_artifacts, list) or not raw_artifacts:
+            raise CatalogError(f"{bundle_id}: artifacts must be a non-empty list")
+        artifacts: list[Artifact] = []
+        paths: set[str] = set()
+        bundle_count = 0
+        for index, item in enumerate(raw_artifacts):
+            if not isinstance(item, Mapping) or set(item) != {"role", "path", "sha256"}:
+                raise CatalogError(f"{bundle_id}: artifact {index} must contain role, path, and sha256")
+            role = item.get("role")
+            path = item.get("path")
+            sha256 = item.get("sha256")
+            if role not in {"bundle", "asset"}:
+                raise CatalogError(f"{bundle_id}: unknown artifact role {role!r}")
+            if not isinstance(path, str):
+                raise CatalogError(f"{bundle_id}: artifact path must be a string")
+            try:
+                validate_relative_path(path, field_name="Kitten2 artifact path")
+            except ValueError as exc:
+                raise CatalogError(f"{bundle_id}/{role}: {exc}") from exc
+            if path in paths:
+                raise CatalogError(f"{bundle_id}: duplicate artifact path {path!r}")
+            paths.add(path)
+            if (role == "bundle") != (path == "bundle.json"):
+                raise CatalogError(f"{bundle_id}: bundle role must be used only for bundle.json")
+            if role == "bundle":
+                bundle_count += 1
+            if not isinstance(sha256, str) or _KITTEN2_SHA256_RE.fullmatch(sha256) is None:
+                raise CatalogError(f"{bundle_id}/{path}: sha256 must be lowercase 64-character hex")
+            repository_url = "/".join(
+                urllib.parse.quote(part, safe="") for part in repository.split("/")
+            )
+            artifact_url = (
+                f"https://huggingface.co/{repository_url}/resolve/{revision}/"
+                f"{urllib.parse.quote(path, safe='/')}?download=true"
+            )
+            artifacts.append(
+                Artifact(
+                    role=role,
+                    filename=path,
+                    url=artifact_url,
+                    sha256=sha256,
+                    format=Path(path).suffix.lower().lstrip("."),
+                    metadata={
+                        "path": path,
+                        "source_repository": repository,
+                        "source_revision": revision,
+                    },
+                )
+            )
+        if bundle_count != 1:
+            raise CatalogError(f"{bundle_id}: exactly one bundle.json artifact is required")
+        if not all(any(path.startswith(prefix) for path in paths) for prefix in (
+            "decoder/", "lm/", "speaker/", "tokenizer/", "voices/"
+        )):
+            raise CatalogError(f"{bundle_id}: incomplete Kitten2 component artifact coverage")
+        graph_directories = {
+            str(Path(path).parent) for path in paths if path.endswith(".onnx")
+        }
+        for path in paths:
+            if path.endswith(".onnx.data") and str(Path(path).parent) not in graph_directories:
+                raise CatalogError(f"{bundle_id}: external data is not adjacent to a graph: {path}")
+
+        item_metadata = {
+            **dict(metadata_raw),
+            "name": name,
+            "layout": layout,
+            "source_repository": repository,
+            "source_revision": revision,
+            "license": license_name,
+            "runtime": {"layout": layout, "sample_rate": sample_rate},
+        }
+        result.append(
+            CatalogItem(
+                system="kitten2",
+                id=bundle_id,
+                kind="bundle",
+                artifacts=tuple(artifacts),
+                aliases=tuple(aliases),
+                sample_rate=sample_rate,
+                voices=tuple(voices),
+                default_voice=default_voice,
+                metadata=item_metadata,
+            )
+        )
     return result

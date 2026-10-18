@@ -1,6 +1,7 @@
 """Catalog generation and verification helpers."""
 
 from . import kitten as kitten_tools
+from . import kitten2 as kitten2_tools
 from . import pocket as pocket_tools
 from . import qwen3 as qwen3_tools
 from . import supertonic as supertonic_tools
@@ -51,5 +52,6 @@ __all__ = [
     "verify_kitten_catalog",
     "kitten_tools",
     "verify_supertonic_catalog",
+    "kitten2_tools",
     "qwen3_tools",
 ]

@@ -21,6 +21,7 @@ from .inventory import (
 )
 from .store import AssetStore, ProgressCallback
 from .systems import get_adapter
+from .systems.kitten2_contract import Kitten2Bundle, load_kitten2_bundle
 from .types import CatalogItem, Installation, InstalledArtifact, VoiceRecord
 from .voices import iter_catalog_voices, parse_voice_ref
 
@@ -298,7 +299,16 @@ class OnnxVoice:
 
         local_artifacts: builtins.list[InstalledArtifact]
         qwen3_runtime: dict[str, Any] | None = None
-        if system.lower() == "qwen3":
+        kitten2_bundle: Kitten2Bundle | None = None
+        if system.lower() == "kitten2":
+            if sample_rate is not None and sample_rate != 24000:
+                raise RuntimeContractError("Kitten2 local bundles require sample_rate=24000")
+            if runtime is not None or "runtime" in (metadata or {}):
+                raise RuntimeContractError("Kitten2 runtime metadata is read from bundle.json")
+            if artifact_metadata is not None:
+                raise RuntimeContractError("Kitten2 artifact metadata is read from bundle.json")
+            local_artifacts, kitten2_bundle = OnnxVoice._kitten2_local_artifacts(merged_files)
+        elif system.lower() == "qwen3":
             runtime_input = runtime
             if runtime_input is None:
                 runtime_input = (metadata or {}).get("runtime", {})
@@ -371,13 +381,21 @@ class OnnxVoice:
             merged_metadata["runtime"] = qwen3_runtime
             installation_system = "qwen3"
             installation_sample_rate = 24000
+        if kitten2_bundle is not None:
+            merged_metadata["runtime"] = {"layout": "kitten2-onnx-bundle-v1", "sample_rate": 24000}
+            installation_system = "kitten2"
+            installation_sample_rate = 24000
         installation = Installation(
             system=installation_system,
-            id=f"local-{Path(model_artifact.filename).stem}",
+            id=f"local-{kitten2_bundle.root.name}" if kitten2_bundle is not None else f"local-{Path(model_artifact.filename).stem}",
             kind="external",
-            path=model_artifact.path.parent,
+            path=kitten2_bundle.root if kitten2_bundle is not None else model_artifact.path.parent,
             artifacts=tuple(local_artifacts),
             sample_rate=installation_sample_rate,
+            voices=tuple(kitten2_bundle.manifest["voices"]) if kitten2_bundle is not None else (),
+            default_voice=(
+                kitten2_bundle.manifest["default_voice"] if kitten2_bundle is not None else None
+            ),
             metadata=merged_metadata,
         )
         adapter = get_adapter(system)
@@ -637,6 +655,11 @@ class OnnxVoice:
         This convenience method handles a single model plus optional companion files.
         Use ``open_local`` with a complete component mapping for multi-component runtimes.
         """
+        if system.lower() == "kitten2":
+            raise ValueError(
+                "Kitten2 bundles cannot be imported with import_model(); use install() or "
+                "open_local() with the complete bundle."
+            )
         files: dict[str, str | Path] = {"model": model}
         if config is not None:
             files["config"] = config
@@ -714,6 +737,56 @@ class OnnxVoice:
             format=Path(artifact_filename).suffix.lower().lstrip("."),
             metadata=metadata,
         )
+
+    @staticmethod
+    def _kitten2_local_artifacts(
+        files: Mapping[str, str | Path],
+    ) -> tuple[builtins.list[InstalledArtifact], Kitten2Bundle]:
+        bundle_paths = [
+            Path(raw_path).expanduser()
+            for raw_path in files.values()
+            if Path(raw_path).expanduser().name == "bundle.json"
+        ]
+        if len(bundle_paths) != 1:
+            raise RuntimeContractError("Kitten2 local open requires exactly one bundle.json")
+        bundle_path = bundle_paths[0].resolve()
+        bundle = load_kitten2_bundle(bundle_path)
+
+        for raw_path in files.values():
+            path = Path(raw_path).expanduser().resolve()
+            if not path.is_file():
+                raise RuntimeContractError(f"Kitten2 local file is missing: {path}")
+            try:
+                relative = path.relative_to(bundle.root).as_posix()
+            except ValueError as exc:
+                raise RuntimeContractError(
+                    f"Kitten2 local file is outside the bundle root: {path}"
+                ) from exc
+            if relative != "bundle.json" and relative not in bundle.files:
+                raise RuntimeContractError(f"Kitten2 local file is not declared: {relative}")
+
+        artifacts = [
+            OnnxVoice._local_artifact(
+                "bundle",
+                bundle_path,
+                filename="bundle.json",
+                extra_metadata={"path": "bundle.json"},
+            )
+        ]
+        for relative, sha256 in bundle.files.items():
+            path = bundle.root / relative
+            artifacts.append(
+                InstalledArtifact(
+                    role="asset",
+                    filename=relative,
+                    path=path,
+                    sha256=sha256,
+                    size=path.stat().st_size,
+                    format=path.suffix.lower().lstrip("."),
+                    metadata={"path": relative},
+                )
+            )
+        return artifacts, bundle
 
     @staticmethod
     def _qwen3_local_artifacts(

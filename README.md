@@ -20,6 +20,8 @@ python -m pip install "onnxvoice[directml]"
 python -m pip install "onnxvoice[openvino]"
 ```
 
+KittenTTS 2 text normalization and tokenization are optional: install `onnxvoice[kitten2]` with a runtime extra such as `onnxvoice[kitten2,cpu]`. The native runtime does not depend on the separate `kitten2-onnx` package. See [KittenTTS 2](docs/systems/kitten2.md).
+
 Hugging Face is an optional **download transport**, separate from runtime selection: use `onnxvoice[huggingface]` for transport only, or `onnxvoice[cpu,huggingface]` for CPU inference plus Hub downloads. Pocket users can continue using the compatible `onnxvoice[pocket]` extra (and add a runtime provider, e.g. `onnxvoice[pocket,cpu]`). See [Pocket download setup](docs/pocket-downloads.md).
 
 Voicefolio owns cataloging, discovery, and download of reference WAVs. OnnxVoice's Pocket support is for ONNX bundles and predefined runtime voice states. See [Pocket download setup](docs/pocket-downloads.md).
@@ -77,6 +79,7 @@ finally:
 | Pocket     | Yes              | Yes     | Catalog-dependent            |
 | Supertonic | Yes              | Yes     | Yes                          |
 | Kitten     | Yes              | Yes     | Yes                          |
+| KittenTTS 2 | Yes              | Yes     | Catalog child voices          |
 | Inflect    | Yes              | Yes     | Fixed `default` voice        |
 | Sopro      | Yes (partial)    | Yes     | Zero-shot reference audio    |
 | Qwen3-TTS  | Yes              | Yes     | No; VoiceDesign/Base bundles |

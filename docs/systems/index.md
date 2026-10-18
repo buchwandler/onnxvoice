@@ -26,6 +26,7 @@ kokoro
 pocket
 supertonic
 kitten
+kitten2
 inflect
 sopro
 qwen3

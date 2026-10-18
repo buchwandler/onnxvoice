@@ -54,6 +54,8 @@ finally:
 
 Kitten uses the same managed lifecycle. Its runtime receives model-ready token IDs, a selected `style` tensor, and `speed`; the text frontend and style selection belong to the producer. See [KittenTTS](systems/kitten.md).
 
+KittenTTS 2 is a separate native system with a text-level API. Install `onnxvoice[kitten2,cpu]`, then use `runtime.infer_text(text, voice="Bruno", preset="stable", seed=7)`. The Kitten v0.8 `infer(token_ids, style, speed)` contract remains separate. See [KittenTTS 2](systems/kitten2.md) for bundle, catalog, and provider details.
+
 An installation can also be found with `voice.installed()` or `voice.find_installed(ref)`. `voice.update(ref)` refreshes catalog data and atomically replaces the selected installation while preserving its quality and distribution by default.
 
 ## Reference WAVs and Pocket runtime

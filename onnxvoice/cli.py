@@ -9,6 +9,7 @@ from typing import Any
 from ._install_progress import InstallProgress
 from .catalog_tools import chatterbox as chatterbox_catalog_tools
 from .catalog_tools import kitten as kitten_catalog_tools
+from .catalog_tools import kitten2 as kitten2_catalog_tools
 from .catalog_tools import pocket as pocket_catalog_tools
 from .catalog_tools import qwen3 as qwen3_catalog_tools
 from .catalog_tools import supertonic as supertonic_catalog_tools
@@ -276,6 +277,20 @@ def build_parser() -> argparse.ArgumentParser:
     qwen3_verify_parser = qwen3_sub.add_parser("verify", help="Verify a Qwen3 catalog offline")
     qwen3_verify_parser.add_argument("--catalog", type=Path, required=True)
     qwen3_verify_parser.add_argument("--source", type=Path)
+
+
+    kitten2_parser = catalog_sub.add_parser("kitten2", help="Manage the native KittenTTS 2 bundle catalog")
+    kitten2_sub = kitten2_parser.add_subparsers(dest="catalog_action", required=True)
+    kitten2_build_parser = kitten2_sub.add_parser("build", help="Build a pinned KittenTTS 2 catalog")
+    kitten2_build_parser.add_argument("--repository", default=kitten2_catalog_tools.DEFAULT_REPOSITORY)
+    kitten2_build_parser.add_argument("--revision", default=kitten2_catalog_tools.DEFAULT_REVISION)
+    kitten2_build_parser.add_argument("--output", type=Path, required=True)
+    kitten2_build_parser.add_argument("--source-output", type=Path, required=True)
+    kitten2_verify_parser = kitten2_sub.add_parser(
+        "verify", help="Verify a pinned KittenTTS 2 catalog offline"
+    )
+    kitten2_verify_parser.add_argument("--catalog", type=Path, required=True)
+    kitten2_verify_parser.add_argument("--source", type=Path, required=True)
     chatterbox_parser = catalog_sub.add_parser(
         "chatterbox", help="Manage cleanroom Chatterbox ONNX bundles"
     )
@@ -960,6 +975,22 @@ def main(argv: list[str] | None = None) -> int:
                 if args.catalog_action == "verify":
                     catalog = qwen3_catalog_tools.load_catalog(args.catalog, args.source)
                     print(f"Verified {len(catalog['bundles'])} Qwen3 bundles")
+                    return 0
+            elif args.catalog_system == "kitten2":
+                if args.catalog_action == "build":
+                    catalog = kitten2_catalog_tools.build_catalog(
+                        repository=args.repository,
+                        revision=args.revision,
+                    )
+                    source = kitten2_catalog_tools.build_source(catalog)
+                    kitten2_catalog_tools.verify_catalog(catalog, source)
+                    _write_json(args.output, catalog)
+                    _write_json(args.source_output, source)
+                    print(f"Wrote {len(catalog['bundles'])} Kitten2 bundles to {args.output}")
+                    return 0
+                if args.catalog_action == "verify":
+                    catalog = kitten2_catalog_tools.load_catalog(args.catalog, args.source)
+                    print(f"Verified {len(catalog['bundles'])} Kitten2 bundles")
                     return 0
             elif args.catalog_system == "chatterbox":
                 if args.catalog_action == "build":

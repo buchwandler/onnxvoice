@@ -5,6 +5,7 @@ from .base import SystemAdapter
 from .chatterbox import ChatterboxAdapter, ChatterboxVoiceState
 from .inflect import InflectAdapter
 from .kitten import KittenAdapter
+from .kitten2 import Kitten2Adapter
 from .kokoro import KokoroAdapter
 from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
 from .kokoro_inno import KokoroVoicePack
@@ -26,6 +27,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
     SupertonicAdapter.system: SupertonicAdapter,
     SoproAdapter.system: SoproAdapter,
     KittenAdapter.system: KittenAdapter,
+    Kitten2Adapter.system: Kitten2Adapter,
     InflectAdapter.system: InflectAdapter,
     Qwen3Adapter.system: Qwen3Adapter,
     ChatterboxAdapter.system: ChatterboxAdapter,
@@ -60,6 +62,7 @@ __all__ = [
     "SoproGenerationDefaults",
     "SoproStreamChunk",
     "KittenAdapter",
+    "Kitten2Adapter",
     "Qwen3Adapter",
     "ChatterboxAdapter",
     "ChatterboxVoiceState",
