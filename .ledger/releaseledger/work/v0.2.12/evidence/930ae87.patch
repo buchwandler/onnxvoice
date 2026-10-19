@@ -1,0 +1,679 @@
+ onnxvoice/catalog.py                       |  6 +++
+ onnxvoice/catalog_tools/kitten2.py         | 31 +++++++++++++
+ onnxvoice/systems/kitten2_contract.py      |  6 +++
+ onnxvoice/systems/kitten2_expression.py    | 26 +++++------
+ tests/_kitten2_fixture.py                  | 61 ++++++++++++++++++++++--
+ tests/test_kitten2_catalog.py              | 74 +++++++++++++++++++++++++++++-
+ tests/test_kitten2_chunking_integration.py | 19 +++++++-
+ tests/test_kitten2_contract.py             | 24 +++++++++-
+ tests/test_kitten2_expression.py           | 26 +++++++----
+ tests/test_kitten2_integration.py          | 15 +++---
+ tests/test_kitten2_local_open.py           | 24 ++++++++--
+ tests/test_kitten2_real_bundle.py          | 36 +++++++++++++++
+ 12 files changed, 307 insertions(+), 41 deletions(-)
+
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index e426604..a86734b 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -69,6 +69,7 @@ POCKET_QUALIFIED_ROLES = frozenset(
+ _KITTEN2_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+ _KITTEN2_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+ _KITTEN2_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_KITTEN2_RUNTIME_NAMESPACES = frozenset({"decoder", "lm", "speaker", "tokenizer", "voices"})
+ DEFAULT_SOURCES = {
+     "piper": "https://raw.githubusercontent.com/buchwandler/piper-onnx-voices/main/catalog/voices.json",
+     "kokoro": "https://raw.githubusercontent.com/buchwandler/kokoro-onnx-models/main/catalog/models.json",
+@@ -3192,6 +3193,11 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
+                 validate_relative_path(path, field_name="Kitten2 artifact path")
+             except ValueError as exc:
+                 raise CatalogError(f"{bundle_id}/{role}: {exc}") from exc
++            if role == "asset" and path.split("/", 1)[0] not in _KITTEN2_RUNTIME_NAMESPACES:
++                raise CatalogError(
++                    f"{bundle_id}: artifact path {path!r} is outside the Kitten2 runtime namespaces; "
++                    "upstream bundle manifest must be regenerated cleanly"
++                )
+             if path in paths:
+                 raise CatalogError(f"{bundle_id}: duplicate artifact path {path!r}")
+             paths.add(path)
+diff --git a/onnxvoice/catalog_tools/kitten2.py b/onnxvoice/catalog_tools/kitten2.py
+index 69d0dd2..126aa02 100644
+--- a/onnxvoice/catalog_tools/kitten2.py
++++ b/onnxvoice/catalog_tools/kitten2.py
+@@ -23,6 +23,7 @@ DEFAULT_LICENSE = "stellon-labs-community-license"
+ USER_AGENT = "onnxvoice-kitten2-catalog"
+ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_RUNTIME_NAMESPACES = frozenset({"decoder", "lm", "speaker", "tokenizer", "voices"})
+ _REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
+ _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+@@ -122,6 +123,11 @@ def build_catalog(
+             path = validate_relative_path(raw_path, field_name="Kitten2 artifact path")
+         except ValueError as exc:
+             raise CatalogError(str(exc)) from exc
++        _require(
++            path.split("/", 1)[0] in _RUNTIME_NAMESPACES,
++            f"Kitten2 artifact path {path!r} is outside the runtime namespaces; "
++            "upstream bundle manifest must be regenerated cleanly",
++        )
+         _require(
+             isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256) is not None,
+             f"Invalid SHA-256 for Kitten2 artifact {path!r}",
+@@ -132,6 +138,31 @@ def build_catalog(
+     _require(
+         isinstance(voices, Mapping) and bool(voices), "Kitten2 voices must be a non-empty object"
+     )
++    declared_files = set(files)
++    for voice_name, raw_path in voices.items():
++        _require(
++            isinstance(voice_name, str) and _SAFE_ID_RE.fullmatch(voice_name) is not None,
++            f"Unsafe Kitten2 voice name: {voice_name!r}",
++        )
++        try:
++            voice_path = validate_relative_path(raw_path, field_name=f"voices.{voice_name}")
++        except ValueError as exc:
++            raise CatalogError(str(exc)) from exc
++        _require(
++            voice_path.split("/", 1)[0] == "voices",
++            f"Kitten2 voice path must be under voices/: {voice_path}",
++        )
++        _require(
++            voice_path in declared_files,
++            f"Kitten2 voice file is not declared: {voice_path}; "
++            "upstream bundle manifest must be regenerated cleanly",
++        )
++        metadata_path = Path(voice_path).with_suffix(".meta.json").as_posix()
++        _require(
++            metadata_path in declared_files,
++            f"Kitten2 voice metadata is not declared: {metadata_path}; "
++            "upstream bundle manifest must be regenerated cleanly",
++        )
+     default_voice = manifest.get("default_voice")
+     _require(
+         isinstance(default_voice, str) and default_voice in voices,
+diff --git a/onnxvoice/systems/kitten2_contract.py b/onnxvoice/systems/kitten2_contract.py
+index d7192cd..f83701f 100644
+--- a/onnxvoice/systems/kitten2_contract.py
++++ b/onnxvoice/systems/kitten2_contract.py
+@@ -13,6 +13,7 @@ from ..errors import RuntimeContractError
+ from ..types import validate_relative_path, validate_safe_component
+
+ _LAYOUT = "kitten2-onnx-bundle-v1"
++_RUNTIME_NAMESPACES = frozenset({"decoder", "lm", "speaker", "tokenizer", "voices"})
+ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ _TOKEN_MAP_FIELDS = (
+     "audio_id_base",
+@@ -87,6 +88,11 @@ def _validate_manifest(
+         relative = _relative(raw_path, "bundle file path")
+         if relative == "bundle.json":
+             raise _invalid("files must not include bundle.json")
++        if relative.split("/", 1)[0] not in _RUNTIME_NAMESPACES:
++            raise _invalid(
++                f"bundle file path is outside the runtime namespaces: {relative}; "
++                "upstream bundle manifest must be regenerated cleanly"
++            )
+         if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
+             raise _invalid(f"files[{relative!r}] must be a lowercase SHA-256 digest")
+         files[relative] = sha256
+diff --git a/onnxvoice/systems/kitten2_expression.py b/onnxvoice/systems/kitten2_expression.py
+index 90e085d..eb11e1c 100644
+--- a/onnxvoice/systems/kitten2_expression.py
++++ b/onnxvoice/systems/kitten2_expression.py
+@@ -29,17 +29,18 @@ _VOCAL_EVENTS = (
+     "sob",
+     "um",
+ )
+-_EXPRESSION_TAG = re.compile(
+-    r"\[(?P<emotion>" + "|".join(_EMOTIONS) + r")\]"
+-    r"|<(?P<event>" + "|".join(_VOCAL_EVENTS) + r")>",
+-    re.IGNORECASE,
+-)
++_EMOTION_PATTERN = r"\[(?P<emotion>" + "|".join(_EMOTIONS) + r")\]"
++_EVENT_PATTERN = r"<(?P<event>" + "|".join(_VOCAL_EVENTS) + r")>"
++_EMOTION_TAG = re.compile(_EMOTION_PATTERN)
++_VOCAL_EVENT = re.compile(_EVENT_PATTERN)
++_LEADING_EMOTION = re.compile(r"^\s*(?P<tag>" + _EMOTION_PATTERN + r")")
+ _EMPHASIS_SPAN = re.compile(r"\(\(\(([^()\n]{1,80})\)\)\)")
+
+
+ def expression_markup_spans(text: str) -> tuple[tuple[int, int], ...]:
+-    """Return source ranges occupied by recognized Kitten2 markup."""
+-    spans = [match.span() for match in _EXPRESSION_TAG.finditer(text)]
++    """Return source ranges occupied by supported Kitten2 markup."""
++    spans = [match.span() for match in _EMOTION_TAG.finditer(text)]
++    spans.extend(match.span() for match in _VOCAL_EVENT.finditer(text))
+     spans.extend(match.span() for match in _EMPHASIS_SPAN.finditer(text))
+     return tuple(sorted(spans))
+
+@@ -54,13 +55,12 @@ class ExpressionInfo:
+
+ def inspect_expression_markup(text: str) -> ExpressionInfo:
+     """Report supported Kitten2 markup without changing the supplied text."""
+-    matches = tuple(_EXPRESSION_TAG.finditer(text))
+-    emotions = [match.group("emotion").lower() for match in matches if match.group("emotion")]
+-    event_count = sum(match.group("event") is not None for match in matches)
++    leading_emotion = _LEADING_EMOTION.match(text)
++    events = tuple(_VOCAL_EVENT.finditer(text))
+     emphasis_count = sum(1 for _ in _EMPHASIS_SPAN.finditer(text))
+     return ExpressionInfo(
+-        has_expression=bool(emotions or event_count or emphasis_count),
+-        emotion=emotions[0] if emotions else None,
+-        event_count=event_count,
++        has_expression=bool(leading_emotion or events or emphasis_count),
++        emotion=leading_emotion.group("emotion") if leading_emotion else None,
++        event_count=len(events),
+         emphasis_count=emphasis_count,
+     )
+diff --git a/tests/_kitten2_fixture.py b/tests/_kitten2_fixture.py
+index 402096f..47d4ea8 100644
+--- a/tests/_kitten2_fixture.py
++++ b/tests/_kitten2_fixture.py
+@@ -5,8 +5,58 @@ import json
+ from pathlib import Path
+ from typing import Any
+
++CURRENT_VOICES = (
++    "Alfred",
++    "Arabic",
++    "Bella",
++    "Bruno",
++    "Chinese",
++    "Claire",
++    "Dante",
++    "Diana",
++    "Dolores",
++    "Edith",
++    "Eleanor",
++    "Elliot",
++    "Frank",
++    "French",
++    "German",
++    "Grace",
++    "Herbert",
++    "Hindi",
++    "Hugo",
++    "Iris",
++    "Italian",
++    "Jasper",
++    "Julian",
++    "Kiki",
++    "Laurence",
++    "Leo",
++    "Luna",
++    "Maeve",
++    "Marcus",
++    "Martha",
++    "Matthew",
++    "Miles",
++    "Otis",
++    "Portuguese",
++    "Raven",
++    "Reginald",
++    "Rosie",
++    "Russian",
++    "Sable",
++    "Saoirse",
++    "Serena",
++    "Spanish",
++    "Victor",
++    "Victoria",
++    "Vincent",
++    "Walter",
++    "Willow",
++)
+
+-def create_bundle(root: Path) -> Path:
++
++def create_bundle(root: Path, *, voice_names: tuple[str, ...] = ("Bruno",)) -> Path:
+     payloads = {
+         "lm/lm.onnx": b"lm graph",
+         "lm/lm.meta.json": b'{"component":"lm","runtime_profile":"test","io_dtype":"float32","input_mode":"inputs_embeds","embedding_storage_dtype":"float32","runtime_memory_profile":"default","runtime_provider":"CPUExecutionProvider","num_hidden_layers":1,"num_key_value_heads":1,"head_dim":1,"hidden_size":4}',
+@@ -21,9 +71,10 @@ def create_bundle(root: Path) -> Path:
+         "decoder/mel2wav/mel2wav.meta.json": b'{"component":"mel2wav"}',
+         "tokenizer/tokenizer.json": b"{}",
+         "tokenizer/vocab.json": b"{}",
+-        "voices/Bruno.npz": b"voice data",
+-        "voices/Bruno.meta.json": b'{"reference_transcript":"hello"}',
+     }
++    for name in voice_names:
++        payloads[f"voices/{name}.npz"] = b"voice data"
++        payloads[f"voices/{name}.meta.json"] = b'{"reference_transcript":"hello"}'
+     for relative, payload in payloads.items():
+         path = root / relative
+         path.parent.mkdir(parents=True, exist_ok=True)
+@@ -32,7 +83,7 @@ def create_bundle(root: Path) -> Path:
+     manifest: dict[str, Any] = {
+         "format": "kitten2-onnx-bundle-v1",
+         "sample_rate": 24000,
+-        "default_voice": "Bruno",
++        "default_voice": "Bruno" if "Bruno" in voice_names else voice_names[0],
+         "default_preset": "stable",
+         "lm": {
+             "model": "lm/lm.onnx",
+@@ -48,7 +99,7 @@ def create_bundle(root: Path) -> Path:
+         },
+         "tokenizer": "tokenizer",
+         "tokenizer_assets": ["tokenizer.json", "vocab.json"],
+-        "voices": {"Bruno": "voices/Bruno.npz"},
++        "voices": {name: f"voices/{name}.npz" for name in voice_names},
+         "token_map": {
+             "audio_id_base": 100,
+             "num_audio_tokens": 10,
+diff --git a/tests/test_kitten2_catalog.py b/tests/test_kitten2_catalog.py
+index bcde090..b96cae0 100644
+--- a/tests/test_kitten2_catalog.py
++++ b/tests/test_kitten2_catalog.py
+@@ -6,7 +6,7 @@ from pathlib import Path
+ from typing import Any
+
+ import pytest
+-from _kitten2_fixture import create_bundle
++from _kitten2_fixture import CURRENT_VOICES, create_bundle
+
+ import onnxvoice.cli as cli_module
+ from onnxvoice.catalog import DEFAULT_SOURCES, CatalogClient, _parse_kitten2
+@@ -120,6 +120,12 @@ def test_catalog_client_registers_native_source_and_rejects_mutable_revision(
+             ),
+             "Unsafe Kitten2 artifact path",
+         ),
++        (
++            lambda catalog: catalog["bundles"]["kitten-tts-v2"]["artifacts"][1].update(
++                path=".cache/huggingface/model.bin"
++            ),
++            "outside the Kitten2 runtime namespaces",
++        ),
+         (
+             lambda catalog: catalog["bundles"]["kitten-tts-v2"]["artifacts"][1].update(
+                 sha256="bad"
+@@ -141,7 +147,7 @@ def test_catalog_rejects_malformed_records(tmp_path: Path, change: Any, message:
+ def test_revision_resolution_and_catalog_build_pin_manifest_artifacts(
+     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+-    bundle_path = create_bundle(tmp_path / "upstream")
++    bundle_path = create_bundle(tmp_path / "upstream", voice_names=CURRENT_VOICES)
+     bundle_bytes = bundle_path.read_bytes()
+     requests: list[str] = []
+
+@@ -175,9 +181,73 @@ def test_revision_resolution_and_catalog_build_pin_manifest_artifacts(
+     assert record["source"]["revision"] == _REVISION
+     assert len(requests) == 2
+     assert len(record["artifacts"]) == len(json.loads(bundle_bytes)["files"]) + 1
++    upstream_manifest = json.loads(bundle_bytes)
++    assert record["voices"] == list(CURRENT_VOICES)
++    assert {artifact["path"] for artifact in record["artifacts"]} == {
++        "bundle.json",
++        *upstream_manifest["files"],
++    }
+     assert kitten2_catalog_tools.resolve_revision(_REPOSITORY, _REVISION) == _REVISION
+
+
++def test_builder_rejects_polluted_manifest_paths(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    bundle_path = create_bundle(tmp_path / "upstream")
++    manifest = json.loads(bundle_path.read_text(encoding="utf-8"))
++    manifest["files"][".cache/huggingface/model.bin"] = "0" * 64
++    bundle_bytes = json.dumps(manifest).encode("utf-8")
++
++    class Response:
++        def __enter__(self) -> Response:
++            return self
++
++        def __exit__(self, *_args: object) -> None:
++            return None
++
++        def read(self) -> bytes:
++            return bundle_bytes
++
++    monkeypatch.setattr(
++        kitten2_catalog_tools.urllib.request,
++        "urlopen",
++        lambda *_args, **_kwargs: Response(),
++    )
++    with pytest.raises(CatalogError, match="outside the runtime namespaces"):
++        kitten2_catalog_tools.build_catalog(
++            repository=_REPOSITORY, revision=_REVISION, license="Apache-2.0"
++        )
++
++
++def test_builder_rejects_missing_voice_metadata(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    bundle_path = create_bundle(tmp_path / "upstream")
++    manifest = json.loads(bundle_path.read_text(encoding="utf-8"))
++    manifest["files"].pop("voices/Bruno.meta.json")
++    bundle_bytes = json.dumps(manifest).encode("utf-8")
++
++    class Response:
++        def __enter__(self) -> Response:
++            return self
++
++        def __exit__(self, *_args: object) -> None:
++            return None
++
++        def read(self) -> bytes:
++            return bundle_bytes
++
++    monkeypatch.setattr(
++        kitten2_catalog_tools.urllib.request,
++        "urlopen",
++        lambda *_args, **_kwargs: Response(),
++    )
++    with pytest.raises(CatalogError, match="voice metadata is not declared"):
++        kitten2_catalog_tools.build_catalog(
++            repository=_REPOSITORY, revision=_REVISION, license="Apache-2.0"
++        )
++
++
+ def test_catalog_verify_is_offline_and_rejects_source_drift(
+     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+diff --git a/tests/test_kitten2_chunking_integration.py b/tests/test_kitten2_chunking_integration.py
+index 50b0057..8c433f4 100644
+--- a/tests/test_kitten2_chunking_integration.py
++++ b/tests/test_kitten2_chunking_integration.py
+@@ -5,6 +5,7 @@ from pathlib import Path
+ from typing import Any
+
+ import numpy as np
++import pytest
+ from _kitten2_fixture import create_bundle
+
+ from onnxvoice import OnnxVoice
+@@ -13,7 +14,19 @@ from onnxvoice.systems.kitten2_frontend import PreparedTarget, PreparedVoice
+ from onnxvoice.systems.kitten2_generation import GenerationResult
+
+
+-def test_adapter_chunks_unchanged_text_and_shares_request_rng(tmp_path: Path) -> None:
++@pytest.mark.parametrize(
++    ("text", "first_chunk_has_expression"),
++    [
++        ("[joyful] We won the grant <laugh> I can (((hardly))) believe it!", True),
++        (
++            "Plain opening sentence before the later <laugh> marker, with more words afterward.",
++            False,
++        ),
++    ],
++)
++def test_adapter_chunks_unchanged_text_and_shares_request_rng(
++    tmp_path: Path, text: str, first_chunk_has_expression: bool
++) -> None:
+     bundle_path = create_bundle(tmp_path / "bundle")
+     manifest = json.loads(bundle_path.read_text(encoding="utf-8"))
+     manifest["generation"]["chunk_chars"] = 30
+@@ -68,10 +81,12 @@ def test_adapter_chunks_unchanged_text_and_shares_request_rng(tmp_path: Path) ->
+     runtime.frontend = frontend
+     runtime._get_language_model = lambda: language_model
+     runtime._get_decoder = lambda: DecoderStub()
+-    text = "[joyful] We won today. Another sentence with <laugh> after the close."
+     try:
+         first = runtime.infer_text(text, seed=7)
+         first_chunks = frontend.texts[:]
++        assert (
++            inspect_expression_markup(first_chunks[0]).has_expression is first_chunk_has_expression
++        )
+         first_draws = language_model.draws[:]
+         first_rngs = language_model.rngs[:]
+         first_prompts = language_model.prompts[:]
+diff --git a/tests/test_kitten2_contract.py b/tests/test_kitten2_contract.py
+index f50c721..89549e1 100644
+--- a/tests/test_kitten2_contract.py
++++ b/tests/test_kitten2_contract.py
+@@ -62,6 +62,26 @@ def test_rejects_unsafe_file_path(tmp_path: Path) -> None:
+         load_kitten2_bundle(bundle_path)
+
+
++def test_rejects_polluted_cache_path(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    data = _manifest(bundle_path)
++    data["files"][".cache/huggingface/model.bin"] = "0" * 64
++    _write_manifest(bundle_path, data)
++
++    with pytest.raises(RuntimeContractError, match="outside the runtime namespaces"):
++        load_kitten2_bundle(bundle_path)
++
++
++def test_requires_metadata_for_each_voice(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    data = _manifest(bundle_path)
++    data["files"].pop("voices/Bruno.meta.json")
++    _write_manifest(bundle_path, data)
++
++    with pytest.raises(RuntimeContractError, match="voice metadata is not declared"):
++        load_kitten2_bundle(bundle_path)
++
++
+ def test_rejects_missing_corrupt_and_undeclared_files(tmp_path: Path) -> None:
+     bundle_path = create_bundle(tmp_path / "missing")
+     (bundle_path.parent / "lm/lm.onnx").unlink()
+@@ -110,11 +130,11 @@ def test_rejects_external_data_without_adjacent_graph(tmp_path: Path) -> None:
+     bundle_path = create_bundle(tmp_path / "bundle")
+     bundle = bundle_path.parent
+     source = bundle / "lm/lm.ternary-exact-int8.onnx.data"
+-    target = bundle / "orphan.onnx.data"
++    target = bundle / "voices/orphan.onnx.data"
+     source.rename(target)
+     data = _manifest(bundle_path)
+     data["files"].pop("lm/lm.ternary-exact-int8.onnx.data")
+-    data["files"]["orphan.onnx.data"] = hashlib.sha256(target.read_bytes()).hexdigest()
++    data["files"]["voices/orphan.onnx.data"] = hashlib.sha256(target.read_bytes()).hexdigest()
+     _write_manifest(bundle_path, data)
+
+     with pytest.raises(RuntimeContractError, match="external ONNX data must be adjacent"):
+diff --git a/tests/test_kitten2_expression.py b/tests/test_kitten2_expression.py
+index 4de6125..03519ae 100644
+--- a/tests/test_kitten2_expression.py
++++ b/tests/test_kitten2_expression.py
+@@ -32,6 +32,15 @@ def test_recognizes_supported_emotions(emotion: str) -> None:
+     assert text == f"[{emotion}] Hello."
+
+
++def test_leading_emotion_allows_whitespace_and_uses_only_the_first_tag() -> None:
++    text = " \t\n[joyful] hello [sad]"
++    result = inspect_expression_markup(text)
++
++    assert result.has_expression
++    assert result.emotion == "joyful"
++    assert text == " \t\n[joyful] hello [sad]"
++
++
+ @pytest.mark.parametrize(
+     "event",
+     ["gasp", "giggle", "growl", "gulp", "laugh", "pause", "scoff", "sigh", "sob", "um"],
+@@ -45,19 +54,20 @@ def test_recognizes_supported_vocal_events(event: str) -> None:
+     assert result.emphasis_count == 0
+
+
+-def test_recognizes_case_insensitive_and_multiple_expression_tags() -> None:
+-    result = inspect_expression_markup("[ANGRY][joyful]hello<GASP><laugh>")
++@pytest.mark.parametrize("text", ["[JOYFUL] hello", "<LAUGH>"])
++def test_uppercase_markup_does_not_activate_expression(text: str) -> None:
++    result = inspect_expression_markup(text)
+
+-    assert result.has_expression
+-    assert result.emotion == "angry"
+-    assert result.event_count == 2
++    assert not result.has_expression
++    assert result.emotion is None
++    assert result.event_count == 0
+
+
+-def test_recognizes_known_emotion_tags_after_sentence_start() -> None:
++def test_nonleading_emotion_does_not_declare_request_emotion() -> None:
+     result = inspect_expression_markup("hello [sad] world")
+
+-    assert result.has_expression
+-    assert result.emotion == "sad"
++    assert not result.has_expression
++    assert result.emotion is None
+
+
+ def test_recognizes_emphasis_spans_up_to_eighty_non_newline_characters() -> None:
+diff --git a/tests/test_kitten2_integration.py b/tests/test_kitten2_integration.py
+index 7bb5fda..6111fb9 100644
+--- a/tests/test_kitten2_integration.py
++++ b/tests/test_kitten2_integration.py
+@@ -7,7 +7,7 @@ from typing import Any
+
+ import numpy as np
+ import pytest
+-from _kitten2_fixture import create_bundle
++from _kitten2_fixture import CURRENT_VOICES, create_bundle
+
+ import onnxvoice.manager as manager_module
+ from onnxvoice import Kitten2Adapter, OnnxVoice, registered_systems
+@@ -40,8 +40,8 @@ def _catalog_for_bundle(bundle_path: Path) -> dict[str, Any]:
+                 "name": "KittenTTS 2 ONNX",
+                 "layout": "kitten2-onnx-bundle-v1",
+                 "sample_rate": 24000,
+-                "default_voice": "Bruno",
+-                "voices": ["Bruno"],
++                "default_voice": bundle["default_voice"],
++                "voices": sorted(bundle["voices"]),
+                 "source": {
+                     "provider": "huggingface",
+                     "repository": "example/kitten2-bundle",
+@@ -69,14 +69,15 @@ def test_kitten2_is_registered_and_exported() -> None:
+ def test_local_open_uses_native_adapter_without_creating_sessions(
+     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+-    bundle_path = create_bundle(tmp_path / "bundle")
++    bundle_path = create_bundle(tmp_path / "bundle", voice_names=CURRENT_VOICES)
+     monkeypatch.setattr(manager_module.AssetStore, "__init__", _forbidden)
+     monkeypatch.setattr(manager_module.CatalogClient, "__init__", _forbidden)
+
+     runtime = OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path})
+     try:
+         assert isinstance(runtime, Kitten2Adapter)
+-        assert runtime.voices == ("Bruno",)
++        assert runtime.voices == CURRENT_VOICES
++        assert "Kiki" in runtime.voices
+         assert runtime.default_voice == "Bruno"
+         assert runtime.default_preset == "stable"
+         assert runtime.sample_rate == 24000
+@@ -105,7 +106,7 @@ def test_single_file_import_rejects_kitten2(tmp_path: Path) -> None:
+ def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
+     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+-    bundle_path = create_bundle(tmp_path / "upstream")
++    bundle_path = create_bundle(tmp_path / "upstream", voice_names=CURRENT_VOICES)
+     catalog_path = tmp_path / "catalog.json"
+     catalog_path.write_text(json.dumps(_catalog_for_bundle(bundle_path)), encoding="utf-8")
+     manager = OnnxVoice(
+@@ -121,6 +122,7 @@ def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
+
+     monkeypatch.setattr(manager_module.AssetStore, "_materialize_artifact", materialize)
+     installation = manager.install("kitten2:kitten-tts-v2")
++    assert installation.voices == CURRENT_VOICES
+     installed_names = {artifact.filename for artifact in installation.artifacts}
+     assert "decoder/mel2wav/mel2wav.onnx.data" in installed_names
+     assert "decoder/mel2wav/mel2wav.onnx" in installed_names
+@@ -133,6 +135,7 @@ def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
+     try:
+         assert isinstance(runtime, Kitten2Adapter)
+         assert runtime.bundle.root == installation.path
++        assert runtime.default_voice == "Bruno"
+         assert runtime._sessions == {}
+     finally:
+         runtime.close()
+diff --git a/tests/test_kitten2_local_open.py b/tests/test_kitten2_local_open.py
+index 1a5577a..f7d89d4 100644
+--- a/tests/test_kitten2_local_open.py
++++ b/tests/test_kitten2_local_open.py
+@@ -4,7 +4,7 @@ from pathlib import Path
+ from typing import Any
+
+ import pytest
+-from _kitten2_fixture import create_bundle
++from _kitten2_fixture import CURRENT_VOICES, create_bundle
+
+ import onnxvoice.manager as manager_module
+ from onnxvoice.errors import RuntimeContractError
+@@ -25,7 +25,7 @@ def _forbidden(*_args: Any, **_kwargs: Any) -> None:
+ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
+     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+-    bundle_path = create_bundle(tmp_path / "local-kit")
++    bundle_path = create_bundle(tmp_path / "local-kit", voice_names=CURRENT_VOICES)
+     adapter_args: dict[str, Any] = {}
+
+     def make_adapter(system: str):
+@@ -55,7 +55,8 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
+     assert installation.system == "kitten2"
+     assert installation.path == bundle_path.parent
+     assert installation.sample_rate == 24000
+-    assert installation.voices == ("Bruno",)
++    assert installation.voices == CURRENT_VOICES
++    assert "Kiki" in installation.voices
+     assert installation.default_voice == "Bruno"
+     assert installation.metadata["runtime"] == {
+         "layout": "kitten2-onnx-bundle-v1",
+@@ -80,6 +81,23 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
+     assert adapter_args["kwargs"]["provider_options"] == [{"device_id": "2"}]
+
+
++@pytest.mark.parametrize(
++    ("kwargs", "message"),
++    [
++        ({"runtime": {}}, "runtime metadata is read from bundle.json"),
++        ({"metadata": {"runtime": {}}}, "runtime metadata is read from bundle.json"),
++        ({"artifact_metadata": {"bundle": {}}}, "artifact metadata is read from bundle.json"),
++    ],
++)
++def test_open_local_rejects_kitten2_metadata_overrides(
++    tmp_path: Path, kwargs: dict[str, Any], message: str
++) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++
++    with pytest.raises(RuntimeContractError, match=message):
++        OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path}, **kwargs)
++
++
+ def test_open_local_rejects_missing_bundle_and_files_outside_root(tmp_path: Path) -> None:
+     ordinary_file = tmp_path / "not-a-bundle.onnx"
+     ordinary_file.write_bytes(b"model")
+diff --git a/tests/test_kitten2_real_bundle.py b/tests/test_kitten2_real_bundle.py
+index f666e7b..9ff0697 100644
+--- a/tests/test_kitten2_real_bundle.py
++++ b/tests/test_kitten2_real_bundle.py
+@@ -82,3 +82,39 @@ def test_bruno_cpu_real_bundle_expression_smoke() -> None:
+         assert np.all(np.isfinite(audio))
+     finally:
+         runtime.close()
++
++
++@pytest.mark.integration
++@pytest.mark.resource_heavy
++def test_kiki_cpu_real_bundle_expressive_smoke() -> None:
++    raw_bundle = os.environ.get("ONNXVOICE_KITTEN2_BUNDLE")
++    if not raw_bundle:
++        pytest.skip("set ONNXVOICE_KITTEN2_BUNDLE to a complete KittenTTS 2 bundle")
++    bundle_path = Path(raw_bundle)
++    if bundle_path.is_dir():
++        bundle_path /= "bundle.json"
++
++    runtime = OnnxVoice.open_local(
++        system="kitten2",
++        files={"bundle": bundle_path},
++        providers="cpu",
++    )
++    try:
++        result = runtime.infer_text(
++            "[joyful] We won the grant <laugh> I can (((hardly))) believe it!",
++            voice="Kiki",
++            preset="expressive",
++            seed=7,
++            max_new_tokens=64,
++        )
++        audio = result.audio
++        assert result.sample_rate == 24000
++        assert audio.dtype == np.float32
++        assert audio.ndim == 1
++        assert audio.size > 0
++        assert np.all(np.isfinite(audio))
++        assert result.metadata["voice"] == "Kiki"
++        assert result.metadata["preset"] == "expressive"
++        assert result.metadata["expression_conditioning"] is True
++    finally:
++        runtime.close()

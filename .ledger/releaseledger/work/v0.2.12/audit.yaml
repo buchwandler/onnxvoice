@@ -1,0 +1,132 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.12
+git_base_ref: v0.2.11
+git_base_sha: e981792e9ab520f7978cf210c607b94167c784d1
+git_head_ref: HEAD
+git_head_sha: 930ae87af698e19ab4dd4f32af46b0c8bb2be44c
+git_range: e981792e9ab520f7978cf210c607b94167c784d1..930ae87af698e19ab4dd4f32af46b0c8bb2be44c
+commit_count: 3
+rows:
+  - sha: aff57a6a0e8402bfc177bb474e93e73aba2a0811
+    source_ref: git:aff57a6a0e8402bfc177bb474e93e73aba2a0811
+    short_sha: aff57a6
+    changed_paths:
+      - MANIFEST.in
+      - README.md
+      - docs/cli.md
+      - docs/providers.md
+      - docs/python-api.md
+      - docs/systems/index.md
+      - docs/systems/kitten2.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/__init__.py
+      - onnxvoice/catalog_tools/kitten2.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/kitten2.py
+      - onnxvoice/systems/kitten2_contract.py
+      - onnxvoice/systems/kitten2_decoder.py
+      - onnxvoice/systems/kitten2_decoder_reference.py
+      - onnxvoice/systems/kitten2_frontend.py
+      - onnxvoice/systems/kitten2_generation.py
+      - onnxvoice/systems/kitten2_sampling.py
+      - onnxvoice/systems/kitten2_tokens.py
+      - pyproject.toml
+      - tests/_kitten2_fixture.py
+      - tests/test_kitten2_catalog.py
+      - tests/test_kitten2_contract.py
+      - tests/test_kitten2_generation.py
+      - tests/test_kitten2_integration.py
+      - tests/test_kitten2_local_open.py
+      - tests/test_kitten2_real_bundle.py
+    stats:
+      files_changed: 30
+      insertions: 2972
+      deletions: 3
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add support for kitten 2"
+  - sha: 5fec35fcc982440ccb00de21b1cb30a4dfb7855b
+    source_ref: git:5fec35fcc982440ccb00de21b1cb30a4dfb7855b
+    short_sha: 5fec35f
+    changed_paths:
+      - README.md
+      - docs/architecture.md
+      - docs/providers.md
+      - docs/python-api.md
+      - docs/systems/kitten2.md
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/kitten2.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/systems/kitten2.py
+      - onnxvoice/systems/kitten2_chunking.py
+      - onnxvoice/systems/kitten2_contract.py
+      - onnxvoice/systems/kitten2_decoder.py
+      - onnxvoice/systems/kitten2_decoder_reference.py
+      - onnxvoice/systems/kitten2_expression.py
+      - onnxvoice/systems/kitten2_frontend.py
+      - onnxvoice/systems/kitten2_generation.py
+      - onnxvoice/systems/kitten2_tokenizer.py
+      - pyproject.toml
+      - tests/fixtures/kitten2_tokenizer_golden.json
+      - tests/test_kitten2_catalog.py
+      - tests/test_kitten2_chunking.py
+      - tests/test_kitten2_chunking_integration.py
+      - tests/test_kitten2_contract.py
+      - tests/test_kitten2_expression.py
+      - tests/test_kitten2_frontend.py
+      - tests/test_kitten2_generation.py
+      - tests/test_kitten2_integration.py
+      - tests/test_kitten2_local_open.py
+      - tests/test_kitten2_prompt.py
+      - tests/test_kitten2_real_bundle.py
+      - tests/test_kitten2_tokenizer.py
+    stats:
+      files_changed: 32
+      insertions: 1217
+      deletions: 153
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: kitten2 support improved"
+  - sha: 930ae87af698e19ab4dd4f32af46b0c8bb2be44c
+    source_ref: git:930ae87af698e19ab4dd4f32af46b0c8bb2be44c
+    short_sha: 930ae87
+    changed_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/catalog_tools/kitten2.py
+      - onnxvoice/systems/kitten2_contract.py
+      - onnxvoice/systems/kitten2_expression.py
+      - tests/_kitten2_fixture.py
+      - tests/test_kitten2_catalog.py
+      - tests/test_kitten2_chunking_integration.py
+      - tests/test_kitten2_contract.py
+      - tests/test_kitten2_expression.py
+      - tests/test_kitten2_integration.py
+      - tests/test_kitten2_local_open.py
+      - tests/test_kitten2_real_bundle.py
+    stats:
+      files_changed: 12
+      insertions: 307
+      deletions: 41
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add kitten2 voices"

@@ -1,0 +1,1975 @@
+ README.md                                      |  24 ++---
+ docs/architecture.md                           |   6 ++
+ docs/providers.md                              |   2 -
+ docs/python-api.md                             |   2 +-
+ docs/systems/kitten2.md                        |  24 ++++-
+ onnxvoice/catalog.py                           |  20 ++--
+ onnxvoice/catalog_tools/kitten2.py             |   9 +-
+ onnxvoice/cli.py                               |  13 ++-
+ onnxvoice/manager.py                           |   4 +-
+ onnxvoice/systems/kitten2.py                   |  92 +++++++++++-----
+ onnxvoice/systems/kitten2_chunking.py          |  66 ++++++++++++
+ onnxvoice/systems/kitten2_contract.py          |  21 ++--
+ onnxvoice/systems/kitten2_decoder.py           |  11 +-
+ onnxvoice/systems/kitten2_decoder_reference.py |   1 -
+ onnxvoice/systems/kitten2_expression.py        |  66 ++++++++++++
+ onnxvoice/systems/kitten2_frontend.py          |  65 +++++++----
+ onnxvoice/systems/kitten2_generation.py        |  10 +-
+ onnxvoice/systems/kitten2_tokenizer.py         |  26 +++++
+ pyproject.toml                                 |   2 +-
+ tests/fixtures/kitten2_tokenizer_golden.json   |  87 +++++++++++++++
+ tests/test_kitten2_catalog.py                  |  78 ++++++++------
+ tests/test_kitten2_chunking.py                 |  55 ++++++++++
+ tests/test_kitten2_chunking_integration.py     |  99 +++++++++++++++++
+ tests/test_kitten2_contract.py                 |  21 ++++
+ tests/test_kitten2_expression.py               | 105 ++++++++++++++++++
+ tests/test_kitten2_frontend.py                 | 139 ++++++++++++++++++++++++
+ tests/test_kitten2_generation.py               |  35 +++++-
+ tests/test_kitten2_integration.py              |  15 ++-
+ tests/test_kitten2_local_open.py               |   9 +-
+ tests/test_kitten2_prompt.py                   | 143 +++++++++++++++++++++++++
+ tests/test_kitten2_real_bundle.py              |  35 ++++++
+ tests/test_kitten2_tokenizer.py                |  85 +++++++++++++++
+ 32 files changed, 1217 insertions(+), 153 deletions(-)
+
+diff --git a/README.md b/README.md
+index 36e745d..1b98c36 100644
+--- a/README.md
++++ b/README.md
+@@ -72,18 +72,18 @@ finally:
+
+ ## Supported systems
+
+-| System     | Built-in adapter | Catalog | Named voices                 |
+-| ---------- | ---------------- | ------- | ---------------------------- |
+-| Piper      | Yes              | Yes     | Yes                          |
+-| Kokoro     | Yes              | Yes     | Yes                          |
+-| Pocket     | Yes              | Yes     | Catalog-dependent            |
+-| Supertonic | Yes              | Yes     | Yes                          |
+-| Kitten     | Yes              | Yes     | Yes                          |
+-| KittenTTS 2 | Yes              | Yes     | Catalog child voices          |
+-| Inflect    | Yes              | Yes     | Fixed `default` voice        |
+-| Sopro      | Yes (partial)    | Yes     | Zero-shot reference audio    |
+-| Qwen3-TTS  | Yes              | Yes     | No; VoiceDesign/Base bundles |
+-| Chatterbox | Yes              | Yes     | Zero-shot reference audio    |
++| System      | Built-in adapter | Catalog | Named voices                 |
++| ----------- | ---------------- | ------- | ---------------------------- |
++| Piper       | Yes              | Yes     | Yes                          |
++| Kokoro      | Yes              | Yes     | Yes                          |
++| Pocket      | Yes              | Yes     | Catalog-dependent            |
++| Supertonic  | Yes              | Yes     | Yes                          |
++| Kitten      | Yes              | Yes     | Yes                          |
++| KittenTTS 2 | Yes              | Yes     | Catalog child voices         |
++| Inflect     | Yes              | Yes     | Fixed `default` voice        |
++| Sopro       | Yes (partial)    | Yes     | Zero-shot reference audio    |
++| Qwen3-TTS   | Yes              | Yes     | No; VoiceDesign/Base bundles |
++| Chatterbox  | Yes              | Yes     | Zero-shot reference audio    |
+
+ Sopro currently provides bundle management, graph inspection, tokenization, and reference preparation only. End-to-end Python synthesis remains capability-gated pending the real native-runtime and parity gate; see [Sopro support](docs/systems/sopro.md).
+ Catalog contents determine which named voices are available. Discovery does not depend on a separate capability list. Adapters execute system-specific model contracts and do not imply text normalization or phonemization support.
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 34c6247..ef65b3f 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -35,6 +35,12 @@ InferenceResult(audio, sample_rate, timings, outputs, metadata)
+ The Kokoro adapter dispatches from catalog runtime metadata. A single layout owns one ONNX session. `split-onnx-v1` owns prosody, curves, and decoder sessions and keeps source generation, duration expansion, and STFT preparation inside OnnxVoice. Both layouts expose the same `infer(token_ids, style=..., speed=..., seed=...)` contract.
+ The Kitten adapter accepts model-ready token IDs, a caller-selected style tensor, and speed. It validates the graph ABI, applies the required 5,000-sample output trim, and returns mono audio at 24 kHz; KittenSynth remains responsible for text processing and style selection.
+
++### Semantic text and model-specific protocols
++
++ONNXVoice does not own semantic text normalization. Callers prepare the linguistic content they want spoken, including number, date, currency, abbreviation, unit, language, and G2P policy. System adapters may inspect or encode checkpoint-specific textual protocols, such as control markup, special tokens, reference prompts, and tokenizer framing, but those operations must not silently rewrite caller content.
++
++The native KittenTTS 2 adapter therefore accepts final text, passes it unchanged to the bundle tokenizer, and only inspects supported emotion, vocal-event, and emphasis markup to choose expression conditioning. The markup remains literal tokenizer input. This is model-specific runtime behavior, not a general ONNXVoice text frontend.
++
+ The Chatterbox adapter owns its `speech_encoder`, `embed_tokens`, `language_model`, and `conditional_decoder` graph sessions, plus reference-state preparation and token generation. A frontend such as ChatterboxSynth owns text tokenization, reference WAV decoding/resampling, and the public synthesis API; see [Chatterbox](systems/chatterbox.md) for the exact bundle and input contract.
+
+ ## Installation metadata
+diff --git a/docs/providers.md b/docs/providers.md
+index d6794f3..0800519 100644
+--- a/docs/providers.md
++++ b/docs/providers.md
+@@ -62,8 +62,6 @@ finally:
+     runtime.close()
+ ```
+
+-
+-
+ ## KittenTTS 2 component sessions
+
+ KittenTTS 2 creates four lazy ONNX sessions for its LM, speaker, flow, and mel2wav components. The selected provider list and provider options are passed to each component session without adding an implicit CPU fallback. A bundle LM profile that requires low-memory exact-ternary execution is CPU-only and uses its required component-specific session settings; conflicting caller-provided LM options are rejected. See [KittenTTS 2](systems/kitten2.md).
+diff --git a/docs/python-api.md b/docs/python-api.md
+index 5458113..dc0e5ac 100644
+--- a/docs/python-api.md
++++ b/docs/python-api.md
+@@ -54,7 +54,7 @@ finally:
+
+ Kitten uses the same managed lifecycle. Its runtime receives model-ready token IDs, a selected `style` tensor, and `speed`; the text frontend and style selection belong to the producer. See [KittenTTS](systems/kitten.md).
+
+-KittenTTS 2 is a separate native system with a text-level API. Install `onnxvoice[kitten2,cpu]`, then use `runtime.infer_text(text, voice="Bruno", preset="stable", seed=7)`. The Kitten v0.8 `infer(token_ids, style, speed)` contract remains separate. See [KittenTTS 2](systems/kitten2.md) for bundle, catalog, and provider details.
++KittenTTS 2 is a separate native system with a text-level API. Install `onnxvoice[kitten2,cpu]`, then use `runtime.infer_text(text, voice="Bruno", preset="stable", seed=7)`. ONNXVoice passes the caller's text to the bundled tokenizer unchanged and does not perform number, date, currency, abbreviation, unit, language, or other semantic normalization. Use `use_emotion=None` for automatic Kitten2 markup detection, or `True`/`False` to override expression conditioning. `use_reference_prompt=None` follows the bundle setting, while `True`/`False` overrides it. The Kitten v0.8 `infer(token_ids, style, speed)` contract remains separate. See [KittenTTS 2](systems/kitten2.md) for bundle, catalog, provider, text-ownership, and chunking details.
+
+ An installation can also be found with `voice.installed()` or `voice.find_installed(ref)`. `voice.update(ref)` refreshes catalog data and atomically replaces the selected installation while preserving its quality and distribution by default.
+
+diff --git a/docs/systems/kitten2.md b/docs/systems/kitten2.md
+index a13968e..87f3475 100644
+--- a/docs/systems/kitten2.md
++++ b/docs/systems/kitten2.md
+@@ -12,9 +12,9 @@ The KittenTTS 2 text frontend is optional. Install it together with an ONNX Runt
+ python -m pip install "onnxvoice[kitten2,cpu]"
+ ```
+
+-For a compatible GPU runtime, use `onnxvoice[kitten2,gpu]`. The `kitten2` extra pins the frontend dependencies used by the validated implementation: `kitten-text-processing==0.1.0` and `transformers==4.57.1`. The `cpu` and `gpu` extras select ONNX Runtime; the KittenTTS 2 frontend extra alone does not install an inference provider.
++The `kitten2` extra installs only `tokenizers>=0.22,<0.23`, the lightweight runtime used to execute the bundle's `tokenizer/tokenizer.json`. The `cpu` and `gpu` extras select ONNX Runtime; use `onnxvoice[kitten2,gpu]` with a compatible GPU runtime. The KittenTTS 2 extra alone does not install an inference provider.
+
+-Tokenizer assets are loaded from the installed bundle with `local_files_only=True`. Text inference does not download tokenizer or model files at runtime. The first text inference requires the `kitten2` extra; bundle installation and catalog maintenance do not.
++Text inference executes the bundled `tokenizer/tokenizer.json` locally and never downloads tokenizer or model files. The `tokenizers` dependency is loaded only when Kitten2 text synthesis is requested, so importing `onnxvoice` and using other systems does not require the Kitten2 extra.
+
+ ## Managed and local use
+
+@@ -36,7 +36,19 @@ with manager.open(installation, providers="cpu") as runtime:
+     )
+ ```
+
+-`infer_text()` accepts text, an optional manifest voice, a decode preset, a seed, and a generation limit. It returns the normal `InferenceResult` with finite mono `float32` audio at 24 kHz. The adapter exposes read-only `voices`, `default_voice`, `default_preset`, `decode_presets`, and `sample_rate` properties. `infer(token_ids)` is not supported for this text-level multi-stage system and raises `CapabilityError` directing callers to `infer_text()`.
++`infer_text()` accepts caller-prepared text, an optional manifest voice, a decode preset, a seed, a generation limit, `use_emotion`, and `use_reference_prompt`. It returns the normal `InferenceResult` with finite mono `float32` audio at 24 kHz. Its metadata reports resolved expression conditioning and chunk count. The adapter exposes read-only `voices`, `default_voice`, `default_preset`, `decode_presets`, and `sample_rate` properties. `infer(token_ids)` is not supported for this text-level multi-stage system and raises `CapabilityError` directing callers to `infer_text()`.
++
++## Text ownership and expression conditioning
++
++ONNXVoice does not normalize KittenTTS 2 text. It passes the caller's non-empty string to the bundled tokenizer unchanged, including punctuation, numbers, whitespace, and Unicode. Callers that need number, date, currency, abbreviation, unit, or other written-to-spoken conversion must do that before `infer_text()`.
++
++Kitten2 only inspects its supported model-specific expression markup: a known emotion tag such as `[joyful]`, a supported vocal event such as `<laugh>`, or a supported `(((emphasis)))` span. The markup remains in the tokenizer input. Recognized markup automatically enables the bundle's `generation.emotion_control` prompt IDs, inserted after the reference prefix and before `text_start`. Unknown markup is passed through unchanged and does not enable expression conditioning.
++
++`use_emotion=None` selects automatic detection, `True` forces the control prompt, and `False` disables it without changing text. `use_reference_prompt=None` follows `generation.use_reference_prompt` from the bundle, while `True` and `False` override that setting.
++
++## Long-form generation
++
++The runtime uses the bundle's `generation.chunk_chars` and `generation.chunk_min_chars` settings for Kitten2-specific chunking. Boundaries are selected from existing whitespace or punctuation where possible. Chunks preserve the original character sequence and expression markup. A single request-level random generator is shared across the generated chunks, so repeating a request with the same seed is deterministic without restarting the stream for each chunk.
+
+ A complete local bundle can be opened without catalog or store access:
+
+@@ -60,7 +72,7 @@ The bundle directory is derived from `bundle.json`. Every declared relative path
+
+ `bundle.json` is authoritative for the runtime layout, sample rate, component paths and metadata, embedding file, tokenizer directory and assets, voice reference files, token IDs, decode presets, and generation defaults. The runtime requires layout `kitten2-onnx-bundle-v1` and sample rate `24000`.
+
+-The bundle includes the language model, speaker projection, flow decoder, and mel-to-wave decoder, with their metadata. It also includes the LM embedding matrix, local tokenizer files, voice reference arrays and metadata, and any graph external-data files. The `files` object must enumerate every runtime asset other than `bundle.json` with a lowercase SHA-256 digest. The validator rejects unsafe paths, missing or extra files, hash mismatches, malformed metadata, invalid voice or preset defaults, malformed token maps, and non-adjacent `.onnx.data` files before creating ONNX sessions.
++The bundle includes the language model, speaker projection, flow decoder, and mel-to-wave decoder, with their metadata. It also includes the LM embedding matrix, `tokenizer/tokenizer.json`, any other declared tokenizer assets, voice reference arrays and metadata, and any graph external-data files. The `files` object must enumerate every runtime asset other than `bundle.json` with a lowercase SHA-256 digest. The validator rejects unsafe paths, missing or extra files, hash mismatches, malformed metadata, invalid voice or preset defaults, malformed token maps, empty `generation.emotion_control`, and non-adjacent `.onnx.data` files before creating ONNX sessions.
+
+ The four ONNX sessions (`lm`, `speaker`, `flow`, and `mel2wav`) are created lazily. `runtime.diagnostics().sessions` reports the component sessions after they have been opened. `close()` releases created sessions and is safe to call repeatedly.
+
+@@ -94,4 +106,6 @@ onnxvoice catalog kitten2 verify \
+
+ A real-bundle CPU smoke test uses voice `Bruno`, preset `stable`, seed `7`, and `max_new_tokens=64`. It must produce valid finite mono speech at 24 kHz. Passing unit tests or successfully constructing ONNX sessions is not evidence that a real bundle synthesizes valid speech.
+
+-The migration parity check compares this native implementation with the validated `kitten2-onnx` implementation using the same bundle, text, voice, preset, seed, and generation limit. Supply the out-of-band reference as a float32 NumPy array through `ONNXVOICE_KITTEN2_REFERENCE_AUDIO`; the resource-heavy test asserts equal shape and `numpy.testing.assert_allclose(rtol=1e-5, atol=1e-5)`. The ONNXVoice runtime and test do not import or depend on `kitten2_onnx`. On the current CPU bundle/text/seed run, all 55,200 samples matched exactly (maximum absolute error 0). The legacy `kitten` v0.8 adapter and its model/style/speed contract remain independent.
++The expression smoke uses `[joyful] I can (((hardly))) believe it! <laugh>` with the same CPU, voice, preset, seed, and token limit. It verifies finite mono float32 audio at 24 kHz and confirms `expression_conditioning` is enabled. The runtime rejects a request that produces no speech tokens before decoding.
++
++The migration parity check compares this native implementation with the validated `kitten2-onnx` implementation using the same bundle, raw text, voice, preset, seed, and generation limit. Supply the out-of-band reference as a float32 NumPy array through `ONNXVOICE_KITTEN2_REFERENCE_AUDIO`; the resource-heavy test asserts equal shape and `numpy.testing.assert_allclose(rtol=1e-5, atol=1e-5)`. The reference is generated with text normalization disabled. The ONNXVoice runtime and test do not import or depend on `kitten2_onnx`. The current CPU bundle/text/seed run matched all 52,320 samples exactly (maximum absolute error 0). The legacy `kitten` v0.8 adapter and its model/style/speed contract remain independent.
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index a7e17da..e426604 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -3063,7 +3063,6 @@ def filter_items(
+     return result
+
+
+-
+ def _parse_kitten2(data: Any) -> list[CatalogItem]:
+     """Parse pinned Kitten2 bundle catalog records without adapting the legacy Kitten schema."""
+     if not isinstance(data, Mapping) or set(data) != {"schema", "kind", "bundles"}:
+@@ -3097,7 +3096,9 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
+             "artifacts",
+         }
+         if not required_fields.issubset(raw) or set(raw) - (required_fields | {"metadata"}):
+-            raise CatalogError(f"{bundle_id}: Kitten2 bundle fields do not match the catalog contract")
++            raise CatalogError(
++                f"{bundle_id}: Kitten2 bundle fields do not match the catalog contract"
++            )
+         if raw.get("id") != bundle_id:
+             raise CatalogError(f"{bundle_id}: bundle map key does not match id")
+         layout = raw.get("layout")
+@@ -3177,7 +3178,9 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
+         bundle_count = 0
+         for index, item in enumerate(raw_artifacts):
+             if not isinstance(item, Mapping) or set(item) != {"role", "path", "sha256"}:
+-                raise CatalogError(f"{bundle_id}: artifact {index} must contain role, path, and sha256")
++                raise CatalogError(
++                    f"{bundle_id}: artifact {index} must contain role, path, and sha256"
++                )
+             role = item.get("role")
+             path = item.get("path")
+             sha256 = item.get("sha256")
+@@ -3221,13 +3224,12 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
+             )
+         if bundle_count != 1:
+             raise CatalogError(f"{bundle_id}: exactly one bundle.json artifact is required")
+-        if not all(any(path.startswith(prefix) for path in paths) for prefix in (
+-            "decoder/", "lm/", "speaker/", "tokenizer/", "voices/"
+-        )):
++        if not all(
++            any(path.startswith(prefix) for path in paths)
++            for prefix in ("decoder/", "lm/", "speaker/", "tokenizer/", "voices/")
++        ):
+             raise CatalogError(f"{bundle_id}: incomplete Kitten2 component artifact coverage")
+-        graph_directories = {
+-            str(Path(path).parent) for path in paths if path.endswith(".onnx")
+-        }
++        graph_directories = {str(Path(path).parent) for path in paths if path.endswith(".onnx")}
+         for path in paths:
+             if path.endswith(".onnx.data") and str(Path(path).parent) not in graph_directories:
+                 raise CatalogError(f"{bundle_id}: external data is not adjacent to a graph: {path}")
+diff --git a/onnxvoice/catalog_tools/kitten2.py b/onnxvoice/catalog_tools/kitten2.py
+index 957cbc6..69d0dd2 100644
+--- a/onnxvoice/catalog_tools/kitten2.py
++++ b/onnxvoice/catalog_tools/kitten2.py
+@@ -105,7 +105,10 @@ def build_catalog(
+     _require(layout == "kitten2-onnx-bundle-v1", "Unsupported Kitten2 bundle layout")
+     _require(type(sample_rate) is int and sample_rate == 24000, "Kitten2 sample_rate must be 24000")
+     files = manifest.get("files")
+-    _require(isinstance(files, Mapping) and bool(files), "Kitten2 bundle files must be a non-empty object")
++    _require(
++        isinstance(files, Mapping) and bool(files),
++        "Kitten2 bundle files must be a non-empty object",
++    )
+     artifacts = [
+         {
+             "role": "bundle",
+@@ -126,7 +129,9 @@ def build_catalog(
+         artifacts.append({"role": "asset", "path": path, "sha256": sha256})
+
+     voices = manifest.get("voices")
+-    _require(isinstance(voices, Mapping) and bool(voices), "Kitten2 voices must be a non-empty object")
++    _require(
++        isinstance(voices, Mapping) and bool(voices), "Kitten2 voices must be a non-empty object"
++    )
+     default_voice = manifest.get("default_voice")
+     _require(
+         isinstance(default_voice, str) and default_voice in voices,
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 3662edf..b923ae5 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -278,11 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
+     qwen3_verify_parser.add_argument("--catalog", type=Path, required=True)
+     qwen3_verify_parser.add_argument("--source", type=Path)
+
+-
+-    kitten2_parser = catalog_sub.add_parser("kitten2", help="Manage the native KittenTTS 2 bundle catalog")
++    kitten2_parser = catalog_sub.add_parser(
++        "kitten2", help="Manage the native KittenTTS 2 bundle catalog"
++    )
+     kitten2_sub = kitten2_parser.add_subparsers(dest="catalog_action", required=True)
+-    kitten2_build_parser = kitten2_sub.add_parser("build", help="Build a pinned KittenTTS 2 catalog")
+-    kitten2_build_parser.add_argument("--repository", default=kitten2_catalog_tools.DEFAULT_REPOSITORY)
++    kitten2_build_parser = kitten2_sub.add_parser(
++        "build", help="Build a pinned KittenTTS 2 catalog"
++    )
++    kitten2_build_parser.add_argument(
++        "--repository", default=kitten2_catalog_tools.DEFAULT_REPOSITORY
++    )
+     kitten2_build_parser.add_argument("--revision", default=kitten2_catalog_tools.DEFAULT_REVISION)
+     kitten2_build_parser.add_argument("--output", type=Path, required=True)
+     kitten2_build_parser.add_argument("--source-output", type=Path, required=True)
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 6a54471..c225f0f 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -387,7 +387,9 @@ class OnnxVoice:
+             installation_sample_rate = 24000
+         installation = Installation(
+             system=installation_system,
+-            id=f"local-{kitten2_bundle.root.name}" if kitten2_bundle is not None else f"local-{Path(model_artifact.filename).stem}",
++            id=f"local-{kitten2_bundle.root.name}"
++            if kitten2_bundle is not None
++            else f"local-{Path(model_artifact.filename).stem}",
+             kind="external",
+             path=kitten2_bundle.root if kitten2_bundle is not None else model_artifact.path.parent,
+             artifacts=tuple(local_artifacts),
+diff --git a/onnxvoice/systems/kitten2.py b/onnxvoice/systems/kitten2.py
+index fa702fe..9e6e091 100644
+--- a/onnxvoice/systems/kitten2.py
++++ b/onnxvoice/systems/kitten2.py
+@@ -11,8 +11,10 @@ from ..errors import CapabilityError, RuntimeContractError
+ from ..runtime import OnnxSession, resolve_providers
+ from ..types import InferenceResult, Installation
+ from .base import SystemAdapter
++from .kitten2_chunking import split_kitten2_text
+ from .kitten2_contract import load_kitten2_bundle
+ from .kitten2_decoder import Kitten2Decoder, _cpu_session_options
++from .kitten2_expression import inspect_expression_markup
+ from .kitten2_frontend import Kitten2Frontend, PreparedVoice, build_generation_prompt
+ from .kitten2_generation import Kitten2LanguageModel
+ from .kitten2_sampling import sampling_settings_from_config
+@@ -119,6 +121,8 @@ class Kitten2Adapter(SystemAdapter):
+         preset: str | None = None,
+         seed: int | None = None,
+         max_new_tokens: int = 512,
++        use_emotion: bool | None = None,
++        use_reference_prompt: bool | None = None,
+     ) -> InferenceResult:
+         if max_new_tokens < 1:
+             raise ValueError("max_new_tokens must be positive")
+@@ -126,40 +130,68 @@ class Kitten2Adapter(SystemAdapter):
+         resolved_preset = preset or self.default_preset
+         if resolved_preset not in self.decode_presets:
+             available = ", ".join(sorted(self.decode_presets))
+-            raise ValueError(f"Unknown decode preset {resolved_preset!r}; available presets: {available}")
++            raise ValueError(
++                f"Unknown decode preset {resolved_preset!r}; available presets: {available}"
++            )
+         prepared = self._prepared_voices.get(resolved_voice)
+         if prepared is None:
+             prepared = self.frontend.prepare_voice(resolved_voice)
+             self._prepared_voices[resolved_voice] = prepared
+-        _, text_ids = self.frontend.encode_text(text)
+-        reference_prefix = (
+-            prepared.reference_prefix
+-            if self.manifest["generation"].get("use_reference_prompt", True)
+-            else None
++        generation = self.manifest["generation"]
++        chunks = split_kitten2_text(
++            text,
++            int(generation.get("chunk_chars", 0)),
++            int(generation.get("chunk_min_chars", 0)),
+         )
+-        prompt_ids = build_generation_prompt(
+-            self.token_map, text_ids, reference_prefix=reference_prefix
++        targets = [self.frontend.prepare_target(chunk) for chunk in chunks]
++        has_expression = (
++            targets[0].has_expression
++            if len(targets) == 1
++            else inspect_expression_markup(text).has_expression
+         )
+-        generated = self._get_language_model().generate(
+-            prompt_ids,
+-            token_map=self.token_map,
+-            max_new_tokens=max_new_tokens,
+-            speaker_embedding=prepared.speaker_embedding,
+-            settings=sampling_settings_from_config(self.manifest, resolved_preset),
+-            seed=seed,
++        configured_reference_prompt = generation.get("use_reference_prompt", True)
++        resolved_use_reference_prompt = (
++            configured_reference_prompt if use_reference_prompt is None else use_reference_prompt
+         )
+-        if not generated.s3_ids:
+-            raise RuntimeContractError("LM generation produced no valid S3 speech tokens")
+-        waveform = self._get_decoder().decode(generated.s3_ids, prepared.conditioning, seed=seed)
+-        if waveform is None:
+-            raise RuntimeContractError("S3 decoder produced no waveform")
+-        audio = np.asarray(waveform, dtype=np.float32)
+-        if audio.ndim == 2 and audio.shape[0] == 1:
+-            audio = audio[0]
+-        if audio.ndim != 1:
+-            raise RuntimeContractError(f"decoder waveform must be mono, found shape {audio.shape}")
+-        if not np.all(np.isfinite(audio)):
+-            raise RuntimeContractError("decoder waveform contains NaN or infinite samples")
++        reference_prefix = prepared.reference_prefix if resolved_use_reference_prompt else None
++        resolved_use_emotion = has_expression if use_emotion is None else use_emotion
++        emotion_ids = self.frontend.emotion_control_ids if resolved_use_emotion else None
++        language_model = self._get_language_model()
++        decoder = self._get_decoder()
++        settings = sampling_settings_from_config(self.manifest, resolved_preset)
++        rng = np.random.default_rng(seed)
++        audio_chunks: list[np.ndarray] = []
++        for target in targets:
++            prompt_ids = build_generation_prompt(
++                self.token_map,
++                target.token_ids,
++                reference_prefix=reference_prefix,
++                emotion_ids=emotion_ids,
++            )
++            generated = language_model.generate(
++                prompt_ids,
++                token_map=self.token_map,
++                max_new_tokens=max_new_tokens,
++                speaker_embedding=prepared.speaker_embedding,
++                settings=settings,
++                rng=rng,
++            )
++            if not generated.s3_ids:
++                raise RuntimeContractError("LM generation produced no valid S3 speech tokens")
++            waveform = decoder.decode(generated.s3_ids, prepared.conditioning, seed=seed)
++            if waveform is None:
++                raise RuntimeContractError("S3 decoder produced no waveform")
++            audio = np.asarray(waveform, dtype=np.float32)
++            if audio.ndim == 2 and audio.shape[0] == 1:
++                audio = audio[0]
++            if audio.ndim != 1:
++                raise RuntimeContractError(
++                    f"decoder waveform must be mono, found shape {audio.shape}"
++                )
++            if not np.all(np.isfinite(audio)):
++                raise RuntimeContractError("decoder waveform contains NaN or infinite samples")
++            audio_chunks.append(audio)
++        audio = np.concatenate(audio_chunks)
+         return InferenceResult(
+             audio=audio,
+             sample_rate=self.sample_rate,
+@@ -170,6 +202,8 @@ class Kitten2Adapter(SystemAdapter):
+                 "seed": seed,
+                 "max_new_tokens": max_new_tokens,
+                 "layout": "kitten2-onnx-bundle-v1",
++                "expression_conditioning": resolved_use_emotion,
++                "chunk_count": len(chunks),
+             },
+         )
+
+@@ -227,7 +261,9 @@ class Kitten2Adapter(SystemAdapter):
+         if metadata.get("runtime_memory_profile", "default") != "low-memory-exact-ternary":
+             return self.session_options
+         if metadata.get("runtime_provider") != "CPUExecutionProvider":
+-            raise CapabilityError("Low-memory exact-ternary Kitten2 LM requires CPUExecutionProvider")
++            raise CapabilityError(
++                "Low-memory exact-ternary Kitten2 LM requires CPUExecutionProvider"
++            )
+         selected = resolve_providers(self.providers)
+         if selected != ("CPUExecutionProvider",):
+             raise CapabilityError("Low-memory exact-ternary Kitten2 LM requires CPU only")
+diff --git a/onnxvoice/systems/kitten2_chunking.py b/onnxvoice/systems/kitten2_chunking.py
+new file mode 100644
+index 0000000..e08bb38
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_chunking.py
+@@ -0,0 +1,66 @@
++"""KittenTTS 2 text chunk boundaries that preserve the input verbatim."""
++
++from __future__ import annotations
++
++import unicodedata
++
++from .kitten2_expression import expression_markup_spans
++
++
++def split_kitten2_text(text: str, chunk_chars: int, chunk_min_chars: int = 0) -> list[str]:
++    if not isinstance(text, str):
++        raise TypeError("text must be a string")
++    if chunk_chars <= 0 or len(text) <= chunk_chars:
++        return [text]
++
++    protected_spans = expression_markup_spans(text)
++    boundaries = [
++        position
++        for position, char in enumerate(text, start=1)
++        if (char.isspace() or unicodedata.category(char).startswith("P"))
++        and not any(start < position < end for start, end in protected_spans)
++    ]
++    chunks: list[str] = []
++    start = 0
++    while len(text) - start > chunk_chars:
++        target = start + chunk_chars
++        candidates = [position for position in boundaries if start < position <= target]
++        if candidates:
++            boundary = candidates[-1]
++        else:
++            boundary = target
++            for span_start, span_end in protected_spans:
++                if span_start < boundary < span_end:
++                    boundary = span_start if span_start > start else span_end
++                    break
++        chunks.append(text[start:boundary])
++        start = boundary
++
++    chunks.append(text[start:])
++    if chunk_min_chars > 0:
++        chunks = _merge_short_chunks(chunks, chunk_chars, chunk_min_chars)
++    return chunks
++
++
++def _merge_short_chunks(chunks: list[str], chunk_chars: int, chunk_min_chars: int) -> list[str]:
++    limit = int(chunk_chars * 1.4)
++    merged = list(chunks)
++    while len(merged) > 1:
++        for index, chunk in enumerate(merged):
++            if len(chunk) >= chunk_min_chars:
++                continue
++            previous_fits = index > 0 and len(merged[index - 1]) + len(chunk) <= limit
++            next_fits = index + 1 < len(merged) and len(chunk) + len(merged[index + 1]) <= limit
++            if previous_fits and (
++                not next_fits or len(merged[index - 1]) <= len(merged[index + 1])
++            ):
++                merged[index - 1] += chunk
++                merged.pop(index)
++                break
++            if next_fits:
++                merged[index] += merged[index + 1]
++                merged.pop(index + 1)
++                break
++        else:
++            return merged
++    return merged
+diff --git a/onnxvoice/systems/kitten2_contract.py b/onnxvoice/systems/kitten2_contract.py
+index 5763431..d7192cd 100644
+--- a/onnxvoice/systems/kitten2_contract.py
++++ b/onnxvoice/systems/kitten2_contract.py
+@@ -106,14 +106,15 @@ def _validate_manifest(
+         (decoder, "mel2wav_metadata", "decoder.mel2wav_metadata"),
+     )
+     referenced = {
+-        _referenced_file(section.get(key), label, files)
+-        for section, key, label in file_fields
++        _referenced_file(section.get(key), label, files) for section, key, label in file_fields
+     }
+
+     tokenizer = _relative(data.get("tokenizer"), "tokenizer")
+     raw_tokenizer_assets = data.get("tokenizer_assets")
+     if not isinstance(raw_tokenizer_assets, list) or not raw_tokenizer_assets:
+         raise _invalid("tokenizer_assets must be a non-empty list")
++    if "tokenizer.json" not in raw_tokenizer_assets:
++        raise _invalid("tokenizer_assets must include tokenizer.json")
+     for name in raw_tokenizer_assets:
+         asset_path = _relative(name, "tokenizer asset")
+         relative = f"{tokenizer}/{asset_path}"
+@@ -194,14 +195,18 @@ def _validate_manifest(
+         raise _invalid("token_map.final_seg_id must equal audio_id_base + num_audio_tokens")
+
+     generation = _mapping(data.get("generation"), "generation")
+-    if "use_reference_prompt" in generation and type(generation["use_reference_prompt"]) is not bool:
++    if (
++        "use_reference_prompt" in generation
++        and type(generation["use_reference_prompt"]) is not bool
++    ):
+         raise _invalid("generation.use_reference_prompt must be a boolean")
+     for key in ("repetition_window", "chunk_chars", "chunk_min_chars"):
+         if key in generation:
+             _positive_int(generation[key], f"generation.{key}")
+-    if "emotion_control" in generation and not isinstance(generation["emotion_control"], str):
+-        raise _invalid("generation.emotion_control must be a string")
+-
++    if "emotion_control" in generation:
++        emotion_control = generation["emotion_control"]
++        if not isinstance(emotion_control, str) or not emotion_control.strip():
++            raise _invalid("generation.emotion_control must be a non-empty string")
+
+     actual_files: set[str] = set()
+     for path in root.rglob("*"):
+@@ -219,9 +224,7 @@ def _validate_manifest(
+         raise _invalid(f"file inventory mismatch; missing={missing}, undeclared={extra}")
+
+     graph_directories = {
+-        Path(relative).parent.as_posix()
+-        for relative in files
+-        if relative.endswith(".onnx")
++        Path(relative).parent.as_posix() for relative in files if relative.endswith(".onnx")
+     }
+     for relative in files:
+         if (
+diff --git a/onnxvoice/systems/kitten2_decoder.py b/onnxvoice/systems/kitten2_decoder.py
+index 4b9f3de..b235091 100644
+--- a/onnxvoice/systems/kitten2_decoder.py
++++ b/onnxvoice/systems/kitten2_decoder.py
+@@ -60,6 +60,7 @@ def append_s3_silence_tail(
+     tail = np.full(tail_shape, token_id, dtype=np.int64)
+     return np.concatenate((tokens, tail), axis=-1)
+
++
+ class Kitten2Decoder:
+     """Run the deterministic S3 flow and HiFT ONNX stages for zero-based S3 IDs."""
+
+@@ -103,9 +104,9 @@ class Kitten2Decoder:
+         tokens = clean_s3_tokens(speech_tokens, self.speech_vocab_size)
+         if tokens.size == 0:
+             return None
+-        tokens = append_s3_silence_tail(
+-            tokens, self.silence_token_id, self.silence_tail_count
+-        )[None, :]
++        tokens = append_s3_silence_tail(tokens, self.silence_token_id, self.silence_tail_count)[
++            None, :
++        ]
+
+         prompt_token = np.asarray(conditioning["conditioning_prompt_token"], dtype=np.int64)
+         prompt_token_len = np.asarray(conditioning["conditioning_prompt_token_len"], dtype=np.int64)
+@@ -156,7 +157,9 @@ class Kitten2Decoder:
+         else:
+             sine_noise = np.asarray(sine_noise, dtype=np.float32)
+         if phase_noise.shape != phase_shape:
+-            raise ValueError(f"phase_noise must have shape {phase_shape}, found {phase_noise.shape}")
++            raise ValueError(
++                f"phase_noise must have shape {phase_shape}, found {phase_noise.shape}"
++            )
+         if sine_noise.shape != sine_shape:
+             raise ValueError(f"sine_noise must have shape {sine_shape}, found {sine_noise.shape}")
+
+diff --git a/onnxvoice/systems/kitten2_decoder_reference.py b/onnxvoice/systems/kitten2_decoder_reference.py
+index 4ccd516..88256ad 100644
+--- a/onnxvoice/systems/kitten2_decoder_reference.py
++++ b/onnxvoice/systems/kitten2_decoder_reference.py
+@@ -62,4 +62,3 @@ def load_decoder_reference(path: str | Path) -> DecoderReference:
+     if not np.array_equal(arrays["flow_mel"], arrays["mel2wav_input"]):
+         raise ValueError("The captured mel2wav input differs from the flow output mel")
+     return DecoderReference(arrays=arrays, metadata=metadata)
+-
+diff --git a/onnxvoice/systems/kitten2_expression.py b/onnxvoice/systems/kitten2_expression.py
+new file mode 100644
+index 0000000..90e085d
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_expression.py
+@@ -0,0 +1,66 @@
++"""Recognition of model-specific KittenTTS 2 expression markup."""
++
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++
++_EMOTIONS = (
++    "angry",
++    "contemplative",
++    "excited",
++    "joyful",
++    "mundane",
++    "nervous",
++    "sad",
++    "stern",
++    "surprised",
++    "tender",
++)
++_VOCAL_EVENTS = (
++    "gasp",
++    "giggle",
++    "growl",
++    "gulp",
++    "laugh",
++    "pause",
++    "scoff",
++    "sigh",
++    "sob",
++    "um",
++)
++_EXPRESSION_TAG = re.compile(
++    r"\[(?P<emotion>" + "|".join(_EMOTIONS) + r")\]"
++    r"|<(?P<event>" + "|".join(_VOCAL_EVENTS) + r")>",
++    re.IGNORECASE,
++)
++_EMPHASIS_SPAN = re.compile(r"\(\(\(([^()\n]{1,80})\)\)\)")
++
++
++def expression_markup_spans(text: str) -> tuple[tuple[int, int], ...]:
++    """Return source ranges occupied by recognized Kitten2 markup."""
++    spans = [match.span() for match in _EXPRESSION_TAG.finditer(text)]
++    spans.extend(match.span() for match in _EMPHASIS_SPAN.finditer(text))
++    return tuple(sorted(spans))
++
++
++@dataclass(frozen=True, slots=True)
++class ExpressionInfo:
++    has_expression: bool
++    emotion: str | None
++    event_count: int
++    emphasis_count: int
++
++
++def inspect_expression_markup(text: str) -> ExpressionInfo:
++    """Report supported Kitten2 markup without changing the supplied text."""
++    matches = tuple(_EXPRESSION_TAG.finditer(text))
++    emotions = [match.group("emotion").lower() for match in matches if match.group("emotion")]
++    event_count = sum(match.group("event") is not None for match in matches)
++    emphasis_count = sum(1 for _ in _EMPHASIS_SPAN.finditer(text))
++    return ExpressionInfo(
++        has_expression=bool(emotions or event_count or emphasis_count),
++        emotion=emotions[0] if emotions else None,
++        event_count=event_count,
++        emphasis_count=emphasis_count,
++    )
+diff --git a/onnxvoice/systems/kitten2_frontend.py b/onnxvoice/systems/kitten2_frontend.py
+index 75507d8..56ae00e 100644
+--- a/onnxvoice/systems/kitten2_frontend.py
++++ b/onnxvoice/systems/kitten2_frontend.py
+@@ -9,8 +9,10 @@ from typing import Any
+
+ import numpy as np
+
+-from ..errors import OptionalDependencyError, RuntimeContractError
++from ..errors import RuntimeContractError
+ from .kitten2_decoder_reference import load_decoder_reference
++from .kitten2_expression import inspect_expression_markup
++from .kitten2_tokenizer import Kitten2Tokenizer
+ from .kitten2_tokens import TokenMap
+
+
+@@ -60,6 +62,13 @@ def build_generation_prompt(
+     ]
+
+
++@dataclass(frozen=True, slots=True)
++class PreparedTarget:
++    text: str
++    token_ids: tuple[int, ...]
++    has_expression: bool
++
++
+ @dataclass(frozen=True)
+ class PreparedVoice:
+     speaker_embedding: np.ndarray
+@@ -72,39 +81,49 @@ class Kitten2Frontend:
+         self.root = Path(root)
+         self.manifest = manifest
+         self.token_map = token_map
+-        self._tokenizer: Any | None = None
+-        self._normalize_text: Any | None = None
++        self._tokenizer: Kitten2Tokenizer | None = None
++        self._emotion_control_ids: tuple[int, ...] | None = None
+
+     def _load_tokenizer(self) -> None:
+         if self._tokenizer is not None:
+             return
+-        try:
+-            import kitten_text_processing
+-            from transformers import AutoTokenizer
+-        except ImportError as exc:
+-            raise OptionalDependencyError(
+-                "Kitten2 text processing requires onnxvoice[kitten2]."
+-            ) from exc
+-        self._normalize_text = kitten_text_processing.normalize_text
+         tokenizer_path = self.root / self.manifest["tokenizer"]
+-        self._tokenizer = AutoTokenizer.from_pretrained(
+-            str(tokenizer_path), local_files_only=True
+-        )
++        self._tokenizer = Kitten2Tokenizer(tokenizer_path / "tokenizer.json")
+
+-    def encode_text(self, text: str) -> tuple[str, list[int]]:
++    def prepare_target(self, text: str) -> PreparedTarget:
++        if not isinstance(text, str):
++            raise TypeError("text must be a string")
++        if not text.strip():
++            raise ValueError("text must not be empty")
++        expression = inspect_expression_markup(text)
+         self._load_tokenizer()
+-        normalize_text = self._normalize_text
+         tokenizer = self._tokenizer
+-        assert normalize_text is not None and tokenizer is not None
+-        normalized = normalize_text(text).strip()
+-        if not normalized:
+-            raise ValueError("text must not be empty after normalization")
+-        return normalized, tokenizer.encode(normalized, add_special_tokens=False)
++        assert tokenizer is not None
++        return PreparedTarget(
++            text=text,
++            token_ids=tuple(tokenizer.encode(text)),
++            has_expression=expression.has_expression,
++        )
++
++    @property
++    def emotion_control_ids(self) -> tuple[int, ...]:
++        if self._emotion_control_ids is None:
++            emotion_control = self.manifest["generation"].get("emotion_control")
++            if emotion_control is None:
++                self._emotion_control_ids = ()
++            else:
++                self._load_tokenizer()
++                tokenizer = self._tokenizer
++                assert tokenizer is not None
++                self._emotion_control_ids = tuple(tokenizer.encode(emotion_control))
++        return self._emotion_control_ids
+
+     def prepare_voice(self, voice: str) -> PreparedVoice:
+         voices = self.manifest["voices"]
+         if voice not in voices:
+-            raise ValueError(f"Unknown voice {voice!r}; available voices: {', '.join(sorted(voices))}")
++            raise ValueError(
++                f"Unknown voice {voice!r}; available voices: {', '.join(sorted(voices))}"
++            )
+         self._load_tokenizer()
+         tokenizer = self._tokenizer
+         assert tokenizer is not None
+@@ -112,7 +131,7 @@ class Kitten2Frontend:
+         transcript = reference.metadata.get("reference_transcript")
+         if not isinstance(transcript, str):
+             raise RuntimeContractError(f"Voice {voice!r} is missing its reference transcript")
+-        reference_text_ids = tokenizer.encode(transcript.strip(), add_special_tokens=False)
++        reference_text_ids = tokenizer.encode(transcript)
+         reference_prefix = build_reference_prefix(
+             self.token_map,
+             reference_text_ids,
+diff --git a/onnxvoice/systems/kitten2_generation.py b/onnxvoice/systems/kitten2_generation.py
+index 48d38ea..0e09fcc 100644
+--- a/onnxvoice/systems/kitten2_generation.py
++++ b/onnxvoice/systems/kitten2_generation.py
+@@ -58,7 +58,9 @@ class Kitten2LanguageModel:
+                 raise ValueError("Embedding array dtype differs from LM metadata")
+         elif self.input_mode == "input_ids":
+             if self.meta.get("embedding_file") is not None:
+-                raise ValueError("input_ids LM metadata must not reference a separate embedding table")
++                raise ValueError(
++                    "input_ids LM metadata must not reference a separate embedding table"
++                )
+             self.embeddings = None
+             self.embedding_storage_dtype = None
+         else:
+@@ -98,6 +100,7 @@ class Kitten2LanguageModel:
+         if speaker_embedding.ndim == 1:
+             speaker_embedding = speaker_embedding[None, :]
+         return self.speaker_session.run({"speaker_embedding": speaker_embedding})[0]
++
+     def _embed(
+         self,
+         token_ids: np.ndarray,
+@@ -183,6 +186,7 @@ class Kitten2LanguageModel:
+         speaker_embedding: np.ndarray | None = None,
+         settings: SamplingSettings | None = None,
+         seed: int | None = None,
++        rng: np.random.Generator | None = None,
+         stop_ids: set[int] | None = None,
+         logits_callback: Callable[[int, np.ndarray], None] | None = None,
+     ) -> GenerationResult:
+@@ -195,7 +199,7 @@ class Kitten2LanguageModel:
+             return GenerationResult(raw_ids=[], s3_ids=[])
+
+         settings = settings or SamplingSettings()
+-        rng = np.random.default_rng(seed)
++        rng = np.random.default_rng(seed) if rng is None else rng
+         history = [int(token) for token in prompt_ids]
+         prompt_length = len(history)
+         logits, past = self.step(
+@@ -231,5 +235,3 @@ class Kitten2LanguageModel:
+             if token_map.audio_id_base <= token < token_map.audio_id_end
+         ]
+         return GenerationResult(raw_ids=raw_ids, s3_ids=s3_ids)
+-
+-
+diff --git a/onnxvoice/systems/kitten2_tokenizer.py b/onnxvoice/systems/kitten2_tokenizer.py
+new file mode 100644
+index 0000000..4c31405
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_tokenizer.py
+@@ -0,0 +1,26 @@
++"""Direct execution of the KittenTTS 2 bundled tokenizer."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++from ..errors import OptionalDependencyError, RuntimeContractError
++
++
++class Kitten2Tokenizer:
++    def __init__(self, tokenizer_json: str | Path) -> None:
++        path = Path(tokenizer_json)
++        if not path.is_file():
++            raise RuntimeContractError(
++                f"Invalid Kitten2 bundle: required tokenizer artifact is missing: {path}"
++            )
++        try:
++            from tokenizers import Tokenizer
++        except ImportError as exc:
++            raise OptionalDependencyError(
++                "Kitten2 text synthesis requires onnxvoice[kitten2]."
++            ) from exc
++        self._tokenizer = Tokenizer.from_file(str(path))
++
++    def encode(self, text: str) -> list[int]:
++        return list(self._tokenizer.encode(text, add_special_tokens=False).ids)
+diff --git a/pyproject.toml b/pyproject.toml
+index d35b9f6..bc57ba5 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -72,7 +72,7 @@ mobile = []  # Convenience marker for platform-managed mobile providers.
+ huggingface = ["huggingface_hub>=0.24,<2"]
+ pocket = ["huggingface_hub>=0.24,<2", "safetensors>=0.4,<1"]
+ inno = ["scipy>=1.10", "praat-parselmouth>=0.4.7"]
+-kitten2 = ["kitten-text-processing==0.1.0", "transformers==4.57.1"]
++kitten2 = ["tokenizers>=0.22,<0.23"]
+ inno-export = ["onnx>=1.16", "safetensors>=0.4", "torch>=2.0"]
+ dev = [
+   "pytest>=8",
+diff --git a/tests/fixtures/kitten2_tokenizer_golden.json b/tests/fixtures/kitten2_tokenizer_golden.json
+new file mode 100644
+index 0000000..00f5a85
+--- /dev/null
++++ b/tests/fixtures/kitten2_tokenizer_golden.json
+@@ -0,0 +1,87 @@
++{
++  "reference": "transformers==4.57.1 AutoTokenizer.from_pretrained(local_files_only=True), encode(add_special_tokens=False)",
++  "tokenizers_compatibility_tested": "0.22.2",
++  "vectors": [
++    {
++      "name": "plain_sentence",
++      "text": "Hello from KittenTTS 2.",
++      "ids": [9707, 504, 730, 22449, 51, 9951, 220, 17, 13]
++    },
++    {
++      "name": "punctuation",
++      "text": "Dr. Smith paid $12.50 on 10/12/2026.",
++      "ids": [
++        8847, 13, 9082, 7171, 400, 16, 17, 13, 20, 15, 389, 220, 16, 15, 14, 16,
++        17, 14, 17, 15, 17, 21, 13
++      ]
++    },
++    {
++      "name": "newlines",
++      "text": "First line.\nSecond line.\n",
++      "ids": [5338, 1555, 624, 15666, 1555, 624]
++    },
++    {
++      "name": "unicode",
++      "text": "Café naïve — こんにちは 🌍",
++      "ids": [34, 2577, 963, 94880, 586, 1959, 220, 89015, 11162, 234, 235]
++    },
++    {
++      "name": "emotion_tags",
++      "text": "[angry] [contemplative] [excited] [joyful] [mundane] [nervous] [sad] [stern] [surprised] [tender]",
++      "ids": [
++        58, 524, 884, 60, 508, 772, 25892, 1388, 60, 508, 39441, 1608, 60, 508,
++        4123, 1262, 60, 508, 35314, 2145, 60, 508, 77, 648, 782, 60, 508, 82114,
++        60, 508, 267, 932, 60, 508, 19784, 649, 4056, 60, 508, 83, 1659, 60
++      ]
++    },
++    {
++      "name": "vocal_event_tags",
++      "text": "<gasp> <giggle> <growl> <gulp> <laugh> <pause> <scoff> <sigh> <sob> <um>",
++      "ids": [
++        94407, 13367, 29, 366, 70, 343, 3408, 29, 366, 66218, 75, 29, 366,
++        23328, 29, 366, 4260, 7443, 29, 366, 27448, 29, 366, 82, 1015, 542, 29,
++        366, 82, 1090, 29, 366, 82, 674, 29, 366, 372, 29
++      ]
++    },
++    {
++      "name": "emphasis",
++      "text": "(((word))) (((short phrase)))",
++      "ids": [6636, 1158, 7705, 11600, 8676, 17133, 7705]
++    },
++    {
++      "name": "combined_markup",
++      "text": "[angry] I told you (((never))) to open that door. <sigh>",
++      "ids": [
++        58, 524, 884, 60, 358, 3229, 498, 11600, 36493, 7705, 311, 1787, 429,
++        6006, 13, 366, 82, 1090, 29
++      ]
++    },
++    {
++      "name": "emotion_control",
++      "text": "{emo: 1}",
++      "ids": [90, 6726, 25, 220, 16, 92]
++    },
++    {
++      "name": "unknown_markup",
++      "text": "[whisper] <door> ((hello))",
++      "ids": [58, 1312, 27370, 60, 366, 10787, 29, 1781, 14990, 593]
++    },
++    {
++      "name": "markup_adjacent",
++      "text": "Hi[angry]there<laugh>friend(((really))),okay",
++      "ids": [
++        13048, 58, 524, 884, 60, 18532, 27, 4260, 7443, 29, 10701, 6636, 53660,
++        36363, 93217
++      ]
++    },
++    {
++      "name": "voice_reference_transcript",
++      "text": "When the Western music overwhelms the Chinese music, it evokes the long history of conflict between Asia and the Western nations that sought to exploit and dominate it.",
++      "ids": [
++        4498, 279, 10867, 4627, 16783, 1011, 279, 8453, 4627, 11, 432, 3637,
++        7940, 279, 1293, 3840, 315, 12055, 1948, 13622, 323, 279, 10867, 16675,
++        429, 16105, 311, 32194, 323, 40736, 432, 13
++      ]
++    }
++  ]
++}
+diff --git a/tests/test_kitten2_catalog.py b/tests/test_kitten2_catalog.py
+index 3bf24ee..bcde090 100644
+--- a/tests/test_kitten2_catalog.py
++++ b/tests/test_kitten2_catalog.py
+@@ -72,7 +72,9 @@ def test_native_parser_preserves_pinned_nested_artifacts_and_provenance(tmp_path
+         "sample_rate": 24000,
+     }
+     artifact = next(
+-        artifact for artifact in item.artifacts if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
++        artifact
++        for artifact in item.artifacts
++        if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
+     )
+     assert artifact.role == "asset"
+     expected_sha = json.loads((tmp_path / "bundle.json").read_text(encoding="utf-8"))["files"][
+@@ -85,7 +87,9 @@ def test_native_parser_preserves_pinned_nested_artifacts_and_provenance(tmp_path
+     )
+
+
+-def test_catalog_client_registers_native_source_and_rejects_mutable_revision(tmp_path: Path) -> None:
++def test_catalog_client_registers_native_source_and_rejects_mutable_revision(
++    tmp_path: Path,
++) -> None:
+     path = tmp_path / "catalog.json"
+     path.write_text(json.dumps(_catalog(tmp_path / "bundle", revision="main")), encoding="utf-8")
+     assert DEFAULT_SOURCES["kitten2"].endswith("kitten2-onnx-bundles/main/catalog/bundles.json")
+@@ -124,9 +128,7 @@ def test_catalog_client_registers_native_source_and_rejects_mutable_revision(tmp
+         ),
+     ],
+ )
+-def test_catalog_rejects_malformed_records(
+-    tmp_path: Path, change: Any, message: str
+-) -> None:
++def test_catalog_rejects_malformed_records(tmp_path: Path, change: Any, message: str) -> None:
+     catalog = _catalog(tmp_path)
+     if message == "sample_rate must be 24000":
+         catalog["bundles"]["kitten-tts-v2"]["sample_rate"] = 16000
+@@ -176,7 +178,9 @@ def test_revision_resolution_and_catalog_build_pin_manifest_artifacts(
+     assert kitten2_catalog_tools.resolve_revision(_REPOSITORY, _REVISION) == _REVISION
+
+
+-def test_catalog_verify_is_offline_and_rejects_source_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++def test_catalog_verify_is_offline_and_rejects_source_drift(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
+     catalog = _catalog(tmp_path / "bundle")
+     source = kitten2_catalog_tools.build_source(catalog)
+     catalog_path = tmp_path / "catalog.json"
+@@ -195,35 +199,43 @@ def test_catalog_verify_is_offline_and_rejects_source_drift(tmp_path: Path, monk
+         kitten2_catalog_tools.load_catalog(catalog_path, source_path)
+
+
+-def test_cli_build_and_verify_kitten2_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++def test_cli_build_and_verify_kitten2_catalog(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
+     catalog = _catalog(tmp_path / "bundle")
+     monkeypatch.setattr(kitten2_catalog_tools, "build_catalog", lambda **_kwargs: catalog)
+     catalog_path = tmp_path / "catalog.json"
+     source_path = tmp_path / "source.json"
+-    assert cli_module.main(
+-        [
+-            "catalog",
+-            "kitten2",
+-            "build",
+-            "--repository",
+-            _REPOSITORY,
+-            "--revision",
+-            "main",
+-            "--output",
+-            str(catalog_path),
+-            "--source-output",
+-            str(source_path),
+-        ]
+-    ) == 0
+-    assert cli_module.main(
+-        [
+-            "catalog",
+-            "kitten2",
+-            "verify",
+-            "--catalog",
+-            str(catalog_path),
+-            "--source",
+-            str(source_path),
+-        ]
+-    ) == 0
++    assert (
++        cli_module.main(
++            [
++                "catalog",
++                "kitten2",
++                "build",
++                "--repository",
++                _REPOSITORY,
++                "--revision",
++                "main",
++                "--output",
++                str(catalog_path),
++                "--source-output",
++                str(source_path),
++            ]
++        )
++        == 0
++    )
++    assert (
++        cli_module.main(
++            [
++                "catalog",
++                "kitten2",
++                "verify",
++                "--catalog",
++                str(catalog_path),
++                "--source",
++                str(source_path),
++            ]
++        )
++        == 0
++    )
+     assert json.loads(catalog_path.read_text(encoding="utf-8")) == catalog
+diff --git a/tests/test_kitten2_chunking.py b/tests/test_kitten2_chunking.py
+new file mode 100644
+index 0000000..0950423
+--- /dev/null
++++ b/tests/test_kitten2_chunking.py
+@@ -0,0 +1,55 @@
++from __future__ import annotations
++
++from onnxvoice.systems.kitten2_chunking import split_kitten2_text
++from onnxvoice.systems.kitten2_expression import expression_markup_spans
++
++
++def test_chunking_preserves_exact_text_at_whitespace_and_punctuation_boundaries() -> None:
++    text = "First sentence. " + "A long phrase, with punctuation; " * 8 + "Last sentence!  "
++
++    chunks = split_kitten2_text(text, chunk_chars=45, chunk_min_chars=0)
++
++    assert len(chunks) > 1
++    assert "".join(chunks) == text
++    assert all(len(chunk) <= 45 for chunk in chunks)
++
++
++def test_chunking_does_not_split_supported_expression_markup() -> None:
++    text = "a" * 16 + " [angry] " + "b" * 16 + " (((one, two))) " + "c" * 16
++    spans = expression_markup_spans(text)
++
++    chunks = split_kitten2_text(text, chunk_chars=18, chunk_min_chars=0)
++
++    offsets = []
++    position = 0
++    for chunk in chunks[:-1]:
++        position += len(chunk)
++        offsets.append(position)
++    assert all(not start < boundary < end for boundary in offsets for start, end in spans)
++    assert any("[angry]" in chunk for chunk in chunks)
++    assert any("(((one, two)))" in chunk for chunk in chunks)
++    assert "".join(chunks) == text
++
++
++def test_chunking_hard_splits_unbroken_text_without_changing_characters() -> None:
++    text = "x" * 53
++
++    chunks = split_kitten2_text(text, chunk_chars=20)
++
++    assert [len(chunk) for chunk in chunks] == [20, 20, 13]
++    assert "".join(chunks) == text
++
++
++def test_chunk_min_merges_short_neighboring_chunks_without_inserting_text() -> None:
++    text = ". " + "x" * 23
++
++    chunks = split_kitten2_text(text, chunk_chars=12, chunk_min_chars=5)
++
++    assert [len(chunk) for chunk in chunks] == [14, 11]
++    assert "".join(chunks) == text
++
++
++def test_disabled_chunking_returns_original_text_as_one_chunk() -> None:
++    text = "  Keep punctuation, spacing, and [unknown] markup.  "
++
++    assert split_kitten2_text(text, chunk_chars=0, chunk_min_chars=1) == [text]
+diff --git a/tests/test_kitten2_chunking_integration.py b/tests/test_kitten2_chunking_integration.py
+new file mode 100644
+index 0000000..50b0057
+--- /dev/null
++++ b/tests/test_kitten2_chunking_integration.py
+@@ -0,0 +1,99 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++from _kitten2_fixture import create_bundle
++
++from onnxvoice import OnnxVoice
++from onnxvoice.systems.kitten2_expression import inspect_expression_markup
++from onnxvoice.systems.kitten2_frontend import PreparedTarget, PreparedVoice
++from onnxvoice.systems.kitten2_generation import GenerationResult
++
++
++def test_adapter_chunks_unchanged_text_and_shares_request_rng(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    manifest = json.loads(bundle_path.read_text(encoding="utf-8"))
++    manifest["generation"]["chunk_chars"] = 30
++    manifest["generation"]["chunk_min_chars"] = 1
++    bundle_path.write_text(json.dumps(manifest), encoding="utf-8")
++    runtime = OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path})
++
++    class FrontendStub:
++        texts: list[str] = []
++
++        @property
++        def emotion_control_ids(self) -> tuple[int, ...]:
++            return (20, 21)
++
++        def prepare_target(self, text: str) -> PreparedTarget:
++            self.texts.append(text)
++            return PreparedTarget(
++                text=text,
++                token_ids=(len(text),),
++                has_expression=inspect_expression_markup(text).has_expression,
++            )
++
++        def prepare_voice(self, _voice: str) -> PreparedVoice:
++            return PreparedVoice(
++                speaker_embedding=np.zeros((1, 4), dtype=np.float32),
++                reference_prefix=[10, 11],
++                conditioning={},
++            )
++
++    class LanguageModelStub:
++        rngs: list[np.random.Generator] = []
++        draws: list[float] = []
++        prompts: list[list[int]] = []
++
++        def generate(
++            self, prompt: list[int], *, rng: np.random.Generator, **_kwargs: Any
++        ) -> GenerationResult:
++            self.rngs.append(rng)
++            self.draws.append(float(rng.random()))
++            self.prompts.append(prompt)
++            return GenerationResult(raw_ids=[100, 2], s3_ids=[0])
++
++    class DecoderStub:
++        def decode(
++            self, _s3_ids: list[int], _conditioning: dict[str, np.ndarray], *, seed: int | None
++        ) -> np.ndarray:
++            assert seed == 7
++            return np.array([0.25, -0.25], dtype=np.float32)
++
++    frontend = FrontendStub()
++    language_model = LanguageModelStub()
++    runtime.frontend = frontend
++    runtime._get_language_model = lambda: language_model
++    runtime._get_decoder = lambda: DecoderStub()
++    text = "[joyful] We won today. Another sentence with <laugh> after the close."
++    try:
++        first = runtime.infer_text(text, seed=7)
++        first_chunks = frontend.texts[:]
++        first_draws = language_model.draws[:]
++        first_rngs = language_model.rngs[:]
++        first_prompts = language_model.prompts[:]
++
++        assert first.metadata["chunk_count"] == len(first_chunks) > 1
++        assert "".join(first_chunks) == text
++        assert all(rng is first_rngs[0] for rng in first_rngs)
++        assert first_draws == list(np.random.default_rng(7).random(len(first_chunks)))
++        assert all(prompt[:4] == [10, 11, 20, 21] for prompt in first_prompts)
++        assert all(prompt[4] == 3 for prompt in first_prompts)
++        assert first.metadata["expression_conditioning"] is True
++
++        frontend.texts.clear()
++        language_model.draws.clear()
++        language_model.rngs.clear()
++        language_model.prompts.clear()
++        second = runtime.infer_text(text, seed=7)
++
++        assert second.metadata["chunk_count"] == first.metadata["chunk_count"]
++        assert second.audio.tolist() == first.audio.tolist()
++        assert language_model.draws == first_draws
++        assert len({id(rng) for rng in language_model.rngs}) == 1
++        assert language_model.rngs[0] is not first_rngs[0]
++    finally:
++        runtime.close()
+diff --git a/tests/test_kitten2_contract.py b/tests/test_kitten2_contract.py
+index bd095a0..f50c721 100644
+--- a/tests/test_kitten2_contract.py
++++ b/tests/test_kitten2_contract.py
+@@ -119,3 +119,24 @@ def test_rejects_external_data_without_adjacent_graph(tmp_path: Path) -> None:
+
+     with pytest.raises(RuntimeContractError, match="external ONNX data must be adjacent"):
+         load_kitten2_bundle(bundle_path)
++
++
++@pytest.mark.parametrize("emotion_control", ["", " \t\n"])
++def test_rejects_empty_emotion_control(tmp_path: Path, emotion_control: str) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    data = _manifest(bundle_path)
++    data["generation"]["emotion_control"] = emotion_control
++    _write_manifest(bundle_path, data)
++
++    with pytest.raises(RuntimeContractError, match="emotion_control must be a non-empty string"):
++        load_kitten2_bundle(bundle_path)
++
++
++def test_requires_tokenizer_json_asset(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    data = _manifest(bundle_path)
++    data["tokenizer_assets"].remove("tokenizer.json")
++    _write_manifest(bundle_path, data)
++
++    with pytest.raises(RuntimeContractError, match="tokenizer_assets must include tokenizer.json"):
++        load_kitten2_bundle(bundle_path)
+diff --git a/tests/test_kitten2_expression.py b/tests/test_kitten2_expression.py
+new file mode 100644
+index 0000000..4de6125
+--- /dev/null
++++ b/tests/test_kitten2_expression.py
+@@ -0,0 +1,105 @@
++from __future__ import annotations
++
++import pytest
++
++from onnxvoice.systems.kitten2_expression import inspect_expression_markup
++
++
++@pytest.mark.parametrize(
++    "emotion",
++    [
++        "angry",
++        "contemplative",
++        "excited",
++        "joyful",
++        "mundane",
++        "nervous",
++        "sad",
++        "stern",
++        "surprised",
++        "tender",
++    ],
++)
++def test_recognizes_supported_emotions(emotion: str) -> None:
++    text = f"[{emotion}] Hello."
++
++    result = inspect_expression_markup(text)
++
++    assert result.has_expression
++    assert result.emotion == emotion
++    assert result.event_count == 0
++    assert result.emphasis_count == 0
++    assert text == f"[{emotion}] Hello."
++
++
++@pytest.mark.parametrize(
++    "event",
++    ["gasp", "giggle", "growl", "gulp", "laugh", "pause", "scoff", "sigh", "sob", "um"],
++)
++def test_recognizes_supported_vocal_events(event: str) -> None:
++    result = inspect_expression_markup(f"Hello <{event}>.")
++
++    assert result.has_expression
++    assert result.emotion is None
++    assert result.event_count == 1
++    assert result.emphasis_count == 0
++
++
++def test_recognizes_case_insensitive_and_multiple_expression_tags() -> None:
++    result = inspect_expression_markup("[ANGRY][joyful]hello<GASP><laugh>")
++
++    assert result.has_expression
++    assert result.emotion == "angry"
++    assert result.event_count == 2
++
++
++def test_recognizes_known_emotion_tags_after_sentence_start() -> None:
++    result = inspect_expression_markup("hello [sad] world")
++
++    assert result.has_expression
++    assert result.emotion == "sad"
++
++
++def test_recognizes_emphasis_spans_up_to_eighty_non_newline_characters() -> None:
++    text = f"(((short phrase))) ((({'x' * 80})))"
++
++    result = inspect_expression_markup(text)
++
++    assert result.has_expression
++    assert result.emphasis_count == 2
++
++
++@pytest.mark.parametrize(
++    "text",
++    [
++        "(((" + "x" * 81 + ")))",
++        "((()))",
++        "(((nested (phrase)))",
++        "(((unclosed)",
++        "(((first\nsecond)))",
++        "((word))",
++        "[whisper] hello",
++        "hello <door>",
++        "((hello))",
++        "[angry-ish] hello",
++    ],
++)
++def test_unknown_or_unsupported_markup_does_not_activate_expression(text: str) -> None:
++    result = inspect_expression_markup(text)
++
++    assert not result.has_expression
++    assert result.emotion is None
++    assert result.event_count == 0
++    assert result.emphasis_count == 0
++
++
++def test_adjacent_markup_and_punctuation_are_recognized_without_rewriting() -> None:
++    text = "[angry]hello(((really))),okay<laugh><sigh>"
++
++    result = inspect_expression_markup(text)
++
++    assert result.has_expression
++    assert result.emotion == "angry"
++    assert result.event_count == 2
++    assert result.emphasis_count == 1
++    assert text == "[angry]hello(((really))),okay<laugh><sigh>"
+diff --git a/tests/test_kitten2_frontend.py b/tests/test_kitten2_frontend.py
+new file mode 100644
+index 0000000..1c40c66
+--- /dev/null
++++ b/tests/test_kitten2_frontend.py
+@@ -0,0 +1,139 @@
++from __future__ import annotations
++
++import os
++import subprocess
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any
++
++import numpy as np
++import pytest
++
++from onnxvoice.systems import kitten2_frontend as frontend_module
++from onnxvoice.systems.kitten2_frontend import Kitten2Frontend
++from onnxvoice.systems.kitten2_tokens import TokenMap
++
++
++class RecordingTokenizer:
++    def __init__(self) -> None:
++        self.inputs: list[str] = []
++
++    def encode(self, text: str) -> list[int]:
++        self.inputs.append(text)
++        return [17, 23]
++
++
++def _frontend(tmp_path: Path) -> tuple[Kitten2Frontend, RecordingTokenizer]:
++    frontend = Kitten2Frontend(tmp_path, {"tokenizer": "tokenizer"}, _token_map())
++    tokenizer = RecordingTokenizer()
++    frontend._tokenizer = tokenizer  # type: ignore[assignment]
++    return frontend, tokenizer
++
++
++def _token_map() -> TokenMap:
++    return TokenMap(
++        audio_id_base=100,
++        num_audio_tokens=10,
++        speech_start_id=1,
++        speech_end_id=2,
++        text_start_id=3,
++        text_end_id=4,
++        start_id=5,
++        stop_id=6,
++    )
++
++
++@pytest.mark.parametrize(
++    "text",
++    [
++        "Dr. Smith paid $12.50 on 10/12/2026.",
++        "100 km, 5th Avenue, and 2 units.",
++        "Café naïve こんにちは 🌍",
++        "First line.\nSecond line.\n",
++        "  preserve both sides exactly.  ",
++    ],
++)
++def test_prepare_target_passes_caller_text_unchanged(tmp_path: Path, text: str) -> None:
++    frontend, tokenizer = _frontend(tmp_path)
++
++    target = frontend.prepare_target(text)
++
++    assert target.text == text
++    assert target.token_ids == (17, 23)
++    assert not target.has_expression
++    assert tokenizer.inputs == [text]
++
++
++def test_prepare_target_preserves_expression_markup(tmp_path: Path) -> None:
++    frontend, tokenizer = _frontend(tmp_path)
++    text = "[angry] I told you (((never))) to open that door. <sigh>"
++
++    target = frontend.prepare_target(text)
++
++    assert target.text == text
++    assert target.has_expression
++    assert tokenizer.inputs == [text]
++
++
++def test_prepare_target_validates_without_loading_tokenizer(tmp_path: Path) -> None:
++    frontend = Kitten2Frontend(tmp_path, {"tokenizer": "tokenizer"}, _token_map())
++
++    with pytest.raises(TypeError, match="text must be a string"):
++        frontend.prepare_target(None)  # type: ignore[arg-type]
++    with pytest.raises(ValueError, match="text must not be empty"):
++        frontend.prepare_target(" \t\n")
++    assert frontend._tokenizer is None
++
++
++def test_voice_reference_transcript_reaches_tokenizer_unchanged(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    transcript = "  Stored reference transcript.\n"
++    arrays: dict[str, Any] = {
++        "reference_tokens": np.array([0]),
++        "speaker_embedding": np.zeros((1, 4), dtype=np.float32),
++        "conditioning_prompt_token": np.array([1]),
++        "conditioning_prompt_token_len": np.array([1]),
++        "conditioning_prompt_feat": np.zeros((1, 1), dtype=np.float32),
++        "conditioning_embedding": np.zeros((1, 4), dtype=np.float32),
++    }
++    reference = SimpleNamespace(metadata={"reference_transcript": transcript}, arrays=arrays)
++    monkeypatch.setattr(frontend_module, "load_decoder_reference", lambda _path: reference)
++    frontend, tokenizer = _frontend(tmp_path)
++    frontend.manifest["voices"] = {"Bruno": "voices/Bruno.npz"}
++
++    frontend.prepare_voice("Bruno")
++
++    assert tokenizer.inputs == [transcript]
++
++
++def test_emotion_control_is_tokenized_once_with_the_bundled_tokenizer(tmp_path: Path) -> None:
++    frontend = Kitten2Frontend(
++        tmp_path,
++        {"tokenizer": "tokenizer", "generation": {"emotion_control": "{emo: 1}"}},
++        _token_map(),
++    )
++    tokenizer = RecordingTokenizer()
++    frontend._tokenizer = tokenizer  # type: ignore[assignment]
++
++    assert frontend.emotion_control_ids == (17, 23)
++    assert frontend.emotion_control_ids == (17, 23)
++    assert tokenizer.inputs == ["{emo: 1}"]
++
++
++def test_importing_base_package_does_not_require_tokenizers() -> None:
++    code = """
++import builtins
++original_import = builtins.__import__
++def import_without_tokenizers(name, *args, **kwargs):
++    if name == "tokenizers" or name.startswith("tokenizers."):
++        raise ImportError("tokenizers unavailable")
++    return original_import(name, *args, **kwargs)
++builtins.__import__ = import_without_tokenizers
++import onnxvoice
++assert onnxvoice is not None
++"""
++    repository = Path(__file__).parents[1]
++    environment = os.environ.copy()
++    subprocess.run([sys.executable, "-c", code], cwd=repository, env=environment, check=True)
+diff --git a/tests/test_kitten2_generation.py b/tests/test_kitten2_generation.py
+index ad606cf..dba9284 100644
+--- a/tests/test_kitten2_generation.py
++++ b/tests/test_kitten2_generation.py
+@@ -9,6 +9,7 @@ from _kitten2_fixture import create_bundle
+
+ from onnxvoice.errors import CapabilityError
+ from onnxvoice.systems import kitten2 as kitten2_module
++from onnxvoice.systems import kitten2_generation as kitten2_generation_module
+ from onnxvoice.systems.kitten2 import Kitten2Adapter
+ from onnxvoice.systems.kitten2_generation import Kitten2LanguageModel
+ from onnxvoice.systems.kitten2_sampling import SamplingSettings
+@@ -40,7 +41,9 @@ class FakeSpeakerSession:
+         return [np.zeros((1, 4), dtype=np.float32)]
+
+
+-def test_native_language_model_generates_deterministically(tmp_path: Path) -> None:
++def test_native_language_model_generates_deterministically(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
+     embeddings_path = tmp_path / "embeddings.npy"
+     np.save(embeddings_path, np.zeros((120, 4), dtype=np.float32))
+     metadata = {
+@@ -90,6 +93,29 @@ def test_native_language_model_generates_deterministically(tmp_path: Path) -> No
+     assert first.raw_ids in ([100, 2], [101, 2])
+     assert first.s3_ids == [first.raw_ids[0] - token_map.audio_id_base]
+
++    with_rng = model.generate(
++        [5, 3],
++        token_map=token_map,
++        max_new_tokens=4,
++        settings=settings,
++        rng=np.random.default_rng(17),
++    )
++    assert with_rng == first
++
++    samples: list[float] = []
++
++    def capture_sample(*args: Any, **_kwargs: Any) -> int:
++        samples.append(args[4])
++        return token_map.speech_end_id
++
++    monkeypatch.setattr(kitten2_generation_module, "sample", capture_sample)
++    shared_rng = np.random.default_rng(31)
++    for _ in range(2):
++        model.generate(
++            [5, 3], token_map=token_map, max_new_tokens=4, settings=settings, rng=shared_rng
++        )
++    assert samples == list(np.random.default_rng(31).random(2))
++
+
+ def test_adapter_defers_sessions_and_propagates_runtime_options(
+     tmp_path: Path, monkeypatch: Any
+@@ -138,7 +164,9 @@ def test_adapter_defers_sessions_and_propagates_runtime_options(
+         session_options=session_options,
+     )
+     assert created == []
+-    sessions = [adapter._get_session(component) for component in ("lm", "speaker", "flow", "mel2wav")]
++    sessions = [
++        adapter._get_session(component) for component in ("lm", "speaker", "flow", "mel2wav")
++    ]
+     assert len(created) == 4
+     assert [entry["component"] for entry in created] == [
+         "lm",
+@@ -160,8 +188,7 @@ def test_adapter_defers_sessions_and_propagates_runtime_options(
+         "mel2wav",
+     ]
+     assert all(
+-        entry.providers_active == ("CUDAExecutionProvider",)
+-        for entry in diagnostic.sessions
++        entry.providers_active == ("CUDAExecutionProvider",) for entry in diagnostic.sessions
+     )
+     with pytest.raises(CapabilityError):
+         adapter.infer([1])
+diff --git a/tests/test_kitten2_integration.py b/tests/test_kitten2_integration.py
+index 11788b8..7bb5fda 100644
+--- a/tests/test_kitten2_integration.py
++++ b/tests/test_kitten2_integration.py
+@@ -13,7 +13,7 @@ import onnxvoice.manager as manager_module
+ from onnxvoice import Kitten2Adapter, OnnxVoice, registered_systems
+ from onnxvoice.errors import RuntimeContractError
+ from onnxvoice.systems import get_adapter
+-from onnxvoice.systems.kitten2_frontend import PreparedVoice
++from onnxvoice.systems.kitten2_frontend import PreparedTarget, PreparedVoice
+ from onnxvoice.systems.kitten2_generation import GenerationResult
+
+
+@@ -102,15 +102,12 @@ def test_single_file_import_rejects_kitten2(tmp_path: Path) -> None:
+         manager.import_model(system="kitten2", item_id="bundle", model=model)
+
+
+-
+ def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
+     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+     bundle_path = create_bundle(tmp_path / "upstream")
+     catalog_path = tmp_path / "catalog.json"
+-    catalog_path.write_text(
+-        json.dumps(_catalog_for_bundle(bundle_path)), encoding="utf-8"
+-    )
++    catalog_path.write_text(json.dumps(_catalog_for_bundle(bundle_path)), encoding="utf-8")
+     manager = OnnxVoice(
+         cache_dir=tmp_path / "cache",
+         catalog_sources={"kitten2": str(catalog_path)},
+@@ -156,13 +153,13 @@ def test_infer_text_returns_finite_mono_float32_at_bundle_sample_rate(
+                 conditioning={},
+             )
+
+-        def encode_text(self, text: str) -> tuple[str, list[int]]:
+-            return text, [3, 4]
++        def prepare_target(self, text: str) -> PreparedTarget:
++            return PreparedTarget(text=text, token_ids=(3, 4), has_expression=False)
+
+     class LanguageModelStub:
+         def generate(self, prompt: list[int], **kwargs: Any) -> GenerationResult:
+             assert prompt
+-            assert kwargs["seed"] == 23
++            assert isinstance(kwargs["rng"], np.random.Generator)
+             assert kwargs["max_new_tokens"] == 12
+             return GenerationResult(raw_ids=[100, 2], s3_ids=[0])
+
+@@ -186,6 +183,8 @@ def test_infer_text_returns_finite_mono_float32_at_bundle_sample_rate(
+         assert np.all(np.isfinite(result.audio))
+         assert result.metadata["voice"] == "Bruno"
+         assert result.metadata["preset"] == "stable"
++        assert result.metadata["expression_conditioning"] is False
++        assert result.metadata["chunk_count"] == 1
+
+         class NonFiniteDecoder:
+             def decode(self, *_args: Any, **_kwargs: Any) -> np.ndarray:
+diff --git a/tests/test_kitten2_local_open.py b/tests/test_kitten2_local_open.py
+index c6048a1..1a5577a 100644
+--- a/tests/test_kitten2_local_open.py
++++ b/tests/test_kitten2_local_open.py
+@@ -57,7 +57,10 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
+     assert installation.sample_rate == 24000
+     assert installation.voices == ("Bruno",)
+     assert installation.default_voice == "Bruno"
+-    assert installation.metadata["runtime"] == {"layout": "kitten2-onnx-bundle-v1", "sample_rate": 24000}
++    assert installation.metadata["runtime"] == {
++        "layout": "kitten2-onnx-bundle-v1",
++        "sample_rate": 24000,
++    }
+     assert "decoder/mel2wav/mel2wav.onnx.data" in filenames
+     graph = next(
+         artifact
+@@ -70,7 +73,9 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
+         if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
+     )
+     assert external_data.path == Path(str(graph.path) + ".data")
+-    assert all(artifact.path.is_relative_to(installation.path) for artifact in installation.artifacts)
++    assert all(
++        artifact.path.is_relative_to(installation.path) for artifact in installation.artifacts
++    )
+     assert adapter_args["kwargs"]["providers"] == "cpu"
+     assert adapter_args["kwargs"]["provider_options"] == [{"device_id": "2"}]
+
+diff --git a/tests/test_kitten2_prompt.py b/tests/test_kitten2_prompt.py
+new file mode 100644
+index 0000000..36edd62
+--- /dev/null
++++ b/tests/test_kitten2_prompt.py
+@@ -0,0 +1,143 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import pytest
++from _kitten2_fixture import create_bundle
++
++from onnxvoice import OnnxVoice
++from onnxvoice.systems.kitten2_frontend import (
++    PreparedTarget,
++    PreparedVoice,
++    build_generation_prompt,
++)
++from onnxvoice.systems.kitten2_generation import GenerationResult
++from onnxvoice.systems.kitten2_tokens import TokenMap
++
++
++@pytest.mark.parametrize(
++    ("use_reference", "use_emotion", "expected"),
++    [
++        (True, True, [10, 11, 20, 21, 30, 40, 41, 50, 60]),
++        (False, False, [1, 30, 40, 41, 50, 60]),
++    ],
++)
++def test_generation_prompt_places_emotion_before_text_start(
++    use_reference: bool, use_emotion: bool, expected: list[int]
++) -> None:
++    token_map = TokenMap(
++        audio_id_base=100,
++        num_audio_tokens=10,
++        speech_start_id=60,
++        speech_end_id=61,
++        text_start_id=30,
++        text_end_id=31,
++        start_id=1,
++        stop_id=2,
++        final_seg_id=50,
++    )
++
++    prompt = build_generation_prompt(
++        token_map,
++        [40, 41],
++        reference_prefix=[10, 11] if use_reference else None,
++        emotion_ids=[20, 21] if use_emotion else None,
++    )
++
++    assert prompt == expected
++
++
++@pytest.mark.parametrize(
++    (
++        "has_expression",
++        "use_emotion",
++        "configured_reference",
++        "use_reference_prompt",
++        "expected_emotion",
++        "expected_reference",
++    ),
++    [
++        (True, None, True, None, True, True),
++        (False, None, True, None, False, True),
++        (False, True, True, None, True, True),
++        (True, False, True, None, False, True),
++        (True, None, False, None, True, False),
++        (True, None, False, True, True, True),
++        (True, None, True, False, True, False),
++    ],
++)
++def test_adapter_resolves_expression_and_reference_overrides(
++    tmp_path: Path,
++    has_expression: bool,
++    use_emotion: bool | None,
++    configured_reference: bool,
++    use_reference_prompt: bool | None,
++    expected_emotion: bool,
++    expected_reference: bool,
++) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++
++    manifest_path = bundle_path
++    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
++    manifest["generation"]["use_reference_prompt"] = configured_reference
++    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
++    runtime = OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path})
++
++    class FrontendStub:
++        emotion_control_reads = 0
++        last_text: str | None = None
++
++        def prepare_target(self, text: str) -> PreparedTarget:
++            self.last_text = text
++            return PreparedTarget(text=text, token_ids=(40, 41), has_expression=has_expression)
++
++        @property
++        def emotion_control_ids(self) -> tuple[int, ...]:
++            self.emotion_control_reads += 1
++            return (20, 21)
++
++        def prepare_voice(self, voice: str) -> PreparedVoice:
++            assert voice == "Bruno"
++            return PreparedVoice(
++                speaker_embedding=np.zeros((1, 4), dtype=np.float32),
++                reference_prefix=[10, 11],
++                conditioning={},
++            )
++
++    class LanguageModelStub:
++        prompt: list[int] | None = None
++
++        def generate(self, prompt: list[int], **_kwargs: Any) -> GenerationResult:
++            self.prompt = prompt
++            return GenerationResult(raw_ids=[100, 2], s3_ids=[0])
++
++    class DecoderStub:
++        def decode(
++            self, _s3_ids: list[int], _conditioning: dict[str, np.ndarray], *, seed: int | None
++        ) -> np.ndarray:
++            return np.zeros(8, dtype=np.float32)
++
++    frontend = FrontendStub()
++    language_model = LanguageModelStub()
++    runtime.frontend = frontend
++    runtime._get_language_model = lambda: language_model
++    runtime._get_decoder = lambda: DecoderStub()
++    text = "  [joyful] unchanged target  "
++    try:
++        result = runtime.infer_text(
++            text,
++            use_emotion=use_emotion,
++            use_reference_prompt=use_reference_prompt,
++        )
++
++        head = [10, 11] if expected_reference else [5]
++        emotion = [20, 21] if expected_emotion else []
++        assert language_model.prompt == [*head, *emotion, 3, 40, 41, 110, 1]
++        assert frontend.last_text == text
++        assert frontend.emotion_control_reads == int(expected_emotion)
++        assert result.metadata["expression_conditioning"] is expected_emotion
++    finally:
++        runtime.close()
+diff --git a/tests/test_kitten2_real_bundle.py b/tests/test_kitten2_real_bundle.py
+index 36164ca..f666e7b 100644
+--- a/tests/test_kitten2_real_bundle.py
++++ b/tests/test_kitten2_real_bundle.py
+@@ -47,3 +47,38 @@ def test_bruno_cpu_real_bundle_smoke_and_optional_parity() -> None:
+             np.testing.assert_allclose(audio, reference_audio, rtol=1e-5, atol=1e-5)
+     finally:
+         runtime.close()
++
++
++@pytest.mark.integration
++@pytest.mark.resource_heavy
++def test_bruno_cpu_real_bundle_expression_smoke() -> None:
++    raw_bundle = os.environ.get("ONNXVOICE_KITTEN2_BUNDLE")
++    if not raw_bundle:
++        pytest.skip("set ONNXVOICE_KITTEN2_BUNDLE to a complete KittenTTS 2 bundle")
++    bundle_path = Path(raw_bundle)
++    if bundle_path.is_dir():
++        bundle_path /= "bundle.json"
++
++    runtime = OnnxVoice.open_local(
++        system="kitten2",
++        files={"bundle": bundle_path},
++        providers="cpu",
++    )
++    try:
++        result = runtime.infer_text(
++            "[joyful] I can (((hardly))) believe it! <laugh>",
++            voice="Bruno",
++            preset="stable",
++            seed=7,
++            max_new_tokens=64,
++        )
++        audio = result.audio
++        assert result.metadata["expression_conditioning"] is True
++        assert result.metadata["chunk_count"] == 1
++        assert result.sample_rate == 24000
++        assert audio.dtype == np.float32
++        assert audio.ndim == 1
++        assert audio.size > 0
++        assert np.all(np.isfinite(audio))
++    finally:
++        runtime.close()
+diff --git a/tests/test_kitten2_tokenizer.py b/tests/test_kitten2_tokenizer.py
+new file mode 100644
+index 0000000..9c5caea
+--- /dev/null
++++ b/tests/test_kitten2_tokenizer.py
+@@ -0,0 +1,85 @@
++from __future__ import annotations
++
++import ast
++import builtins
++import json
++import os
++from pathlib import Path
++from typing import Any
++
++import pytest
++
++from onnxvoice.errors import OptionalDependencyError, RuntimeContractError
++from onnxvoice.systems.kitten2_tokenizer import Kitten2Tokenizer
++
++_FIXTURE = Path(__file__).parent / "fixtures/kitten2_tokenizer_golden.json"
++
++
++def _golden_vectors() -> list[dict[str, Any]]:
++    return json.loads(_FIXTURE.read_text(encoding="utf-8"))["vectors"]
++
++
++def _tokenizer_json() -> Path:
++    raw_bundle = os.environ.get("ONNXVOICE_KITTEN2_BUNDLE")
++    if not raw_bundle:
++        pytest.skip("set ONNXVOICE_KITTEN2_BUNDLE to a KittenTTS 2 bundle for tokenizer vectors")
++    bundle_path = Path(raw_bundle)
++    root = bundle_path.parent if bundle_path.name == "bundle.json" else bundle_path
++    return root / "tokenizer" / "tokenizer.json"
++
++
++def test_bundled_tokenizer_matches_transformers_golden_vectors() -> None:
++    tokenizer = Kitten2Tokenizer(_tokenizer_json())
++
++    for vector in _golden_vectors():
++        assert tokenizer.encode(vector["text"]) == vector["ids"], vector["name"]
++
++
++def test_tokenizer_requires_tokenizer_json(tmp_path: Path) -> None:
++    with pytest.raises(RuntimeContractError, match="required tokenizer artifact is missing"):
++        Kitten2Tokenizer(tmp_path / "tokenizer.json")
++
++
++def test_tokenizer_reports_missing_optional_dependency(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    tokenizer_json = tmp_path / "tokenizer.json"
++    tokenizer_json.write_text("{}", encoding="utf-8")
++    original_import = builtins.__import__
++
++    def import_without_tokenizers(name: str, *args: Any, **kwargs: Any) -> Any:
++        if name == "tokenizers":
++            raise ImportError("tokenizers unavailable")
++        return original_import(name, *args, **kwargs)
++
++    monkeypatch.setattr(builtins, "__import__", import_without_tokenizers)
++    with pytest.raises(OptionalDependencyError, match=r"onnxvoice\[kitten2\]"):
++        Kitten2Tokenizer(tokenizer_json)
++
++
++def test_kitten2_runtime_has_no_semantic_text_dependencies() -> None:
++    repository = Path(__file__).parents[1]
++    production = repository / "onnxvoice/systems"
++    forbidden = {
++        "kitten_text_processing",
++        "transformers",
++        "spokenform",
++        "num2words",
++        "nltk",
++        "spacy",
++        "phonemizer",
++    }
++    for path in production.glob("kitten2*.py"):
++        tree = ast.parse(path.read_text(encoding="utf-8"))
++        imported = set()
++        for node in ast.walk(tree):
++            if isinstance(node, ast.Import):
++                imported.update(alias.name.split(".")[0] for alias in node.names)
++            elif isinstance(node, ast.ImportFrom) and node.module:
++                imported.add(node.module.split(".")[0])
++        assert not imported & forbidden, path.name
++
++    project = (repository / "pyproject.toml").read_text(encoding="utf-8").lower()
++    assert "kitten-text-processing" not in project
++    assert "transformers" not in project
++    assert 'kitten2 = ["tokenizers>=0.22,<0.23"]' in project

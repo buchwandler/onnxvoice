@@ -1,0 +1,3354 @@
+ MANIFEST.in                                    |   1 +
+ README.md                                      |   3 +
+ docs/cli.md                                    |   7 +
+ docs/providers.md                              |   5 +
+ docs/python-api.md                             |   2 +
+ docs/systems/index.md                          |   1 +
+ docs/systems/kitten2.md                        |  97 +++++++++
+ onnxvoice/__init__.py                          |   2 +
+ onnxvoice/catalog.py                           | 200 ++++++++++++++++++
+ onnxvoice/catalog_tools/__init__.py            |   2 +
+ onnxvoice/catalog_tools/kitten2.py             | 210 +++++++++++++++++++
+ onnxvoice/cli.py                               |  31 +++
+ onnxvoice/manager.py                           |  79 +++++++-
+ onnxvoice/systems/__init__.py                  |   3 +
+ onnxvoice/systems/kitten2.py                   | 257 ++++++++++++++++++++++++
+ onnxvoice/systems/kitten2_contract.py          | 268 +++++++++++++++++++++++++
+ onnxvoice/systems/kitten2_decoder.py           | 171 ++++++++++++++++
+ onnxvoice/systems/kitten2_decoder_reference.py |  65 ++++++
+ onnxvoice/systems/kitten2_frontend.py          | 134 +++++++++++++
+ onnxvoice/systems/kitten2_generation.py        | 235 ++++++++++++++++++++++
+ onnxvoice/systems/kitten2_sampling.py          | 214 ++++++++++++++++++++
+ onnxvoice/systems/kitten2_tokens.py            |  45 +++++
+ pyproject.toml                                 |   1 +
+ tests/_kitten2_fixture.py                      |  84 ++++++++
+ tests/test_kitten2_catalog.py                  | 229 +++++++++++++++++++++
+ tests/test_kitten2_contract.py                 | 121 +++++++++++
+ tests/test_kitten2_generation.py               | 170 ++++++++++++++++
+ tests/test_kitten2_integration.py              | 198 ++++++++++++++++++
+ tests/test_kitten2_local_open.py               |  91 +++++++++
+ tests/test_kitten2_real_bundle.py              |  49 +++++
+ 30 files changed, 2972 insertions(+), 3 deletions(-)
+
+diff --git a/MANIFEST.in b/MANIFEST.in
+index 2fb0fce..c4ca3de 100644
+--- a/MANIFEST.in
++++ b/MANIFEST.in
+@@ -1,6 +1,7 @@
+ include LICENSE
+ include README.md
+ include docs/systems/kitten.md
++include docs/systems/kitten2.md
+ include docs/systems/inflect.md
+ include tests/fixtures/inflect_models.json
+ prune .ledger
+diff --git a/README.md b/README.md
+index 124eaf8..36e745d 100644
+--- a/README.md
++++ b/README.md
+@@ -20,6 +20,8 @@ python -m pip install "onnxvoice[directml]"
+ python -m pip install "onnxvoice[openvino]"
+ ```
+
++KittenTTS 2 text normalization and tokenization are optional: install `onnxvoice[kitten2]` with a runtime extra such as `onnxvoice[kitten2,cpu]`. The native runtime does not depend on the separate `kitten2-onnx` package. See [KittenTTS 2](docs/systems/kitten2.md).
++
+ Hugging Face is an optional **download transport**, separate from runtime selection: use `onnxvoice[huggingface]` for transport only, or `onnxvoice[cpu,huggingface]` for CPU inference plus Hub downloads. Pocket users can continue using the compatible `onnxvoice[pocket]` extra (and add a runtime provider, e.g. `onnxvoice[pocket,cpu]`). See [Pocket download setup](docs/pocket-downloads.md).
+
+ Voicefolio owns cataloging, discovery, and download of reference WAVs. OnnxVoice's Pocket support is for ONNX bundles and predefined runtime voice states. See [Pocket download setup](docs/pocket-downloads.md).
+@@ -77,6 +79,7 @@ finally:
+ | Pocket     | Yes              | Yes     | Catalog-dependent            |
+ | Supertonic | Yes              | Yes     | Yes                          |
+ | Kitten     | Yes              | Yes     | Yes                          |
++| KittenTTS 2 | Yes              | Yes     | Catalog child voices          |
+ | Inflect    | Yes              | Yes     | Fixed `default` voice        |
+ | Sopro      | Yes (partial)    | Yes     | Zero-shot reference audio    |
+ | Qwen3-TTS  | Yes              | Yes     | No; VoiceDesign/Base bundles |
+diff --git a/docs/cli.md b/docs/cli.md
+index 26adf98..ebc805a 100644
+--- a/docs/cli.md
++++ b/docs/cli.md
+@@ -199,6 +199,12 @@ onnxvoice catalog kitten build \
+ onnxvoice catalog kitten verify --catalog catalog/models.json --source catalog/source.json
+ onnxvoice catalog qwen3 build --output catalog/bundles.json --source-output catalog/source.json
+ onnxvoice catalog qwen3 verify --catalog catalog/bundles.json --source catalog/source.json
++onnxvoice catalog kitten2 build \
++  --repository holgern/kitten-tts-v2-onnx \
++  --revision main \
++  --output catalog/bundles.json \
++  --source-output catalog/source.json
++onnxvoice catalog kitten2 verify --catalog catalog/bundles.json --source catalog/source.json
+ ```
+
+ The Chatterbox catalog verifier checks the normalized bundle catalog against its pinned source snapshot:
+@@ -209,4 +215,5 @@ onnxvoice catalog chatterbox verify --catalog ../chatterbox-onnx-bundles/catalog
+ ```
+
+ Piper, Pocket, and Supertonic builders accept repository and revision options. The Kitten builder uses the normalized catalog as a seed manifest and refreshes each listed Hugging Face repository; it reads upstream `config.json` and artifact metadata. Build requires network access, while verification is offline. See [KittenTTS](systems/kitten.md) and `onnxvoice catalog <system> <action> --help` for details.
++KittenTTS 2 has a native bundle catalog and a separate text-level adapter. Its builder resolves the requested Hub revision to a commit SHA, uses manifest artifact hashes, and writes a provenance snapshot; verification is fully offline and rejects mutable catalog revisions. See [KittenTTS 2](systems/kitten2.md) for the catalog contract and both CLI commands.
+ Qwen3 catalog building fetches metadata and artifact integrity from the seed's pinned repositories; the output catalog and source manifest can be verified offline with `onnxvoice catalog qwen3 verify`. See [Qwen3-TTS WaveKat](systems/qwen3.md) for bundle profiles, runtime contracts, and parity status.
+diff --git a/docs/providers.md b/docs/providers.md
+index e96b065..d6794f3 100644
+--- a/docs/providers.md
++++ b/docs/providers.md
+@@ -62,4 +62,9 @@ finally:
+     runtime.close()
+ ```
+
++
++
++## KittenTTS 2 component sessions
++
++KittenTTS 2 creates four lazy ONNX sessions for its LM, speaker, flow, and mel2wav components. The selected provider list and provider options are passed to each component session without adding an implicit CPU fallback. A bundle LM profile that requires low-memory exact-ternary execution is CPU-only and uses its required component-specific session settings; conflicting caller-provided LM options are rejected. See [KittenTTS 2](systems/kitten2.md).
+ Provider diagnostics describe the session that was created. They do not validate model quality or benchmark throughput.
+diff --git a/docs/python-api.md b/docs/python-api.md
+index ce99619..5458113 100644
+--- a/docs/python-api.md
++++ b/docs/python-api.md
+@@ -54,6 +54,8 @@ finally:
+
+ Kitten uses the same managed lifecycle. Its runtime receives model-ready token IDs, a selected `style` tensor, and `speed`; the text frontend and style selection belong to the producer. See [KittenTTS](systems/kitten.md).
+
++KittenTTS 2 is a separate native system with a text-level API. Install `onnxvoice[kitten2,cpu]`, then use `runtime.infer_text(text, voice="Bruno", preset="stable", seed=7)`. The Kitten v0.8 `infer(token_ids, style, speed)` contract remains separate. See [KittenTTS 2](systems/kitten2.md) for bundle, catalog, and provider details.
++
+ An installation can also be found with `voice.installed()` or `voice.find_installed(ref)`. `voice.update(ref)` refreshes catalog data and atomically replaces the selected installation while preserving its quality and distribution by default.
+
+ ## Reference WAVs and Pocket runtime
+diff --git a/docs/systems/index.md b/docs/systems/index.md
+index 6caff76..4d478b6 100644
+--- a/docs/systems/index.md
++++ b/docs/systems/index.md
+@@ -26,6 +26,7 @@ kokoro
+ pocket
+ supertonic
+ kitten
++kitten2
+ inflect
+ sopro
+ qwen3
+diff --git a/docs/systems/kitten2.md b/docs/systems/kitten2.md
+new file mode 100644
+index 0000000..a13968e
+--- /dev/null
++++ b/docs/systems/kitten2.md
+@@ -0,0 +1,97 @@
++# KittenTTS 2
++
++ONNXVoice provides a native `kitten2` system for the `kitten2-onnx-bundle-v1` layout. It is separate from the existing Kitten v0.8 `kitten` system and does not import or depend on the sibling `kitten2-onnx` runtime package.
++
++The adapter owns bundle validation, local tokenizer loading, text and voice preparation, seeded generation, ONNX session lifecycle, and waveform decoding. It does not own application-specific text policy or voice selection.
++
++## Install
++
++The KittenTTS 2 text frontend is optional. Install it together with an ONNX Runtime provider:
++
++```bash
++python -m pip install "onnxvoice[kitten2,cpu]"
++```
++
++For a compatible GPU runtime, use `onnxvoice[kitten2,gpu]`. The `kitten2` extra pins the frontend dependencies used by the validated implementation: `kitten-text-processing==0.1.0` and `transformers==4.57.1`. The `cpu` and `gpu` extras select ONNX Runtime; the KittenTTS 2 frontend extra alone does not install an inference provider.
++
++Tokenizer assets are loaded from the installed bundle with `local_files_only=True`. Text inference does not download tokenizer or model files at runtime. The first text inference requires the `kitten2` extra; bundle installation and catalog maintenance do not.
++
++## Managed and local use
++
++Install and open the published bundle through the normal ONNXVoice lifecycle:
++
++```python
++from onnxvoice import OnnxVoice
++
++manager = OnnxVoice()
++installation = manager.install("kitten2:kitten-tts-v2")
++
++with manager.open(installation, providers="cpu") as runtime:
++    result = runtime.infer_text(
++        "Hello from KittenTTS 2.",
++        voice="Bruno",
++        preset="stable",
++        seed=7,
++        max_new_tokens=64,
++    )
++```
++
++`infer_text()` accepts text, an optional manifest voice, a decode preset, a seed, and a generation limit. It returns the normal `InferenceResult` with finite mono `float32` audio at 24 kHz. The adapter exposes read-only `voices`, `default_voice`, `default_preset`, `decode_presets`, and `sample_rate` properties. `infer(token_ids)` is not supported for this text-level multi-stage system and raises `CapabilityError` directing callers to `infer_text()`.
++
++A complete local bundle can be opened without catalog or store access:
++
++```python
++from onnxvoice import OnnxVoice
++
++runtime = OnnxVoice.open_local(
++    system="kitten2",
++    files={"bundle": "/models/kitten2/bundle.json"},
++    providers="cpu",
++)
++try:
++    result = runtime.infer_text("Hello from a local bundle.", voice="Bruno", seed=7)
++finally:
++    runtime.close()
++```
++
++The bundle directory is derived from `bundle.json`. Every declared relative path and SHA-256 is checked, nested paths are preserved, and undeclared files are rejected. ONNX external data must remain adjacent to its graph. Managed installations carry ONNXVoice's own install record in addition to the bundle inventory; local bundle validation remains strict and does not treat that record as a bundle asset.
++
++## Bundle contract
++
++`bundle.json` is authoritative for the runtime layout, sample rate, component paths and metadata, embedding file, tokenizer directory and assets, voice reference files, token IDs, decode presets, and generation defaults. The runtime requires layout `kitten2-onnx-bundle-v1` and sample rate `24000`.
++
++The bundle includes the language model, speaker projection, flow decoder, and mel-to-wave decoder, with their metadata. It also includes the LM embedding matrix, local tokenizer files, voice reference arrays and metadata, and any graph external-data files. The `files` object must enumerate every runtime asset other than `bundle.json` with a lowercase SHA-256 digest. The validator rejects unsafe paths, missing or extra files, hash mismatches, malformed metadata, invalid voice or preset defaults, malformed token maps, and non-adjacent `.onnx.data` files before creating ONNX sessions.
++
++The four ONNX sessions (`lm`, `speaker`, `flow`, and `mel2wav`) are created lazily. `runtime.diagnostics().sessions` reports the component sessions after they have been opened. `close()` releases created sessions and is safe to call repeatedly.
++
++## Provider behavior
++
++Provider aliases and provider availability follow the shared [ONNX Runtime provider policy](../providers.md). Explicit `providers` and `provider_options` are passed to each component session. ONNXVoice does not append an implicit CPU fallback. The bundle's LM metadata may require a particular execution provider; the adapter checks that requirement rather than silently substituting another provider.
++
++Some bundles declare the `low-memory-exact-ternary` LM profile. That profile requires CPU-only execution and component-specific session options. When ONNXVoice creates those options, they apply only to the LM session. Caller-provided LM session options are accepted only when compatible; conflicting values fail explicitly. Other component sessions keep the caller's normal session options.
++
++## Catalog maintenance
++
++The native catalog parser requires schema version 1, kind `kitten2-onnx-bundle-catalog`, layout `kitten2-onnx-bundle-v1`, sample rate 24000, and a lowercase 40-character Hugging Face commit SHA. Mutable revisions such as `main` are rejected in a catalog. Artifact paths and SHA-256 values are retained, and download URLs are constructed from the pinned commit.
++
++Build resolves a branch or tag to a commit, reads the bundle manifest, and writes both the catalog and a deterministic provenance snapshot. It requires network access. Verification validates both files offline:
++
++```bash
++onnxvoice catalog kitten2 build \
++  --repository holgern/kitten-tts-v2-onnx \
++  --revision main \
++  --output catalog/bundles.json \
++  --source-output catalog/source.json
++
++onnxvoice catalog kitten2 verify \
++  --catalog catalog/bundles.json \
++  --source catalog/source.json
++```
++
++`build` may accept `main`, but generated catalog records contain only the resolved immutable commit. Review the upstream model license and terms before redistributing or publishing a catalog entry.
++
++## Smoke and parity gates
++
++A real-bundle CPU smoke test uses voice `Bruno`, preset `stable`, seed `7`, and `max_new_tokens=64`. It must produce valid finite mono speech at 24 kHz. Passing unit tests or successfully constructing ONNX sessions is not evidence that a real bundle synthesizes valid speech.
++
++The migration parity check compares this native implementation with the validated `kitten2-onnx` implementation using the same bundle, text, voice, preset, seed, and generation limit. Supply the out-of-band reference as a float32 NumPy array through `ONNXVOICE_KITTEN2_REFERENCE_AUDIO`; the resource-heavy test asserts equal shape and `numpy.testing.assert_allclose(rtol=1e-5, atol=1e-5)`. The ONNXVoice runtime and test do not import or depend on `kitten2_onnx`. On the current CPU bundle/text/seed run, all 55,200 samples matched exactly (maximum absolute error 0). The legacy `kitten` v0.8 adapter and its model/style/speed contract remain independent.
+diff --git a/onnxvoice/__init__.py b/onnxvoice/__init__.py
+index 0408d06..71b69f8 100644
+--- a/onnxvoice/__init__.py
++++ b/onnxvoice/__init__.py
+@@ -25,6 +25,7 @@ from .manager import OnnxVoice
+ from .runtime import OnnxSession, available_providers
+ from .store import AssetStore
+ from .systems import (
++    Kitten2Adapter,
+     KokoroCloningRuntime,
+     KokoroReferenceState,
+     KokoroVoicePack,
+@@ -156,6 +157,7 @@ __all__ = [
+     "VoiceMetadata",
+     "register_adapter",
+     "registered_systems",
++    "Kitten2Adapter",
+     "SplitKokoroRuntime",
+     "Qwen3VoiceState",
+     "SoproAdapter",
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index b98e0ec..a7e17da 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -66,6 +66,9 @@ POCKET_QUALIFIED_ROLES = frozenset(
+     }
+ )
+
++_KITTEN2_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
++_KITTEN2_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
++_KITTEN2_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ DEFAULT_SOURCES = {
+     "piper": "https://raw.githubusercontent.com/buchwandler/piper-onnx-voices/main/catalog/voices.json",
+     "kokoro": "https://raw.githubusercontent.com/buchwandler/kokoro-onnx-models/main/catalog/models.json",
+@@ -76,6 +79,7 @@ DEFAULT_SOURCES = {
+     "sopro": "https://raw.githubusercontent.com/buchwandler/sopro-onnx-bundles/main/catalog/bundles.json",
+     "chatterbox": "https://raw.githubusercontent.com/buchwandler/chatterbox-onnx-bundles/main/catalog/bundles.json",
+     "qwen3": "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json",
++    "kitten2": "https://raw.githubusercontent.com/buchwandler/kitten2-onnx-bundles/main/catalog/bundles.json",
+ }
+ _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
+     {
+@@ -231,6 +235,8 @@ class CatalogClient:
+             return _parse_chatterbox(raw)
+         if system == "qwen3":
+             return _parse_qwen3(raw)
++        if system == "kitten2":
++            return _parse_kitten2(raw)
+         if system == "piper":
+             return _parse_piper(raw)
+         if system == "kokoro":
+@@ -3055,3 +3061,197 @@ def filter_items(
+     if quality:
+         result = [item for item in result if _item_supports_quality(item, quality)]
+     return result
++
++
++
++def _parse_kitten2(data: Any) -> list[CatalogItem]:
++    """Parse pinned Kitten2 bundle catalog records without adapting the legacy Kitten schema."""
++    if not isinstance(data, Mapping) or set(data) != {"schema", "kind", "bundles"}:
++        raise CatalogError("Kitten2 catalog must contain exactly schema, kind, and bundles")
++    if type(data.get("schema")) is not int or data.get("schema") != 1:
++        raise CatalogError("Kitten2 catalog schema must be 1")
++    if data.get("kind") != "kitten2-onnx-bundle-catalog":
++        raise CatalogError(f"Unexpected Kitten2 catalog kind: {data.get('kind')!r}")
++    bundles = data.get("bundles")
++    if not isinstance(bundles, Mapping) or not bundles:
++        raise CatalogError("Kitten2 catalog bundles must be a non-empty object")
++
++    all_names = set(bundles)
++    result: list[CatalogItem] = []
++    for bundle_id in sorted(bundles):
++        if not isinstance(bundle_id, str) or _KITTEN2_ID_RE.fullmatch(bundle_id) is None:
++            raise CatalogError(f"Unsafe Kitten2 bundle ID: {bundle_id!r}")
++        raw = bundles[bundle_id]
++        if not isinstance(raw, Mapping):
++            raise CatalogError(f"{bundle_id}: bundle entry must be an object")
++        required_fields = {
++            "id",
++            "aliases",
++            "name",
++            "layout",
++            "sample_rate",
++            "default_voice",
++            "voices",
++            "source",
++            "runtime",
++            "artifacts",
++        }
++        if not required_fields.issubset(raw) or set(raw) - (required_fields | {"metadata"}):
++            raise CatalogError(f"{bundle_id}: Kitten2 bundle fields do not match the catalog contract")
++        if raw.get("id") != bundle_id:
++            raise CatalogError(f"{bundle_id}: bundle map key does not match id")
++        layout = raw.get("layout")
++        if layout != "kitten2-onnx-bundle-v1":
++            raise CatalogError(f"{bundle_id}: unsupported Kitten2 layout {layout!r}")
++        sample_rate = raw.get("sample_rate")
++        if type(sample_rate) is not int or sample_rate != 24000:
++            raise CatalogError(f"{bundle_id}: sample_rate must be 24000")
++        name = raw.get("name")
++        if not isinstance(name, str) or not name:
++            raise CatalogError(f"{bundle_id}: name must be a non-empty string")
++
++        aliases_raw = raw.get("aliases")
++        if not isinstance(aliases_raw, list):
++            raise CatalogError(f"{bundle_id}: aliases must be a list")
++        aliases: list[str] = []
++        for alias in aliases_raw:
++            if not isinstance(alias, str) or _KITTEN2_ID_RE.fullmatch(alias) is None:
++                raise CatalogError(f"{bundle_id}: unsafe alias {alias!r}")
++            if alias in all_names:
++                raise CatalogError(f"{bundle_id}: duplicate or ambiguous alias {alias!r}")
++            all_names.add(alias)
++            aliases.append(alias)
++
++        source = raw.get("source")
++        if not isinstance(source, Mapping) or set(source) != {
++            "provider",
++            "repository",
++            "revision",
++            "license",
++        }:
++            raise CatalogError(
++                f"{bundle_id}: source must contain provider, repository, revision, and license"
++            )
++        repository = source.get("repository")
++        if (
++            not isinstance(repository, str)
++            or re.fullmatch(r"[^/\\\s]+/[^/\\\s]+", repository) is None
++        ):
++            raise CatalogError(f"{bundle_id}: invalid Hugging Face repository")
++        if source.get("provider") != "huggingface":
++            raise CatalogError(f"{bundle_id}: source provider must be huggingface")
++        revision = source.get("revision")
++        if not isinstance(revision, str) or _KITTEN2_SHA_RE.fullmatch(revision) is None:
++            raise CatalogError(
++                f"{bundle_id}: source revision must be a lowercase 40-character commit SHA"
++            )
++        license_name = source.get("license")
++        if not isinstance(license_name, str) or not license_name:
++            raise CatalogError(f"{bundle_id}: source license is required")
++
++        runtime = raw.get("runtime")
++        if not isinstance(runtime, Mapping) or runtime.get("bundle_format") != layout:
++            raise CatalogError(f"{bundle_id}: runtime bundle_format must match the Kitten2 layout")
++        metadata_raw = raw.get("metadata", {})
++        if not isinstance(metadata_raw, Mapping):
++            raise CatalogError(f"{bundle_id}: metadata must be an object")
++        voices_raw = raw.get("voices")
++        if not isinstance(voices_raw, list) or not voices_raw:
++            raise CatalogError(f"{bundle_id}: voices must be a non-empty list")
++        voices: list[str] = []
++        for voice in voices_raw:
++            if not isinstance(voice, str) or _KITTEN2_ID_RE.fullmatch(voice) is None:
++                raise CatalogError(f"{bundle_id}: unsafe voice name {voice!r}")
++            if voice in voices:
++                raise CatalogError(f"{bundle_id}: duplicate voice name {voice!r}")
++            voices.append(voice)
++        default_voice = raw.get("default_voice")
++        if not isinstance(default_voice, str) or default_voice not in voices:
++            raise CatalogError(f"{bundle_id}: default_voice must name a declared voice")
++
++        raw_artifacts = raw.get("artifacts")
++        if not isinstance(raw_artifacts, list) or not raw_artifacts:
++            raise CatalogError(f"{bundle_id}: artifacts must be a non-empty list")
++        artifacts: list[Artifact] = []
++        paths: set[str] = set()
++        bundle_count = 0
++        for index, item in enumerate(raw_artifacts):
++            if not isinstance(item, Mapping) or set(item) != {"role", "path", "sha256"}:
++                raise CatalogError(f"{bundle_id}: artifact {index} must contain role, path, and sha256")
++            role = item.get("role")
++            path = item.get("path")
++            sha256 = item.get("sha256")
++            if role not in {"bundle", "asset"}:
++                raise CatalogError(f"{bundle_id}: unknown artifact role {role!r}")
++            if not isinstance(path, str):
++                raise CatalogError(f"{bundle_id}: artifact path must be a string")
++            try:
++                validate_relative_path(path, field_name="Kitten2 artifact path")
++            except ValueError as exc:
++                raise CatalogError(f"{bundle_id}/{role}: {exc}") from exc
++            if path in paths:
++                raise CatalogError(f"{bundle_id}: duplicate artifact path {path!r}")
++            paths.add(path)
++            if (role == "bundle") != (path == "bundle.json"):
++                raise CatalogError(f"{bundle_id}: bundle role must be used only for bundle.json")
++            if role == "bundle":
++                bundle_count += 1
++            if not isinstance(sha256, str) or _KITTEN2_SHA256_RE.fullmatch(sha256) is None:
++                raise CatalogError(f"{bundle_id}/{path}: sha256 must be lowercase 64-character hex")
++            repository_url = "/".join(
++                urllib.parse.quote(part, safe="") for part in repository.split("/")
++            )
++            artifact_url = (
++                f"https://huggingface.co/{repository_url}/resolve/{revision}/"
++                f"{urllib.parse.quote(path, safe='/')}?download=true"
++            )
++            artifacts.append(
++                Artifact(
++                    role=role,
++                    filename=path,
++                    url=artifact_url,
++                    sha256=sha256,
++                    format=Path(path).suffix.lower().lstrip("."),
++                    metadata={
++                        "path": path,
++                        "source_repository": repository,
++                        "source_revision": revision,
++                    },
++                )
++            )
++        if bundle_count != 1:
++            raise CatalogError(f"{bundle_id}: exactly one bundle.json artifact is required")
++        if not all(any(path.startswith(prefix) for path in paths) for prefix in (
++            "decoder/", "lm/", "speaker/", "tokenizer/", "voices/"
++        )):
++            raise CatalogError(f"{bundle_id}: incomplete Kitten2 component artifact coverage")
++        graph_directories = {
++            str(Path(path).parent) for path in paths if path.endswith(".onnx")
++        }
++        for path in paths:
++            if path.endswith(".onnx.data") and str(Path(path).parent) not in graph_directories:
++                raise CatalogError(f"{bundle_id}: external data is not adjacent to a graph: {path}")
++
++        item_metadata = {
++            **dict(metadata_raw),
++            "name": name,
++            "layout": layout,
++            "source_repository": repository,
++            "source_revision": revision,
++            "license": license_name,
++            "runtime": {"layout": layout, "sample_rate": sample_rate},
++        }
++        result.append(
++            CatalogItem(
++                system="kitten2",
++                id=bundle_id,
++                kind="bundle",
++                artifacts=tuple(artifacts),
++                aliases=tuple(aliases),
++                sample_rate=sample_rate,
++                voices=tuple(voices),
++                default_voice=default_voice,
++                metadata=item_metadata,
++            )
++        )
++    return result
+diff --git a/onnxvoice/catalog_tools/__init__.py b/onnxvoice/catalog_tools/__init__.py
+index fe2f27d..d7e2c96 100644
+--- a/onnxvoice/catalog_tools/__init__.py
++++ b/onnxvoice/catalog_tools/__init__.py
+@@ -1,6 +1,7 @@
+ """Catalog generation and verification helpers."""
+
+ from . import kitten as kitten_tools
++from . import kitten2 as kitten2_tools
+ from . import pocket as pocket_tools
+ from . import qwen3 as qwen3_tools
+ from . import supertonic as supertonic_tools
+@@ -51,5 +52,6 @@ __all__ = [
+     "verify_kitten_catalog",
+     "kitten_tools",
+     "verify_supertonic_catalog",
++    "kitten2_tools",
+     "qwen3_tools",
+ ]
+diff --git a/onnxvoice/catalog_tools/kitten2.py b/onnxvoice/catalog_tools/kitten2.py
+new file mode 100644
+index 0000000..957cbc6
+--- /dev/null
++++ b/onnxvoice/catalog_tools/kitten2.py
+@@ -0,0 +1,210 @@
++"""Build and verify pinned native KittenTTS 2 bundle catalogs."""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++import urllib.error
++import urllib.parse
++import urllib.request
++from collections.abc import Mapping
++from pathlib import Path
++from typing import Any, cast
++
++from ..catalog import _parse_kitten2
++from ..errors import CatalogError
++from ..types import validate_relative_path
++
++DEFAULT_REPOSITORY = "holgern/kitten-tts-v2-onnx"
++DEFAULT_REVISION = "main"
++DEFAULT_BUNDLE_ID = "kitten-tts-v2"
++DEFAULT_LICENSE = "stellon-labs-community-license"
++USER_AGENT = "onnxvoice-kitten2-catalog"
++_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
++_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
++
++
++def _require(condition: bool, message: str) -> None:
++    if not condition:
++        raise CatalogError(message)
++
++
++def _repository(repository: str) -> str:
++    _require(
++        isinstance(repository, str) and _REPOSITORY_RE.fullmatch(repository) is not None,
++        f"Invalid Hugging Face repository: {repository!r}",
++    )
++    return repository
++
++
++def huggingface_api_url(repository: str, revision: str) -> str:
++    repository = _repository(repository)
++    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
++    rev = urllib.parse.quote(revision, safe="")
++    return f"https://huggingface.co/api/models/{repo}/revision/{rev}"
++
++
++def huggingface_resolve_url(repository: str, revision: str, path: str) -> str:
++    repository = _repository(repository)
++    repo = "/".join(urllib.parse.quote(part, safe="") for part in repository.split("/"))
++    rev = urllib.parse.quote(revision, safe="")
++    asset = urllib.parse.quote(path, safe="/")
++    return f"https://huggingface.co/{repo}/resolve/{rev}/{asset}?download=true"
++
++
++def _read_url(url: str) -> bytes:
++    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
++    try:
++        with urllib.request.urlopen(request, timeout=60) as response:
++            return response.read()
++    except (OSError, urllib.error.URLError) as exc:
++        raise CatalogError(f"Unable to fetch {url}") from exc
++
++
++def resolve_revision(repository: str, revision: str) -> str:
++    """Resolve a branch or tag to an immutable lowercase Hugging Face commit SHA."""
++    _repository(repository)
++    _require(isinstance(revision, str) and bool(revision), "Source revision is required")
++    if _SHA_RE.fullmatch(revision):
++        return revision
++    try:
++        data = json.loads(_read_url(huggingface_api_url(repository, revision)).decode("utf-8"))
++    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++        raise CatalogError("Hugging Face repository metadata is not valid JSON") from exc
++    resolved = data.get("sha") if isinstance(data, Mapping) else None
++    _require(
++        isinstance(resolved, str) and _SHA_RE.fullmatch(resolved) is not None,
++        "Unable to resolve an immutable 40-character source revision",
++    )
++    return cast(str, resolved)
++
++
++def build_catalog(
++    *,
++    repository: str = DEFAULT_REPOSITORY,
++    revision: str = DEFAULT_REVISION,
++    bundle_id: str = DEFAULT_BUNDLE_ID,
++    license: str = DEFAULT_LICENSE,
++) -> dict[str, Any]:
++    """Build a catalog entry from a bundle manifest at an immutable repository revision."""
++    repository = _repository(repository)
++    _require(_SAFE_ID_RE.fullmatch(bundle_id) is not None, f"Unsafe bundle ID: {bundle_id!r}")
++    _require(isinstance(license, str) and bool(license), "Source license is required")
++    resolved_revision = resolve_revision(repository, revision)
++    bundle_bytes = _read_url(huggingface_resolve_url(repository, resolved_revision, "bundle.json"))
++    try:
++        manifest = json.loads(bundle_bytes.decode("utf-8"))
++    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++        raise CatalogError("Kitten2 bundle.json is not valid JSON") from exc
++    _require(isinstance(manifest, Mapping), "Kitten2 bundle.json must be an object")
++    layout = manifest.get("format")
++    sample_rate = manifest.get("sample_rate")
++    _require(layout == "kitten2-onnx-bundle-v1", "Unsupported Kitten2 bundle layout")
++    _require(type(sample_rate) is int and sample_rate == 24000, "Kitten2 sample_rate must be 24000")
++    files = manifest.get("files")
++    _require(isinstance(files, Mapping) and bool(files), "Kitten2 bundle files must be a non-empty object")
++    artifacts = [
++        {
++            "role": "bundle",
++            "path": "bundle.json",
++            "sha256": hashlib.sha256(bundle_bytes).hexdigest(),
++        }
++    ]
++    for raw_path, sha256 in sorted(files.items()):
++        _require(isinstance(raw_path, str), "Kitten2 bundle paths must be strings")
++        try:
++            path = validate_relative_path(raw_path, field_name="Kitten2 artifact path")
++        except ValueError as exc:
++            raise CatalogError(str(exc)) from exc
++        _require(
++            isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256) is not None,
++            f"Invalid SHA-256 for Kitten2 artifact {path!r}",
++        )
++        artifacts.append({"role": "asset", "path": path, "sha256": sha256})
++
++    voices = manifest.get("voices")
++    _require(isinstance(voices, Mapping) and bool(voices), "Kitten2 voices must be a non-empty object")
++    default_voice = manifest.get("default_voice")
++    _require(
++        isinstance(default_voice, str) and default_voice in voices,
++        "Kitten2 default_voice must name a declared voice",
++    )
++    record = {
++        "id": bundle_id,
++        "aliases": ["v2", "default"],
++        "name": "KittenTTS 2 ONNX",
++        "layout": layout,
++        "sample_rate": sample_rate,
++        "default_voice": default_voice,
++        "voices": sorted(voices),
++        "source": {
++            "provider": "huggingface",
++            "repository": repository,
++            "revision": resolved_revision,
++            "license": license,
++        },
++        "runtime": {"bundle_format": layout},
++        "metadata": {"default_preset": manifest.get("default_preset", "stable")},
++        "artifacts": artifacts,
++    }
++    catalog = {
++        "schema": 1,
++        "kind": "kitten2-onnx-bundle-catalog",
++        "bundles": {bundle_id: record},
++    }
++    _parse_kitten2(catalog)
++    return catalog
++
++
++def build_source(catalog: Mapping[str, Any]) -> dict[str, Any]:
++    """Derive a deterministic source snapshot from a validated pinned catalog."""
++    _parse_kitten2(catalog)
++    repositories = []
++    for bundle_id, bundle in sorted(catalog["bundles"].items()):
++        source = bundle["source"]
++        repositories.append(
++            {
++                "id": bundle_id,
++                "repository": source["repository"],
++                "revision": source["revision"],
++                "license": source["license"],
++            }
++        )
++    return {
++        "schema": 1,
++        "kind": "kitten2-onnx-source-snapshot",
++        "repositories": repositories,
++    }
++
++
++def verify_catalog(catalog: Mapping[str, Any], source: Mapping[str, Any] | None = None) -> None:
++    """Validate a pinned catalog and, when supplied, its offline source snapshot."""
++    _parse_kitten2(catalog)
++    if source is not None and dict(source) != build_source(catalog):
++        raise CatalogError("Source metadata does not match catalog provenance")
++
++
++def load_catalog(
++    catalog_path: str | Path,
++    source_path: str | Path | None = None,
++) -> dict[str, Any]:
++    """Load and verify catalog files without network access."""
++    try:
++        catalog = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
++    except (OSError, json.JSONDecodeError) as exc:
++        raise CatalogError(f"Unable to load Kitten2 catalog: {catalog_path}") from exc
++    source = None
++    if source_path is not None:
++        try:
++            source = json.loads(Path(source_path).read_text(encoding="utf-8"))
++        except (OSError, json.JSONDecodeError) as exc:
++            raise CatalogError(f"Unable to load Kitten2 source snapshot: {source_path}") from exc
++    if not isinstance(catalog, Mapping):
++        raise CatalogError("Kitten2 catalog must be an object")
++    if source is not None and not isinstance(source, Mapping):
++        raise CatalogError("Kitten2 source snapshot must be an object")
++    verify_catalog(catalog, source)
++    return dict(catalog)
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 0022de9..3662edf 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -9,6 +9,7 @@ from typing import Any
+ from ._install_progress import InstallProgress
+ from .catalog_tools import chatterbox as chatterbox_catalog_tools
+ from .catalog_tools import kitten as kitten_catalog_tools
++from .catalog_tools import kitten2 as kitten2_catalog_tools
+ from .catalog_tools import pocket as pocket_catalog_tools
+ from .catalog_tools import qwen3 as qwen3_catalog_tools
+ from .catalog_tools import supertonic as supertonic_catalog_tools
+@@ -276,6 +277,20 @@ def build_parser() -> argparse.ArgumentParser:
+     qwen3_verify_parser = qwen3_sub.add_parser("verify", help="Verify a Qwen3 catalog offline")
+     qwen3_verify_parser.add_argument("--catalog", type=Path, required=True)
+     qwen3_verify_parser.add_argument("--source", type=Path)
++
++
++    kitten2_parser = catalog_sub.add_parser("kitten2", help="Manage the native KittenTTS 2 bundle catalog")
++    kitten2_sub = kitten2_parser.add_subparsers(dest="catalog_action", required=True)
++    kitten2_build_parser = kitten2_sub.add_parser("build", help="Build a pinned KittenTTS 2 catalog")
++    kitten2_build_parser.add_argument("--repository", default=kitten2_catalog_tools.DEFAULT_REPOSITORY)
++    kitten2_build_parser.add_argument("--revision", default=kitten2_catalog_tools.DEFAULT_REVISION)
++    kitten2_build_parser.add_argument("--output", type=Path, required=True)
++    kitten2_build_parser.add_argument("--source-output", type=Path, required=True)
++    kitten2_verify_parser = kitten2_sub.add_parser(
++        "verify", help="Verify a pinned KittenTTS 2 catalog offline"
++    )
++    kitten2_verify_parser.add_argument("--catalog", type=Path, required=True)
++    kitten2_verify_parser.add_argument("--source", type=Path, required=True)
+     chatterbox_parser = catalog_sub.add_parser(
+         "chatterbox", help="Manage cleanroom Chatterbox ONNX bundles"
+     )
+@@ -961,6 +976,22 @@ def main(argv: list[str] | None = None) -> int:
+                     catalog = qwen3_catalog_tools.load_catalog(args.catalog, args.source)
+                     print(f"Verified {len(catalog['bundles'])} Qwen3 bundles")
+                     return 0
++            elif args.catalog_system == "kitten2":
++                if args.catalog_action == "build":
++                    catalog = kitten2_catalog_tools.build_catalog(
++                        repository=args.repository,
++                        revision=args.revision,
++                    )
++                    source = kitten2_catalog_tools.build_source(catalog)
++                    kitten2_catalog_tools.verify_catalog(catalog, source)
++                    _write_json(args.output, catalog)
++                    _write_json(args.source_output, source)
++                    print(f"Wrote {len(catalog['bundles'])} Kitten2 bundles to {args.output}")
++                    return 0
++                if args.catalog_action == "verify":
++                    catalog = kitten2_catalog_tools.load_catalog(args.catalog, args.source)
++                    print(f"Verified {len(catalog['bundles'])} Kitten2 bundles")
++                    return 0
+             elif args.catalog_system == "chatterbox":
+                 if args.catalog_action == "build":
+                     seed = json.loads(args.seed.read_text(encoding="utf-8"))
+diff --git a/onnxvoice/manager.py b/onnxvoice/manager.py
+index 473bb2c..6a54471 100644
+--- a/onnxvoice/manager.py
++++ b/onnxvoice/manager.py
+@@ -21,6 +21,7 @@ from .inventory import (
+ )
+ from .store import AssetStore, ProgressCallback
+ from .systems import get_adapter
++from .systems.kitten2_contract import Kitten2Bundle, load_kitten2_bundle
+ from .types import CatalogItem, Installation, InstalledArtifact, VoiceRecord
+ from .voices import iter_catalog_voices, parse_voice_ref
+
+@@ -298,7 +299,16 @@ class OnnxVoice:
+
+         local_artifacts: builtins.list[InstalledArtifact]
+         qwen3_runtime: dict[str, Any] | None = None
+-        if system.lower() == "qwen3":
++        kitten2_bundle: Kitten2Bundle | None = None
++        if system.lower() == "kitten2":
++            if sample_rate is not None and sample_rate != 24000:
++                raise RuntimeContractError("Kitten2 local bundles require sample_rate=24000")
++            if runtime is not None or "runtime" in (metadata or {}):
++                raise RuntimeContractError("Kitten2 runtime metadata is read from bundle.json")
++            if artifact_metadata is not None:
++                raise RuntimeContractError("Kitten2 artifact metadata is read from bundle.json")
++            local_artifacts, kitten2_bundle = OnnxVoice._kitten2_local_artifacts(merged_files)
++        elif system.lower() == "qwen3":
+             runtime_input = runtime
+             if runtime_input is None:
+                 runtime_input = (metadata or {}).get("runtime", {})
+@@ -371,13 +381,21 @@ class OnnxVoice:
+             merged_metadata["runtime"] = qwen3_runtime
+             installation_system = "qwen3"
+             installation_sample_rate = 24000
++        if kitten2_bundle is not None:
++            merged_metadata["runtime"] = {"layout": "kitten2-onnx-bundle-v1", "sample_rate": 24000}
++            installation_system = "kitten2"
++            installation_sample_rate = 24000
+         installation = Installation(
+             system=installation_system,
+-            id=f"local-{Path(model_artifact.filename).stem}",
++            id=f"local-{kitten2_bundle.root.name}" if kitten2_bundle is not None else f"local-{Path(model_artifact.filename).stem}",
+             kind="external",
+-            path=model_artifact.path.parent,
++            path=kitten2_bundle.root if kitten2_bundle is not None else model_artifact.path.parent,
+             artifacts=tuple(local_artifacts),
+             sample_rate=installation_sample_rate,
++            voices=tuple(kitten2_bundle.manifest["voices"]) if kitten2_bundle is not None else (),
++            default_voice=(
++                kitten2_bundle.manifest["default_voice"] if kitten2_bundle is not None else None
++            ),
+             metadata=merged_metadata,
+         )
+         adapter = get_adapter(system)
+@@ -637,6 +655,11 @@ class OnnxVoice:
+         This convenience method handles a single model plus optional companion files.
+         Use ``open_local`` with a complete component mapping for multi-component runtimes.
+         """
++        if system.lower() == "kitten2":
++            raise ValueError(
++                "Kitten2 bundles cannot be imported with import_model(); use install() or "
++                "open_local() with the complete bundle."
++            )
+         files: dict[str, str | Path] = {"model": model}
+         if config is not None:
+             files["config"] = config
+@@ -715,6 +738,56 @@ class OnnxVoice:
+             metadata=metadata,
+         )
+
++    @staticmethod
++    def _kitten2_local_artifacts(
++        files: Mapping[str, str | Path],
++    ) -> tuple[builtins.list[InstalledArtifact], Kitten2Bundle]:
++        bundle_paths = [
++            Path(raw_path).expanduser()
++            for raw_path in files.values()
++            if Path(raw_path).expanduser().name == "bundle.json"
++        ]
++        if len(bundle_paths) != 1:
++            raise RuntimeContractError("Kitten2 local open requires exactly one bundle.json")
++        bundle_path = bundle_paths[0].resolve()
++        bundle = load_kitten2_bundle(bundle_path)
++
++        for raw_path in files.values():
++            path = Path(raw_path).expanduser().resolve()
++            if not path.is_file():
++                raise RuntimeContractError(f"Kitten2 local file is missing: {path}")
++            try:
++                relative = path.relative_to(bundle.root).as_posix()
++            except ValueError as exc:
++                raise RuntimeContractError(
++                    f"Kitten2 local file is outside the bundle root: {path}"
++                ) from exc
++            if relative != "bundle.json" and relative not in bundle.files:
++                raise RuntimeContractError(f"Kitten2 local file is not declared: {relative}")
++
++        artifacts = [
++            OnnxVoice._local_artifact(
++                "bundle",
++                bundle_path,
++                filename="bundle.json",
++                extra_metadata={"path": "bundle.json"},
++            )
++        ]
++        for relative, sha256 in bundle.files.items():
++            path = bundle.root / relative
++            artifacts.append(
++                InstalledArtifact(
++                    role="asset",
++                    filename=relative,
++                    path=path,
++                    sha256=sha256,
++                    size=path.stat().st_size,
++                    format=path.suffix.lower().lstrip("."),
++                    metadata={"path": relative},
++                )
++            )
++        return artifacts, bundle
++
+     @staticmethod
+     def _qwen3_local_artifacts(
+         files: Mapping[str, str | Path],
+diff --git a/onnxvoice/systems/__init__.py b/onnxvoice/systems/__init__.py
+index 544ffa5..5bbd754 100644
+--- a/onnxvoice/systems/__init__.py
++++ b/onnxvoice/systems/__init__.py
+@@ -5,6 +5,7 @@ from .base import SystemAdapter
+ from .chatterbox import ChatterboxAdapter, ChatterboxVoiceState
+ from .inflect import InflectAdapter
+ from .kitten import KittenAdapter
++from .kitten2 import Kitten2Adapter
+ from .kokoro import KokoroAdapter
+ from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
+ from .kokoro_inno import KokoroVoicePack
+@@ -26,6 +27,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
+     SupertonicAdapter.system: SupertonicAdapter,
+     SoproAdapter.system: SoproAdapter,
+     KittenAdapter.system: KittenAdapter,
++    Kitten2Adapter.system: Kitten2Adapter,
+     InflectAdapter.system: InflectAdapter,
+     Qwen3Adapter.system: Qwen3Adapter,
+     ChatterboxAdapter.system: ChatterboxAdapter,
+@@ -60,6 +62,7 @@ __all__ = [
+     "SoproGenerationDefaults",
+     "SoproStreamChunk",
+     "KittenAdapter",
++    "Kitten2Adapter",
+     "Qwen3Adapter",
+     "ChatterboxAdapter",
+     "ChatterboxVoiceState",
+diff --git a/onnxvoice/systems/kitten2.py b/onnxvoice/systems/kitten2.py
+new file mode 100644
+index 0000000..fa702fe
+--- /dev/null
++++ b/onnxvoice/systems/kitten2.py
+@@ -0,0 +1,257 @@
++from __future__ import annotations
++
++import json
++from collections.abc import Mapping, Sequence
++from types import MappingProxyType
++from typing import Any
++
++import numpy as np
++
++from ..errors import CapabilityError, RuntimeContractError
++from ..runtime import OnnxSession, resolve_providers
++from ..types import InferenceResult, Installation
++from .base import SystemAdapter
++from .kitten2_contract import load_kitten2_bundle
++from .kitten2_decoder import Kitten2Decoder, _cpu_session_options
++from .kitten2_frontend import Kitten2Frontend, PreparedVoice, build_generation_prompt
++from .kitten2_generation import Kitten2LanguageModel
++from .kitten2_sampling import sampling_settings_from_config
++from .kitten2_tokens import TokenMap
++
++
++class Kitten2Adapter(SystemAdapter):
++    system = "kitten2"
++
++    def __init__(
++        self,
++        installation: Installation,
++        *,
++        providers: str | Sequence[str] | None = None,
++        provider_options: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
++        session_options: Any | None = None,
++    ) -> None:
++        super().__init__(
++            installation,
++            providers=providers,
++            provider_options=provider_options,
++            session_options=session_options,
++        )
++        bundle = load_kitten2_bundle(
++            installation.path / "bundle.json",
++            ignored_files=(
++                frozenset({".onnxvoice-install.json"})
++                if installation.kind == "bundle"
++                else frozenset()
++            ),
++        )
++        if installation.sample_rate != 24000:
++            raise RuntimeContractError("Kitten2 installation sample_rate must be 24000")
++        runtime = installation.metadata.get("runtime")
++        if (
++            not isinstance(runtime, Mapping)
++            or runtime.get("layout") != "kitten2-onnx-bundle-v1"
++            or runtime.get("sample_rate") != 24000
++        ):
++            raise RuntimeContractError(
++                "Kitten2 runtime requires layout 'kitten2-onnx-bundle-v1' and sample_rate=24000"
++            )
++        self.bundle = bundle
++        self.manifest = bundle.manifest
++        self._decode_presets = MappingProxyType(
++            {
++                name: MappingProxyType(dict(preset))
++                for name, preset in self.manifest["decode_presets"].items()
++            }
++        )
++        self._sessions: dict[str, OnnxSession] = {}
++        self._language_model: Kitten2LanguageModel | None = None
++        self._decoder: Kitten2Decoder | None = None
++        self._prepared_voices: dict[str, PreparedVoice] = {}
++        self.token_map = TokenMap.from_config({"token_map": self.manifest["token_map"]})
++        self.frontend = Kitten2Frontend(bundle.root, self.manifest, self.token_map)
++        lm = self.manifest["lm"]
++        speaker = self.manifest["speaker"]
++        decoder = self.manifest["decoder"]
++        self._component_paths = {
++            "lm": lm["model"],
++            "speaker": speaker["model"],
++            "flow": decoder["flow"],
++            "mel2wav": decoder["mel2wav"],
++        }
++        self._component_metadata = {
++            "lm": self._read_metadata(lm["metadata"]),
++            "speaker": self._read_metadata(speaker["metadata"]),
++            "flow": self._read_metadata(decoder["flow_metadata"]),
++            "mel2wav": self._read_metadata(decoder["mel2wav_metadata"]),
++        }
++
++    def _read_metadata(self, relative_path: str) -> dict[str, Any]:
++        return json.loads((self.bundle.root / relative_path).read_text(encoding="utf-8"))
++
++    @property
++    def voices(self) -> tuple[str, ...]:
++        return tuple(sorted(self.manifest["voices"]))
++
++    @property
++    def default_voice(self) -> str:
++        return self.manifest["default_voice"]
++
++    @property
++    def default_preset(self) -> str:
++        return self.manifest["default_preset"]
++
++    @property
++    def decode_presets(self) -> Mapping[str, Mapping[str, Any]]:
++        return self._decode_presets
++
++    @property
++    def sample_rate(self) -> int:
++        return int(self.manifest["sample_rate"])
++
++    def infer(self, token_ids: Sequence[int], **kwargs: Any) -> InferenceResult:
++        raise CapabilityError("Kitten2 is a text-level multi-stage runtime; use infer_text()")
++
++    def infer_text(
++        self,
++        text: str,
++        *,
++        voice: str | None = None,
++        preset: str | None = None,
++        seed: int | None = None,
++        max_new_tokens: int = 512,
++    ) -> InferenceResult:
++        if max_new_tokens < 1:
++            raise ValueError("max_new_tokens must be positive")
++        resolved_voice = voice or self.default_voice
++        resolved_preset = preset or self.default_preset
++        if resolved_preset not in self.decode_presets:
++            available = ", ".join(sorted(self.decode_presets))
++            raise ValueError(f"Unknown decode preset {resolved_preset!r}; available presets: {available}")
++        prepared = self._prepared_voices.get(resolved_voice)
++        if prepared is None:
++            prepared = self.frontend.prepare_voice(resolved_voice)
++            self._prepared_voices[resolved_voice] = prepared
++        _, text_ids = self.frontend.encode_text(text)
++        reference_prefix = (
++            prepared.reference_prefix
++            if self.manifest["generation"].get("use_reference_prompt", True)
++            else None
++        )
++        prompt_ids = build_generation_prompt(
++            self.token_map, text_ids, reference_prefix=reference_prefix
++        )
++        generated = self._get_language_model().generate(
++            prompt_ids,
++            token_map=self.token_map,
++            max_new_tokens=max_new_tokens,
++            speaker_embedding=prepared.speaker_embedding,
++            settings=sampling_settings_from_config(self.manifest, resolved_preset),
++            seed=seed,
++        )
++        if not generated.s3_ids:
++            raise RuntimeContractError("LM generation produced no valid S3 speech tokens")
++        waveform = self._get_decoder().decode(generated.s3_ids, prepared.conditioning, seed=seed)
++        if waveform is None:
++            raise RuntimeContractError("S3 decoder produced no waveform")
++        audio = np.asarray(waveform, dtype=np.float32)
++        if audio.ndim == 2 and audio.shape[0] == 1:
++            audio = audio[0]
++        if audio.ndim != 1:
++            raise RuntimeContractError(f"decoder waveform must be mono, found shape {audio.shape}")
++        if not np.all(np.isfinite(audio)):
++            raise RuntimeContractError("decoder waveform contains NaN or infinite samples")
++        return InferenceResult(
++            audio=audio,
++            sample_rate=self.sample_rate,
++            metadata={
++                "system": self.system,
++                "voice": resolved_voice,
++                "preset": resolved_preset,
++                "seed": seed,
++                "max_new_tokens": max_new_tokens,
++                "layout": "kitten2-onnx-bundle-v1",
++            },
++        )
++
++    def _get_language_model(self) -> Kitten2LanguageModel:
++        if self._language_model is None:
++            self._validate_lm_runtime_provider()
++            self._language_model = Kitten2LanguageModel(
++                self._get_session("lm"),
++                self._get_session("speaker"),
++                self._component_metadata["lm"],
++                self.bundle.root / self.manifest["lm"]["embeddings"],
++            )
++        return self._language_model
++
++    def _validate_lm_runtime_provider(self) -> None:
++        runtime_provider = self._component_metadata["lm"].get("runtime_provider")
++        if runtime_provider not in {"CPUExecutionProvider", "CUDAExecutionProvider"}:
++            raise RuntimeContractError(
++                f"Unsupported runtime provider in LM metadata: {runtime_provider!r}"
++            )
++        if (
++            runtime_provider == "CUDAExecutionProvider"
++            and runtime_provider not in resolve_providers(self.providers)
++        ):
++            raise CapabilityError("Kitten2 LM profile requires CUDAExecutionProvider")
++
++    def _get_decoder(self) -> Kitten2Decoder:
++        if self._decoder is None:
++            self._decoder = Kitten2Decoder(
++                self._get_session("flow"),
++                self._get_session("mel2wav"),
++                self._component_metadata["flow"],
++                self._component_metadata["mel2wav"],
++            )
++        return self._decoder
++
++    def _get_session(self, component: str) -> OnnxSession:
++        session = self._sessions.get(component)
++        if session is None:
++            session_options = self.session_options
++            if component == "lm":
++                session_options = self._lm_session_options()
++            session = OnnxSession(
++                self.bundle.root / self._component_paths[component],
++                component=component,
++                providers=self.providers,
++                provider_options=self.provider_options,
++                session_options=session_options,
++            )
++            self._sessions[component] = session
++        return session
++
++    def _lm_session_options(self) -> Any | None:
++        metadata = self._component_metadata["lm"]
++        if metadata.get("runtime_memory_profile", "default") != "low-memory-exact-ternary":
++            return self.session_options
++        if metadata.get("runtime_provider") != "CPUExecutionProvider":
++            raise CapabilityError("Low-memory exact-ternary Kitten2 LM requires CPUExecutionProvider")
++        selected = resolve_providers(self.providers)
++        if selected != ("CPUExecutionProvider",):
++            raise CapabilityError("Low-memory exact-ternary Kitten2 LM requires CPU only")
++        if self.session_options is None:
++            return _cpu_session_options("low-memory-exact-ternary")
++        import onnxruntime as ort
++
++        expected = {
++            "intra_op_num_threads": 1,
++            "inter_op_num_threads": 1,
++            "execution_mode": ort.ExecutionMode.ORT_SEQUENTIAL,
++            "enable_mem_pattern": False,
++            "enable_cpu_mem_arena": False,
++            "graph_optimization_level": ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
++        }
++        for name, value in expected.items():
++            if getattr(self.session_options, name, None) != value:
++                raise RuntimeContractError(
++                    f"session_options.{name} conflicts with the low-memory exact-ternary profile"
++                )
++        return self.session_options
++
++    def close(self) -> None:
++        self._language_model = None
++        self._decoder = None
++        self._prepared_voices.clear()
++        super().close()
+diff --git a/onnxvoice/systems/kitten2_contract.py b/onnxvoice/systems/kitten2_contract.py
+new file mode 100644
+index 0000000..5763431
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_contract.py
+@@ -0,0 +1,268 @@
++from __future__ import annotations
++
++import json
++import math
++import re
++from collections.abc import Mapping
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from ..checksums import digest_file
++from ..errors import RuntimeContractError
++from ..types import validate_relative_path, validate_safe_component
++
++_LAYOUT = "kitten2-onnx-bundle-v1"
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_TOKEN_MAP_FIELDS = (
++    "audio_id_base",
++    "num_audio_tokens",
++    "speech_start_id",
++    "speech_end_id",
++    "text_start_id",
++    "text_end_id",
++    "start_id",
++    "stop_id",
++    "final_seg_id",
++    "reference_speech_start_id",
++    "reference_speech_end_id",
++    "reference_text_start_id",
++    "reference_text_end_id",
++)
++
++
++@dataclass(frozen=True, slots=True)
++class Kitten2Bundle:
++    root: Path
++    manifest: dict[str, Any]
++    files: dict[str, str]
++
++
++def _invalid(message: str) -> RuntimeContractError:
++    return RuntimeContractError(f"Invalid Kitten2 bundle: {message}")
++
++
++def _mapping(value: Any, label: str) -> Mapping[str, Any]:
++    if not isinstance(value, Mapping):
++        raise _invalid(f"{label} must be an object")
++    return value
++
++
++def _relative(value: Any, label: str) -> str:
++    if not isinstance(value, str):
++        raise _invalid(f"{label} must be a relative path string")
++    try:
++        return validate_relative_path(value, field_name=label)
++    except ValueError as exc:
++        raise _invalid(str(exc)) from exc
++
++
++def _referenced_file(value: Any, label: str, files: Mapping[str, str]) -> str:
++    relative = _relative(value, label)
++    if relative not in files:
++        raise _invalid(f"{label} is not declared in bundle.json files: {relative}")
++    return relative
++
++
++def _positive_int(value: Any, label: str) -> int:
++    if type(value) is not int or value < 1:
++        raise _invalid(f"{label} must be a positive integer")
++    return value
++
++
++def _validate_manifest(
++    root: Path, manifest: Any, *, ignored_files: frozenset[str]
++) -> Kitten2Bundle:
++    data = _mapping(manifest, "bundle.json")
++    if data.get("format") != _LAYOUT:
++        raise _invalid(f"format must be {_LAYOUT!r}")
++    if type(data.get("sample_rate")) is not int or data["sample_rate"] != 24000:
++        raise _invalid("sample_rate must be 24000")
++
++    raw_files = _mapping(data.get("files"), "files")
++    if not raw_files:
++        raise _invalid("files must be a non-empty path-to-SHA256 object")
++    files: dict[str, str] = {}
++    for raw_path, sha256 in raw_files.items():
++        relative = _relative(raw_path, "bundle file path")
++        if relative == "bundle.json":
++            raise _invalid("files must not include bundle.json")
++        if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
++            raise _invalid(f"files[{relative!r}] must be a lowercase SHA-256 digest")
++        files[relative] = sha256
++
++    lm = _mapping(data.get("lm"), "lm")
++    speaker = _mapping(data.get("speaker"), "speaker")
++    decoder = _mapping(data.get("decoder"), "decoder")
++    file_fields = (
++        (lm, "model", "lm.model"),
++        (lm, "metadata", "lm.metadata"),
++        (lm, "embeddings", "lm.embeddings"),
++        (speaker, "model", "speaker.model"),
++        (speaker, "metadata", "speaker.metadata"),
++        (decoder, "flow", "decoder.flow"),
++        (decoder, "flow_metadata", "decoder.flow_metadata"),
++        (decoder, "mel2wav", "decoder.mel2wav"),
++        (decoder, "mel2wav_metadata", "decoder.mel2wav_metadata"),
++    )
++    referenced = {
++        _referenced_file(section.get(key), label, files)
++        for section, key, label in file_fields
++    }
++
++    tokenizer = _relative(data.get("tokenizer"), "tokenizer")
++    raw_tokenizer_assets = data.get("tokenizer_assets")
++    if not isinstance(raw_tokenizer_assets, list) or not raw_tokenizer_assets:
++        raise _invalid("tokenizer_assets must be a non-empty list")
++    for name in raw_tokenizer_assets:
++        asset_path = _relative(name, "tokenizer asset")
++        relative = f"{tokenizer}/{asset_path}"
++        if relative not in files:
++            raise _invalid(f"tokenizer asset is not declared in bundle.json files: {relative}")
++        referenced.add(relative)
++
++    raw_voices = _mapping(data.get("voices"), "voices")
++    if not raw_voices:
++        raise _invalid("voices must be a non-empty object")
++    voices: dict[str, str] = {}
++    for name, raw_path in raw_voices.items():
++        try:
++            validate_safe_component(name, field_name="voice name")
++        except ValueError as exc:
++            raise _invalid(str(exc)) from exc
++        voice_path = _referenced_file(raw_path, f"voices.{name}", files)
++        metadata_path = str(Path(voice_path).with_suffix(".meta.json").as_posix())
++        if metadata_path not in files:
++            raise _invalid(f"voice metadata is not declared in bundle.json files: {metadata_path}")
++        voices[name] = voice_path
++        referenced.update((voice_path, metadata_path))
++
++    default_voice = data.get("default_voice")
++    if not isinstance(default_voice, str) or default_voice not in voices:
++        raise _invalid("default_voice must name a voice declared in voices")
++
++    raw_presets = _mapping(data.get("decode_presets"), "decode_presets")
++    if not {"stable", "expressive"}.issubset(raw_presets):
++        raise _invalid("decode_presets must declare stable and expressive")
++    for name, raw_preset in raw_presets.items():
++        try:
++            validate_safe_component(name, field_name="decode preset name")
++        except ValueError as exc:
++            raise _invalid(str(exc)) from exc
++        preset = _mapping(raw_preset, f"decode_presets.{name}")
++        for key in ("temperature", "top_p", "top_k", "min_p"):
++            if key not in preset:
++                raise _invalid(f"decode_presets.{name}.{key} is required")
++        temperature = preset["temperature"]
++        if (
++            isinstance(temperature, bool)
++            or not isinstance(temperature, (int, float))
++            or not math.isfinite(float(temperature))
++            or temperature <= 0
++        ):
++            raise _invalid(f"decode_presets.{name}.temperature must be finite and positive")
++        for key in ("top_p", "min_p"):
++            value = preset[key]
++            if (
++                isinstance(value, bool)
++                or not isinstance(value, (int, float))
++                or not math.isfinite(float(value))
++                or not 0 <= value <= 1
++            ):
++                raise _invalid(f"decode_presets.{name}.{key} must be between 0 and 1")
++        if type(preset["top_k"]) is not int or preset["top_k"] < 0:
++            raise _invalid(f"decode_presets.{name}.top_k must be a non-negative integer")
++    default_preset = data.get("default_preset")
++    if not isinstance(default_preset, str) or default_preset not in raw_presets:
++        raise _invalid("default_preset must name a declared decode preset")
++
++    token_map = _mapping(data.get("token_map"), "token_map")
++    unknown_token_fields = set(token_map) - set(_TOKEN_MAP_FIELDS)
++    if unknown_token_fields:
++        raise _invalid(f"unknown token_map fields: {sorted(unknown_token_fields)}")
++    token_ids: list[int] = []
++    for field in _TOKEN_MAP_FIELDS:
++        value = token_map.get(field)
++        if type(value) is not int or value < 0:
++            raise _invalid(f"token_map.{field} must be a non-negative integer")
++        token_ids.append(value)
++    if len(set(token_ids)) != len(token_ids):
++        raise _invalid("token_map IDs must be distinct")
++    if token_map["num_audio_tokens"] < 1:
++        raise _invalid("token_map.num_audio_tokens must be positive")
++    if token_map["final_seg_id"] != token_map["audio_id_base"] + token_map["num_audio_tokens"]:
++        raise _invalid("token_map.final_seg_id must equal audio_id_base + num_audio_tokens")
++
++    generation = _mapping(data.get("generation"), "generation")
++    if "use_reference_prompt" in generation and type(generation["use_reference_prompt"]) is not bool:
++        raise _invalid("generation.use_reference_prompt must be a boolean")
++    for key in ("repetition_window", "chunk_chars", "chunk_min_chars"):
++        if key in generation:
++            _positive_int(generation[key], f"generation.{key}")
++    if "emotion_control" in generation and not isinstance(generation["emotion_control"], str):
++        raise _invalid("generation.emotion_control must be a string")
++
++
++    actual_files: set[str] = set()
++    for path in root.rglob("*"):
++        if not path.is_file():
++            continue
++        resolved = path.resolve()
++        if not resolved.is_relative_to(root):
++            raise _invalid(f"bundle file escapes its root: {path.relative_to(root).as_posix()}")
++        relative = path.relative_to(root).as_posix()
++        if relative != "bundle.json" and relative not in ignored_files:
++            actual_files.add(relative)
++    if actual_files != set(files):
++        missing = sorted(set(files) - actual_files)
++        extra = sorted(actual_files - set(files))
++        raise _invalid(f"file inventory mismatch; missing={missing}, undeclared={extra}")
++
++    graph_directories = {
++        Path(relative).parent.as_posix()
++        for relative in files
++        if relative.endswith(".onnx")
++    }
++    for relative in files:
++        if (
++            relative.endswith(".onnx.data")
++            and Path(relative).parent.as_posix() not in graph_directories
++        ):
++            raise _invalid(f"external ONNX data must be adjacent to a graph: {relative}")
++    for relative, expected_sha256 in files.items():
++        path = (root / relative).resolve()
++        if not path.is_relative_to(root) or not path.is_file():
++            raise _invalid(f"bundle file is missing or outside its root: {relative}")
++        digest = digest_file(path)
++        if digest != expected_sha256:
++            raise _invalid(f"SHA-256 mismatch for {relative}")
++
++    metadata_paths = (
++        lm["metadata"],
++        speaker["metadata"],
++        decoder["flow_metadata"],
++        decoder["mel2wav_metadata"],
++        *(str(Path(path).with_suffix(".meta.json").as_posix()) for path in voices.values()),
++    )
++    for metadata_path in metadata_paths:
++        try:
++            value = json.loads((root / metadata_path).read_text(encoding="utf-8"))
++        except (OSError, json.JSONDecodeError) as exc:
++            raise _invalid(f"cannot read metadata file {metadata_path}: {exc}") from exc
++        if not isinstance(value, Mapping):
++            raise _invalid(f"metadata file {metadata_path} must contain a JSON object")
++    return Kitten2Bundle(root=root, manifest=dict(data), files=files)
++
++
++def load_kitten2_bundle(
++    bundle_path: str | Path, *, ignored_files: frozenset[str] = frozenset()
++) -> Kitten2Bundle:
++    path = Path(bundle_path).expanduser().resolve()
++    if path.name != "bundle.json" or not path.is_file():
++        raise _invalid("bundle.json is required")
++    root = path.parent
++    try:
++        manifest = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, json.JSONDecodeError) as exc:
++        raise _invalid(f"cannot read bundle.json: {exc}") from exc
++    return _validate_manifest(root, manifest, ignored_files=ignored_files)
+diff --git a/onnxvoice/systems/kitten2_decoder.py b/onnxvoice/systems/kitten2_decoder.py
+new file mode 100644
+index 0000000..4b9f3de
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_decoder.py
+@@ -0,0 +1,171 @@
++from __future__ import annotations
++
++from collections.abc import Mapping
++from typing import Any
++
++import numpy as np
++
++from ..runtime import OnnxSession
++
++S3GEN_SILENCE_TOKEN = 4299
++S3GEN_SILENCE_TAIL_TOKENS = 3
++S3GEN_MEL_FRAMES_PER_TOKEN = 2
++S3GEN_SAMPLE_RATE = 24000
++S3GEN_SAMPLES_PER_MEL_FRAME = 480
++S3GEN_SPEECH_VOCAB_SIZE = 6561
++
++
++def _cpu_session_options(profile: str):
++    import onnxruntime as ort
++
++    options = ort.SessionOptions()
++    if profile == "default":
++        return options
++    if profile != "low-memory-exact-ternary":
++        raise ValueError(f"Unsupported CPU runtime memory profile: {profile!r}")
++    options.intra_op_num_threads = 1
++    options.inter_op_num_threads = 1
++    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
++    options.enable_mem_pattern = False
++    options.enable_cpu_mem_arena = False
++    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
++    return options
++
++
++def clean_s3_tokens(
++    speech_tokens: list[int] | np.ndarray, vocab_size: int = S3GEN_SPEECH_VOCAB_SIZE
++) -> np.ndarray:
++    """Keep only valid zero-based codec IDs accepted by the flow graph."""
++    tokens = np.asarray(speech_tokens, dtype=np.int64)
++    if tokens.ndim == 2 and tokens.shape[0] == 1:
++        tokens = tokens[0]
++    elif tokens.ndim != 1:
++        raise ValueError("speech_tokens must have shape [T] or [1, T]")
++    return tokens[(tokens >= 0) & (tokens < vocab_size)]
++
++
++def append_s3_silence_tail(
++    speech_tokens: list[int] | np.ndarray,
++    token_id: int = S3GEN_SILENCE_TOKEN,
++    count: int = S3GEN_SILENCE_TAIL_TOKENS,
++) -> np.ndarray:
++    """Append the silence tokens required by upstream S3 lookahead."""
++    tokens = np.asarray(speech_tokens, dtype=np.int64)
++    if tokens.ndim == 1:
++        tail_shape: tuple[int, ...] = (count,)
++    elif tokens.ndim == 2 and tokens.shape[0] == 1:
++        tail_shape = (1, count)
++    else:
++        raise ValueError("speech_tokens must have shape [T] or [1, T]")
++    tail = np.full(tail_shape, token_id, dtype=np.int64)
++    return np.concatenate((tokens, tail), axis=-1)
++
++class Kitten2Decoder:
++    """Run the deterministic S3 flow and HiFT ONNX stages for zero-based S3 IDs."""
++
++    def __init__(
++        self,
++        flow_session: OnnxSession,
++        mel2wav_session: OnnxSession,
++        flow_meta: Mapping[str, Any],
++        mel2wav_meta: Mapping[str, Any],
++    ) -> None:
++        self.flow_session = flow_session
++        self.mel2wav_session = mel2wav_session
++        self.flow_meta = dict(flow_meta)
++        self.mel2wav_meta = dict(mel2wav_meta)
++        if self.flow_meta.get("format") != "kitten2-onnx-flow-v1":
++            raise ValueError("Unsupported S3 flow graph metadata")
++        if self.mel2wav_meta.get("format") != "kitten2-onnx-mel2wav-v1":
++            raise ValueError("Unsupported mel2wav graph metadata")
++        tail = self.flow_meta["silence_tail"]
++        self.token_mel_ratio = int(self.flow_meta["token_mel_ratio"])
++        self.speech_vocab_size = int(self.flow_meta["speech_vocab_size"])
++        self.silence_token_id = int(tail["token_id"])
++        self.silence_tail_count = int(tail["count"])
++        self.samples_per_mel_frame = int(self.mel2wav_meta["samples_per_mel_frame"])
++        self.sample_rate = int(self.mel2wav_meta["sample_rate"])
++        self.trim_fade_samples = int(self.mel2wav_meta["trim_fade_samples"])
++        self.flow_channels = int(self.flow_meta["input_shapes"]["flow_noise"][1])
++        self.vocoder_harmonics = int(self.mel2wav_meta["input_shapes"]["phase_noise"][1])
++
++    def decode(
++        self,
++        speech_tokens: list[int] | np.ndarray,
++        conditioning: Mapping[str, np.ndarray],
++        *,
++        seed: int | None = None,
++        flow_noise: np.ndarray | None = None,
++        phase_noise: np.ndarray | None = None,
++        sine_noise: np.ndarray | None = None,
++    ) -> np.ndarray | None:
++        """Decode S3 IDs and apply the upstream silence lookahead and trim fade."""
++        tokens = clean_s3_tokens(speech_tokens, self.speech_vocab_size)
++        if tokens.size == 0:
++            return None
++        tokens = append_s3_silence_tail(
++            tokens, self.silence_token_id, self.silence_tail_count
++        )[None, :]
++
++        prompt_token = np.asarray(conditioning["conditioning_prompt_token"], dtype=np.int64)
++        prompt_token_len = np.asarray(conditioning["conditioning_prompt_token_len"], dtype=np.int64)
++        prompt_feat = np.asarray(conditioning["conditioning_prompt_feat"], dtype=np.float32)
++        embedding = np.asarray(conditioning["conditioning_embedding"], dtype=np.float32)
++        if prompt_token.shape[0] != 1 or prompt_token_len.shape != (1,):
++            raise ValueError("conditioning prompt tokens must have batch size one")
++        if int(prompt_token_len[0]) != prompt_token.shape[1]:
++            raise ValueError("conditioning_prompt_token_len does not match its token array")
++
++        rng = np.random.default_rng(seed)
++        flow_shape = (
++            1,
++            self.flow_channels,
++            self.token_mel_ratio * (int(prompt_token_len[0]) + tokens.shape[1]),
++        )
++        if flow_noise is None:
++            flow_noise = rng.standard_normal(flow_shape, dtype=np.float32)
++        else:
++            flow_noise = np.asarray(flow_noise, dtype=np.float32)
++        if flow_noise.shape != flow_shape:
++            raise ValueError(f"flow_noise must have shape {flow_shape}, found {flow_noise.shape}")
++
++        flow_inputs = {
++            "speech_tokens": tokens,
++            "speech_token_lengths": np.asarray([tokens.shape[1]], dtype=np.int64),
++            "prompt_token": prompt_token,
++            "prompt_token_len": prompt_token_len,
++            "prompt_feat": prompt_feat,
++            "embedding": embedding,
++            "flow_noise": flow_noise,
++        }
++        mel = self.flow_session.session.run(["mel"], flow_inputs)[0]
++
++        phase_shape = (1, self.vocoder_harmonics, 1)
++        if phase_noise is None:
++            phase_noise = rng.uniform(-np.pi, np.pi, size=phase_shape).astype(np.float32)
++            phase_noise[:, 0, :] = 0
++        else:
++            phase_noise = np.asarray(phase_noise, dtype=np.float32)
++        sine_shape = (
++            1,
++            self.vocoder_harmonics,
++            mel.shape[2] * self.samples_per_mel_frame,
++        )
++        if sine_noise is None:
++            sine_noise = rng.standard_normal(sine_shape, dtype=np.float32)
++        else:
++            sine_noise = np.asarray(sine_noise, dtype=np.float32)
++        if phase_noise.shape != phase_shape:
++            raise ValueError(f"phase_noise must have shape {phase_shape}, found {phase_noise.shape}")
++        if sine_noise.shape != sine_shape:
++            raise ValueError(f"sine_noise must have shape {sine_shape}, found {sine_noise.shape}")
++
++        waveform = self.mel2wav_session.session.run(
++            ["waveform"],
++            {"mel": mel, "phase_noise": phase_noise, "sine_noise": sine_noise},
++        )[0]
++        n_trim = self.trim_fade_samples
++        fade = np.zeros(2 * n_trim, dtype=np.float32)
++        fade[n_trim:] = (np.cos(np.linspace(np.pi, 0, n_trim, dtype=np.float32)) + 1) / 2
++        waveform[:, : fade.shape[0]] *= fade
++        return waveform
+diff --git a/onnxvoice/systems/kitten2_decoder_reference.py b/onnxvoice/systems/kitten2_decoder_reference.py
+new file mode 100644
+index 0000000..4ccd516
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_decoder_reference.py
+@@ -0,0 +1,65 @@
++"""Loading and validating deterministic decoder reference bundles."""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++DECODER_REFERENCE_FORMAT = "kitten2-onnx-decoder-reference-v1"
++REQUIRED_ARRAYS = {
++    "conditioning_prompt_token",
++    "speaker_embedding",
++    "reference_tokens",
++    "conditioning_prompt_token_len",
++    "conditioning_prompt_feat",
++    "conditioning_embedding",
++    "speech_tokens",
++    "speech_token_lengths",
++    "flow_noise",
++    "flow_mel",
++    "mel2wav_input",
++    "vocoder_phase_noise",
++    "vocoder_sine_noise",
++    "mel2wav_waveform",
++    "waveform",
++}
++
++
++@dataclass(frozen=True)
++class DecoderReference:
++    arrays: dict[str, np.ndarray]
++    metadata: dict[str, Any]
++
++
++def load_decoder_reference(path: str | Path) -> DecoderReference:
++    path = Path(path)
++    metadata_path = path.with_suffix(".meta.json")
++    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
++    if metadata.get("format") != DECODER_REFERENCE_FORMAT:
++        raise ValueError(f"Unsupported decoder reference format in {metadata_path}")
++
++    with np.load(path, allow_pickle=False) as archive:
++        arrays = {name: archive[name] for name in archive.files}
++
++    if missing := REQUIRED_ARRAYS - arrays.keys():
++        raise ValueError(f"Decoder reference is missing arrays: {sorted(missing)}")
++    metadata_arrays = metadata.get("arrays")
++    if not isinstance(metadata_arrays, dict):
++        raise TypeError("Decoder reference metadata has no array contract")
++    if metadata_arrays.keys() != arrays.keys():
++        raise ValueError("Decoder reference array names do not match the metadata")
++    for name, array in arrays.items():
++        expected = metadata_arrays[name]
++        if expected.get("shape") != list(array.shape):
++            raise ValueError(f"Decoder reference shape mismatch for {name!r}")
++        if expected.get("dtype") != str(array.dtype):
++            raise ValueError(f"Decoder reference dtype mismatch for {name!r}")
++
++    if not np.array_equal(arrays["flow_mel"], arrays["mel2wav_input"]):
++        raise ValueError("The captured mel2wav input differs from the flow output mel")
++    return DecoderReference(arrays=arrays, metadata=metadata)
++
+diff --git a/onnxvoice/systems/kitten2_frontend.py b/onnxvoice/systems/kitten2_frontend.py
+new file mode 100644
+index 0000000..75507d8
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_frontend.py
+@@ -0,0 +1,134 @@
++"""Prompt assembly for reference-conditioned KittenTTS 2 generation."""
++
++from __future__ import annotations
++
++from collections.abc import Sequence
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from ..errors import OptionalDependencyError, RuntimeContractError
++from .kitten2_decoder_reference import load_decoder_reference
++from .kitten2_tokens import TokenMap
++
++
++def build_reference_prefix(
++    token_map: TokenMap,
++    reference_text_ids: Sequence[int],
++    reference_audio_tokens: Sequence[int],
++) -> list[int]:
++    """Build the in-context reference transcript and 0-based S3 token prefix."""
++    audio_ids = [token_map.audio_id_base + token for token in reference_audio_tokens]
++    if token_map.uses_reference_role_tokens:
++        return [
++            token_map.start_id,
++            token_map.reference_text_start_id,
++            *reference_text_ids,
++            token_map.reference_text_end_id,
++            token_map.reference_speech_start_id,
++            *audio_ids,
++            token_map.reference_speech_end_id,
++        ]
++    return [
++        token_map.start_id,
++        token_map.text_start_id,
++        *reference_text_ids,
++        token_map.speech_start_id,
++        *audio_ids,
++        token_map.speech_end_id,
++    ]
++
++
++def build_generation_prompt(
++    token_map: TokenMap,
++    target_text_ids: Sequence[int],
++    reference_prefix: Sequence[int] | None = None,
++    emotion_ids: Sequence[int] | None = None,
++) -> list[int]:
++    """Build the target segment, optionally preceded by a reference prefix."""
++    head = list(reference_prefix) if reference_prefix else [token_map.start_id]
++    final_marker = [token_map.final_seg_id] if token_map.final_seg_id else []
++    return [
++        *head,
++        *(emotion_ids or []),
++        token_map.text_start_id,
++        *target_text_ids,
++        *final_marker,
++        token_map.speech_start_id,
++    ]
++
++
++@dataclass(frozen=True)
++class PreparedVoice:
++    speaker_embedding: np.ndarray
++    reference_prefix: list[int]
++    conditioning: dict[str, np.ndarray]
++
++
++class Kitten2Frontend:
++    def __init__(self, root: str | Path, manifest: dict[str, Any], token_map: TokenMap) -> None:
++        self.root = Path(root)
++        self.manifest = manifest
++        self.token_map = token_map
++        self._tokenizer: Any | None = None
++        self._normalize_text: Any | None = None
++
++    def _load_tokenizer(self) -> None:
++        if self._tokenizer is not None:
++            return
++        try:
++            import kitten_text_processing
++            from transformers import AutoTokenizer
++        except ImportError as exc:
++            raise OptionalDependencyError(
++                "Kitten2 text processing requires onnxvoice[kitten2]."
++            ) from exc
++        self._normalize_text = kitten_text_processing.normalize_text
++        tokenizer_path = self.root / self.manifest["tokenizer"]
++        self._tokenizer = AutoTokenizer.from_pretrained(
++            str(tokenizer_path), local_files_only=True
++        )
++
++    def encode_text(self, text: str) -> tuple[str, list[int]]:
++        self._load_tokenizer()
++        normalize_text = self._normalize_text
++        tokenizer = self._tokenizer
++        assert normalize_text is not None and tokenizer is not None
++        normalized = normalize_text(text).strip()
++        if not normalized:
++            raise ValueError("text must not be empty after normalization")
++        return normalized, tokenizer.encode(normalized, add_special_tokens=False)
++
++    def prepare_voice(self, voice: str) -> PreparedVoice:
++        voices = self.manifest["voices"]
++        if voice not in voices:
++            raise ValueError(f"Unknown voice {voice!r}; available voices: {', '.join(sorted(voices))}")
++        self._load_tokenizer()
++        tokenizer = self._tokenizer
++        assert tokenizer is not None
++        reference = load_decoder_reference(self.root / voices[voice])
++        transcript = reference.metadata.get("reference_transcript")
++        if not isinstance(transcript, str):
++            raise RuntimeContractError(f"Voice {voice!r} is missing its reference transcript")
++        reference_text_ids = tokenizer.encode(transcript.strip(), add_special_tokens=False)
++        reference_prefix = build_reference_prefix(
++            self.token_map,
++            reference_text_ids,
++            reference.arrays["reference_tokens"].tolist(),
++        )
++        conditioning = {
++            key: reference.arrays[key]
++            for key in (
++                "conditioning_prompt_token",
++                "conditioning_prompt_token_len",
++                "conditioning_prompt_feat",
++                "conditioning_embedding",
++            )
++        }
++        return PreparedVoice(
++            speaker_embedding=np.asarray(reference.arrays["speaker_embedding"], dtype=np.float32),
++            reference_prefix=reference_prefix,
++            conditioning=conditioning,
++        )
+diff --git a/onnxvoice/systems/kitten2_generation.py b/onnxvoice/systems/kitten2_generation.py
+new file mode 100644
+index 0000000..48d38ea
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_generation.py
+@@ -0,0 +1,235 @@
++from __future__ import annotations
++
++from collections.abc import Callable, Mapping
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from ..runtime import OnnxSession
++from .kitten2_sampling import SamplingSettings, is_eos_token, sample
++from .kitten2_tokens import TokenMap
++
++
++@dataclass(frozen=True)
++class GenerationResult:
++    raw_ids: list[int]
++    s3_ids: list[int]
++
++
++class Kitten2LanguageModel:
++    """Drive the exported Qwen3 LM with explicit embeddings and KV cache.
++
++    This class handles speaker projection and LM token generation. It does not yet
++    reproduce the S3 waveform decoder.
++    """
++
++    def __init__(
++        self,
++        lm_session: OnnxSession,
++        speaker_session: OnnxSession,
++        metadata: Mapping[str, Any],
++        embeddings_path: str | Path,
++    ) -> None:
++        self.session = lm_session
++        self.speaker_session = speaker_session
++        self.meta = dict(metadata)
++        runtime_profile = self.meta.get("runtime_profile")
++        io_dtype = self.meta.get("io_dtype")
++        if runtime_profile is None or io_dtype is None:
++            raise ValueError("LM metadata must declare runtime_profile and io_dtype")
++        if io_dtype == "bfloat16":
++            raise NotImplementedError(
++                "bfloat16 LM I/O requires ONNX Runtime I/O binding; NumPy session.run is unsupported"
++            )
++        if io_dtype not in {"float32", "float16"}:
++            raise ValueError(f"Unsupported LM I/O dtype: {io_dtype!r}")
++        self.input_mode = self.meta.get("input_mode", "inputs_embeds")
++        if self.input_mode == "inputs_embeds":
++            self.embeddings = np.load(embeddings_path, mmap_mode="r", allow_pickle=False)
++            self.embedding_storage_dtype = self.meta.get(
++                "embedding_storage_dtype", str(self.embeddings.dtype)
++            )
++            if self.embedding_storage_dtype == "bfloat16-u16":
++                if self.embeddings.dtype != np.uint16:
++                    raise ValueError("bfloat16-u16 embedding storage must use uint16")
++            elif str(self.embeddings.dtype) != self.embedding_storage_dtype:
++                raise ValueError("Embedding array dtype differs from LM metadata")
++        elif self.input_mode == "input_ids":
++            if self.meta.get("embedding_file") is not None:
++                raise ValueError("input_ids LM metadata must not reference a separate embedding table")
++            self.embeddings = None
++            self.embedding_storage_dtype = None
++        else:
++            raise ValueError(f"Unsupported LM input mode: {self.input_mode!r}")
++        runtime_memory_profile = self.meta.get("runtime_memory_profile", "default")
++        if runtime_memory_profile not in {"default", "low-memory-exact-ternary"}:
++            raise ValueError(f"Unsupported runtime memory profile: {runtime_memory_profile!r}")
++        self.layers = int(self.meta["num_hidden_layers"])
++        self.kv_heads = int(self.meta["num_key_value_heads"])
++        self.head_dim = int(self.meta["head_dim"])
++        graph_inputs = {item.name: item.ort_type for item in self.session.input_specs}
++        expected_type = {"float32": "tensor(float)", "float16": "tensor(float16)"}[io_dtype]
++        if self.input_mode == "inputs_embeds":
++            graph_input_type = graph_inputs.get("inputs_embeds")
++            if graph_input_type != expected_type:
++                raise ValueError(
++                    f"LM metadata io_dtype {io_dtype!r} does not match inputs_embeds type "
++                    f"{graph_input_type!r}"
++                )
++        else:
++            if graph_inputs.get("input_ids") != "tensor(int64)":
++                raise ValueError("input_ids LM graph must accept int64 token IDs")
++            if graph_inputs.get("speaker_hidden") != expected_type:
++                raise ValueError("LM metadata io_dtype does not match speaker_hidden graph input")
++        self.model_numpy_dtype = {"float32": np.float32, "float16": np.float16}[io_dtype]
++
++    def _empty_cache(self) -> dict[str, np.ndarray]:
++        shape = (1, self.kv_heads, 0, self.head_dim)
++        return {
++            name: np.zeros(shape, dtype=self.model_numpy_dtype)
++            for i in range(self.layers)
++            for name in (f"past_key_{i}", f"past_value_{i}")
++        }
++
++    def _project_speaker(self, speaker_embedding: np.ndarray) -> np.ndarray:
++        speaker_embedding = np.asarray(speaker_embedding, dtype=np.float32)
++        if speaker_embedding.ndim == 1:
++            speaker_embedding = speaker_embedding[None, :]
++        return self.speaker_session.run({"speaker_embedding": speaker_embedding})[0]
++    def _embed(
++        self,
++        token_ids: np.ndarray,
++        *,
++        speaker_embedding: np.ndarray | None = None,
++        prefill: bool,
++    ) -> np.ndarray:
++        token_ids = np.asarray(token_ids, dtype=np.int64)
++        if self.embedding_storage_dtype == "bfloat16-u16":
++            bits = np.asarray(self.embeddings[token_ids], dtype=np.uint32) << 16
++            values = bits.view(np.float32).astype(self.model_numpy_dtype)
++        else:
++            values = np.asarray(self.embeddings[token_ids], dtype=self.model_numpy_dtype)
++        if prefill and speaker_embedding is not None:
++            speaker_hidden = self._project_speaker(speaker_embedding)
++            values = values.copy()
++            values[0, 0, :] = speaker_hidden[0].astype(values.dtype, copy=False)
++        return values
++
++    def step(
++        self,
++        token_ids: np.ndarray,
++        *,
++        past: dict[str, np.ndarray] | None = None,
++        speaker_embedding: np.ndarray | None = None,
++        position: int | None = None,
++    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
++        """Run prefill or one cached decode chunk.
++
++        ``token_ids`` must have shape ``[1, S]``. If ``past`` is omitted this is
++        treated as prefill and an empty cache is supplied.
++        """
++        token_ids = np.asarray(token_ids, dtype=np.int64)
++        if token_ids.ndim != 2 or token_ids.shape[0] != 1:
++            raise ValueError("token_ids must have shape [1, S]")
++
++        is_prefill = past is None
++        past = self._empty_cache() if past is None else past
++        past_len = next(iter(past.values())).shape[2]
++        start = past_len if position is None else int(position)
++
++        attention_mask = np.ones((1, past_len + token_ids.shape[1]), dtype=np.int64)
++        position_ids = np.arange(
++            start,
++            start + token_ids.shape[1],
++            dtype=np.int64,
++        )[None, :]
++        inputs = {
++            "attention_mask": attention_mask,
++            "position_ids": position_ids,
++            **past,
++        }
++        if self.input_mode == "inputs_embeds":
++            inputs["inputs_embeds"] = self._embed(
++                token_ids,
++                speaker_embedding=speaker_embedding,
++                prefill=is_prefill,
++            )
++        else:
++            speaker_hidden = np.zeros(
++                (1, int(self.meta["hidden_size"])), dtype=self.model_numpy_dtype
++            )
++            if is_prefill and speaker_embedding is not None:
++                speaker_hidden = self._project_speaker(speaker_embedding).astype(
++                    self.model_numpy_dtype, copy=False
++                )
++            inputs["input_ids"] = token_ids
++            inputs["speaker_hidden"] = speaker_hidden
++        outputs = self.session.run(inputs)
++        logits = outputs[0]
++        new_past: dict[str, np.ndarray] = {}
++        for i in range(self.layers):
++            new_past[f"past_key_{i}"] = outputs[1 + 2 * i]
++            new_past[f"past_value_{i}"] = outputs[2 + 2 * i]
++        return logits, new_past
++
++    def generate(
++        self,
++        prompt_ids: list[int],
++        *,
++        token_map: TokenMap,
++        max_new_tokens: int,
++        speaker_embedding: np.ndarray | None = None,
++        settings: SamplingSettings | None = None,
++        seed: int | None = None,
++        stop_ids: set[int] | None = None,
++        logits_callback: Callable[[int, np.ndarray], None] | None = None,
++    ) -> GenerationResult:
++        """Generate raw LM IDs and their in-range, zero-based S3 counterparts."""
++        if not prompt_ids:
++            raise ValueError("prompt_ids may not be empty")
++        if max_new_tokens < 0:
++            raise ValueError("max_new_tokens must be non-negative")
++        if max_new_tokens == 0:
++            return GenerationResult(raw_ids=[], s3_ids=[])
++
++        settings = settings or SamplingSettings()
++        rng = np.random.default_rng(seed)
++        history = [int(token) for token in prompt_ids]
++        prompt_length = len(history)
++        logits, past = self.step(
++            np.asarray([history], dtype=np.int64),
++            speaker_embedding=speaker_embedding,
++        )
++        raw_ids: list[int] = []
++
++        for step_index in range(max_new_tokens):
++            if logits_callback is not None:
++                logits_callback(step_index, np.asarray(logits[0]).copy())
++            token = sample(
++                logits[0],
++                history,
++                token_map,
++                settings,
++                float(rng.random()),
++                prompt_length=prompt_length,
++            )
++            raw_ids.append(token)
++            should_stop = is_eos_token(token, token_map) if stop_ids is None else token in stop_ids
++            if should_stop:
++                break
++            history.append(token)
++            logits, past = self.step(
++                np.asarray([[token]], dtype=np.int64),
++                past=past,
++            )
++
++        s3_ids = [
++            token - token_map.audio_id_base
++            for token in raw_ids
++            if token_map.audio_id_base <= token < token_map.audio_id_end
++        ]
++        return GenerationResult(raw_ids=raw_ids, s3_ids=s3_ids)
++
++
+diff --git a/onnxvoice/systems/kitten2_sampling.py b/onnxvoice/systems/kitten2_sampling.py
+new file mode 100644
+index 0000000..c83b21e
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_sampling.py
+@@ -0,0 +1,214 @@
++"""KittenTTS 2 decode-time logit processing and controlled sampling."""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass
++
++import numpy as np
++
++from .kitten2_tokens import TokenMap
++
++SILENCE_TOKEN = 4299
++
++
++@dataclass(frozen=True)
++class SamplingSettings:
++    temperature: float = 0.8
++    top_k: int = 50
++    top_p: float = 0.8
++    min_p: float = 0.0
++    repetition_penalty: float = 1.1
++    repetition_window: int | None = 50
++    token_run_penalty: float = 1.3
++    token_run_grace: int = 10
++
++    def __post_init__(self) -> None:
++        if self.temperature <= 0:
++            raise ValueError("temperature must be greater than zero")
++        if self.top_k < 0:
++            raise ValueError("top_k must be non-negative")
++        if not 0 <= self.top_p <= 1:
++            raise ValueError("top_p must be between zero and one")
++        if not 0 <= self.min_p <= 1:
++            raise ValueError("min_p must be between zero and one")
++        if self.repetition_penalty <= 0:
++            raise ValueError("repetition_penalty must be greater than zero")
++        if self.repetition_window is not None and self.repetition_window < 0:
++            raise ValueError("repetition_window must be non-negative")
++        if self.token_run_penalty < 0:
++            raise ValueError("token_run_penalty must be non-negative")
++        if self.token_run_grace < 1:
++            raise ValueError("token_run_grace must be positive")
++
++
++def sampling_settings_from_config(
++    config: Mapping[str, object], preset: str | None = None
++) -> SamplingSettings:
++    """Resolve the checkpoint's decode preset and generation repetition window."""
++    preset_name = preset or config.get("default_preset")
++    presets = config.get("decode_presets")
++    if not isinstance(preset_name, str):
++        raise TypeError("default_preset must be a string")
++    if not isinstance(presets, Mapping):
++        raise TypeError("model config decode_presets must be an object")
++    values = presets.get(preset_name)
++    if values is None:
++        raise ValueError(f"unknown decode preset {preset_name!r}")
++    if not isinstance(values, Mapping):
++        raise TypeError(f"decode preset {preset_name!r} must be an object")
++    generation = config.get("generation", {})
++    if not isinstance(generation, Mapping):
++        raise TypeError("model config generation settings must be an object")
++    return SamplingSettings(
++        temperature=float(values["temperature"]),
++        top_k=int(values["top_k"]),
++        top_p=float(values["top_p"]),
++        min_p=float(values.get("min_p", 0.0)),
++        repetition_window=int(generation.get("repetition_window", 50)),
++    )
++
++
++def _softmax(scores: np.ndarray) -> np.ndarray:
++    if np.isnan(scores).any() or np.isposinf(scores).any():
++        raise ValueError("logits must not contain NaN or positive infinity")
++    maximum = np.max(scores)
++    if not np.isfinite(maximum):
++        raise ValueError("at least one logit must remain unfiltered")
++    probabilities = np.exp(scores - maximum)
++    probabilities /= probabilities.sum()
++    return probabilities
++
++
++def _apply_token_run_penalty(
++    scores: np.ndarray,
++    history: np.ndarray,
++    token_map: TokenMap,
++    settings: SamplingSettings,
++) -> None:
++    if not history.size or not settings.token_run_penalty:
++        return
++    token_id = int(history[-1])
++    if not token_map.audio_id_base <= token_id < token_map.audio_id_end:
++        return
++    run_length = 1
++    for previous_id in history[-2::-1]:
++        if previous_id != token_id:
++            break
++        run_length += 1
++    if run_length >= settings.token_run_grace:
++        escalation = run_length - settings.token_run_grace + 1
++        scores[token_id] -= escalation * settings.token_run_penalty
++
++
++def _apply_repetition_penalty(
++    scores: np.ndarray,
++    history: np.ndarray,
++    token_map: TokenMap,
++    settings: SamplingSettings,
++    prompt_length: int,
++) -> None:
++    if not history.size or settings.repetition_penalty == 1.0:
++        return
++    if settings.repetition_window:
++        start = max(prompt_length, history.size - settings.repetition_window)
++        history = history[start:]
++    exempt = {
++        token_map.speech_end_id,
++        token_map.stop_id,
++        token_map.audio_id_base + SILENCE_TOKEN,
++    }
++    for token_id in {int(value) for value in history}:
++        if token_id in exempt:
++            continue
++        if token_id < 0 or token_id >= scores.size:
++            raise ValueError(f"history token {token_id} is outside the logits vocabulary")
++        score = scores[token_id]
++        scores[token_id] = (
++            score * settings.repetition_penalty
++            if score < 0
++            else score / settings.repetition_penalty
++        )
++
++
++def _apply_top_k(scores: np.ndarray, top_k: int) -> None:
++    if not top_k or top_k >= scores.size:
++        return
++    threshold = np.partition(scores, -top_k)[-top_k]
++    scores[scores < threshold] = -np.inf
++
++
++def _apply_top_p(scores: np.ndarray, top_p: float) -> None:
++    if top_p == 1.0:
++        return
++    sorted_indices = np.argsort(scores, kind="stable")
++    sorted_scores = scores[sorted_indices]
++    cumulative_probabilities = np.cumsum(_softmax(sorted_scores))
++    remove = cumulative_probabilities <= 1.0 - top_p
++    remove[-1] = False
++    scores[sorted_indices[remove]] = -np.inf
++
++
++def _apply_min_p(scores: np.ndarray, min_p: float) -> None:
++    if min_p == 0.0:
++        return
++    probabilities = _softmax(scores)
++    threshold = min_p * probabilities.max()
++    scores[probabilities < threshold] = -np.inf
++
++
++def process_logits(
++    logits: np.ndarray,
++    history: Sequence[int],
++    token_map: TokenMap,
++    settings: SamplingSettings,
++    *,
++    prompt_length: int = 0,
++) -> np.ndarray:
++    """Apply Kitten's ordered token-run, repetition, temperature, and truncation processors."""
++    scores = np.asarray(logits, dtype=np.float64).copy()
++    if scores.ndim != 1 or not scores.size:
++        raise ValueError("logits must be a non-empty one-dimensional array")
++    history_ids = np.asarray(history, dtype=np.int64).reshape(-1)
++    if prompt_length < 0 or prompt_length > history_ids.size:
++        raise ValueError("prompt_length must be within the history")
++
++    _apply_token_run_penalty(scores, history_ids, token_map, settings)
++    _apply_repetition_penalty(scores, history_ids, token_map, settings, prompt_length)
++    if settings.temperature != 1.0:
++        scores /= settings.temperature
++    _apply_top_k(scores, settings.top_k)
++    _apply_top_p(scores, settings.top_p)
++    _apply_min_p(scores, settings.min_p)
++    return scores
++
++
++def sample(
++    logits: np.ndarray,
++    history: Sequence[int],
++    token_map: TokenMap,
++    settings: SamplingSettings,
++    u: float,
++    *,
++    prompt_length: int = 0,
++) -> int:
++    """Sample one token using a controlled uniform variate in ``[0, 1)``."""
++    if not 0.0 <= u < 1.0:
++        raise ValueError("u must be in [0, 1)")
++    probabilities = _softmax(
++        process_logits(
++            logits,
++            history,
++            token_map,
++            settings,
++            prompt_length=prompt_length,
++        )
++    )
++    cumulative = np.cumsum(probabilities)
++    cumulative[-1] = 1.0
++    return int(np.searchsorted(cumulative, u, side="right"))
++
++
++def is_eos_token(token_id: int, token_map: TokenMap) -> bool:
++    """Return whether a generated LM token terminates Kitten speech generation."""
++    return int(token_id) in {token_map.speech_end_id, token_map.stop_id}
+diff --git a/onnxvoice/systems/kitten2_tokens.py b/onnxvoice/systems/kitten2_tokens.py
+new file mode 100644
+index 0000000..3c74fd5
+--- /dev/null
++++ b/onnxvoice/systems/kitten2_tokens.py
+@@ -0,0 +1,45 @@
++"""Token IDs used by the KittenTTS 2 speech language model."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any
++
++
++@dataclass(frozen=True)
++class TokenMap:
++    """Resolved text, audio, and prompt marker IDs for one checkpoint."""
++
++    audio_id_base: int
++    num_audio_tokens: int
++    speech_start_id: int
++    speech_end_id: int
++    text_start_id: int
++    text_end_id: int
++    start_id: int
++    stop_id: int
++    final_seg_id: int = 0
++    reference_speech_start_id: int = 0
++    reference_speech_end_id: int = 0
++    reference_text_start_id: int = 0
++    reference_text_end_id: int = 0
++
++    @property
++    def audio_id_end(self) -> int:
++        """One past the final S3 audio token ID."""
++        return self.audio_id_base + self.num_audio_tokens
++
++    @property
++    def uses_reference_role_tokens(self) -> bool:
++        """Whether this checkpoint has dedicated reference-prefix markers."""
++        return bool(self.reference_text_start_id)
++
++    @classmethod
++    def from_config(cls, config: dict[str, Any]) -> TokenMap:
++        """Build from the ``token_map`` block of a KittenTTS 2 config."""
++        values = config["token_map"]
++        known = set(cls.__dataclass_fields__)
++        unknown = set(values) - known
++        if unknown:
++            raise ValueError(f"unknown token_map keys: {sorted(unknown)}")
++        return cls(**values)
+diff --git a/pyproject.toml b/pyproject.toml
+index c5bddcf..d35b9f6 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -72,6 +72,7 @@ mobile = []  # Convenience marker for platform-managed mobile providers.
+ huggingface = ["huggingface_hub>=0.24,<2"]
+ pocket = ["huggingface_hub>=0.24,<2", "safetensors>=0.4,<1"]
+ inno = ["scipy>=1.10", "praat-parselmouth>=0.4.7"]
++kitten2 = ["kitten-text-processing==0.1.0", "transformers==4.57.1"]
+ inno-export = ["onnx>=1.16", "safetensors>=0.4", "torch>=2.0"]
+ dev = [
+   "pytest>=8",
+diff --git a/tests/_kitten2_fixture.py b/tests/_kitten2_fixture.py
+new file mode 100644
+index 0000000..402096f
+--- /dev/null
++++ b/tests/_kitten2_fixture.py
+@@ -0,0 +1,84 @@
++from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++from typing import Any
++
++
++def create_bundle(root: Path) -> Path:
++    payloads = {
++        "lm/lm.onnx": b"lm graph",
++        "lm/lm.meta.json": b'{"component":"lm","runtime_profile":"test","io_dtype":"float32","input_mode":"inputs_embeds","embedding_storage_dtype":"float32","runtime_memory_profile":"default","runtime_provider":"CPUExecutionProvider","num_hidden_layers":1,"num_key_value_heads":1,"head_dim":1,"hidden_size":4}',
++        "lm/embed_tokens.bf16.npy": b"embeddings",
++        "lm/lm.ternary-exact-int8.onnx.data": b"lm data",
++        "speaker/speaker.onnx": b"speaker graph",
++        "speaker/speaker.meta.json": b'{"component":"speaker"}',
++        "decoder/flow/flow.onnx": b"flow graph",
++        "decoder/flow/flow.meta.json": b'{"component":"flow"}',
++        "decoder/mel2wav/mel2wav.onnx": b"mel2wav graph",
++        "decoder/mel2wav/mel2wav.onnx.data": b"mel2wav data",
++        "decoder/mel2wav/mel2wav.meta.json": b'{"component":"mel2wav"}',
++        "tokenizer/tokenizer.json": b"{}",
++        "tokenizer/vocab.json": b"{}",
++        "voices/Bruno.npz": b"voice data",
++        "voices/Bruno.meta.json": b'{"reference_transcript":"hello"}',
++    }
++    for relative, payload in payloads.items():
++        path = root / relative
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_bytes(payload)
++
++    manifest: dict[str, Any] = {
++        "format": "kitten2-onnx-bundle-v1",
++        "sample_rate": 24000,
++        "default_voice": "Bruno",
++        "default_preset": "stable",
++        "lm": {
++            "model": "lm/lm.onnx",
++            "metadata": "lm/lm.meta.json",
++            "embeddings": "lm/embed_tokens.bf16.npy",
++        },
++        "speaker": {"model": "speaker/speaker.onnx", "metadata": "speaker/speaker.meta.json"},
++        "decoder": {
++            "flow": "decoder/flow/flow.onnx",
++            "flow_metadata": "decoder/flow/flow.meta.json",
++            "mel2wav": "decoder/mel2wav/mel2wav.onnx",
++            "mel2wav_metadata": "decoder/mel2wav/mel2wav.meta.json",
++        },
++        "tokenizer": "tokenizer",
++        "tokenizer_assets": ["tokenizer.json", "vocab.json"],
++        "voices": {"Bruno": "voices/Bruno.npz"},
++        "token_map": {
++            "audio_id_base": 100,
++            "num_audio_tokens": 10,
++            "speech_start_id": 1,
++            "speech_end_id": 2,
++            "text_start_id": 3,
++            "text_end_id": 4,
++            "start_id": 5,
++            "stop_id": 6,
++            "final_seg_id": 110,
++            "reference_speech_start_id": 11,
++            "reference_speech_end_id": 12,
++            "reference_text_start_id": 13,
++            "reference_text_end_id": 14,
++        },
++        "decode_presets": {
++            "stable": {"temperature": 0.8, "top_p": 0.8, "top_k": 50, "min_p": 0.0},
++            "expressive": {"temperature": 0.9, "top_p": 0.9, "top_k": 50, "min_p": 0.0},
++        },
++        "generation": {
++            "use_reference_prompt": True,
++            "repetition_window": 50,
++            "emotion_control": "{emo: 1}",
++            "chunk_chars": 380,
++            "chunk_min_chars": 130,
++        },
++        "files": {
++            relative: hashlib.sha256(payload).hexdigest() for relative, payload in payloads.items()
++        },
++    }
++    bundle_path = root / "bundle.json"
++    bundle_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
++    return bundle_path
+diff --git a/tests/test_kitten2_catalog.py b/tests/test_kitten2_catalog.py
+new file mode 100644
+index 0000000..3bf24ee
+--- /dev/null
++++ b/tests/test_kitten2_catalog.py
+@@ -0,0 +1,229 @@
++from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++from typing import Any
++
++import pytest
++from _kitten2_fixture import create_bundle
++
++import onnxvoice.cli as cli_module
++from onnxvoice.catalog import DEFAULT_SOURCES, CatalogClient, _parse_kitten2
++from onnxvoice.catalog_tools import kitten2 as kitten2_catalog_tools
++from onnxvoice.errors import CatalogError
++
++_REVISION = "a" * 40
++_REPOSITORY = "example/kitten2-bundle"
++
++
++def _catalog(root: Path, *, revision: str = _REVISION) -> dict[str, Any]:
++    bundle_path = create_bundle(root)
++    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
++    artifacts = [
++        {
++            "role": "bundle",
++            "path": "bundle.json",
++            "sha256": hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
++        }
++    ]
++    artifacts.extend(
++        {"role": "asset", "path": path, "sha256": digest}
++        for path, digest in sorted(bundle["files"].items())
++    )
++    return {
++        "schema": 1,
++        "kind": "kitten2-onnx-bundle-catalog",
++        "bundles": {
++            "kitten-tts-v2": {
++                "id": "kitten-tts-v2",
++                "aliases": ["v2", "default"],
++                "name": "KittenTTS 2 ONNX",
++                "layout": "kitten2-onnx-bundle-v1",
++                "sample_rate": 24000,
++                "default_voice": "Bruno",
++                "voices": ["Bruno"],
++                "source": {
++                    "provider": "huggingface",
++                    "repository": _REPOSITORY,
++                    "revision": revision,
++                    "license": "Apache-2.0",
++                },
++                "runtime": {"bundle_format": "kitten2-onnx-bundle-v1"},
++                "metadata": {"default_preset": "stable"},
++                "artifacts": artifacts,
++            }
++        },
++    }
++
++
++def test_native_parser_preserves_pinned_nested_artifacts_and_provenance(tmp_path: Path) -> None:
++    catalog = _catalog(tmp_path)
++    items = _parse_kitten2(catalog)
++    assert len(items) == 1
++    item = items[0]
++    assert (item.system, item.id, item.kind) == ("kitten2", "kitten-tts-v2", "bundle")
++    assert item.aliases == ("v2", "default")
++    assert item.voices == ("Bruno",)
++    assert item.default_voice == "Bruno"
++    assert item.sample_rate == 24000
++    assert item.metadata["runtime"] == {
++        "layout": "kitten2-onnx-bundle-v1",
++        "sample_rate": 24000,
++    }
++    artifact = next(
++        artifact for artifact in item.artifacts if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
++    )
++    assert artifact.role == "asset"
++    expected_sha = json.loads((tmp_path / "bundle.json").read_text(encoding="utf-8"))["files"][
++        "decoder/mel2wav/mel2wav.onnx.data"
++    ]
++    assert artifact.sha256 == expected_sha
++    assert artifact.url == (
++        f"https://huggingface.co/{_REPOSITORY}/resolve/{_REVISION}/"
++        "decoder/mel2wav/mel2wav.onnx.data?download=true"
++    )
++
++
++def test_catalog_client_registers_native_source_and_rejects_mutable_revision(tmp_path: Path) -> None:
++    path = tmp_path / "catalog.json"
++    path.write_text(json.dumps(_catalog(tmp_path / "bundle", revision="main")), encoding="utf-8")
++    assert DEFAULT_SOURCES["kitten2"].endswith("kitten2-onnx-bundles/main/catalog/bundles.json")
++    client = CatalogClient(
++        cache_dir=tmp_path / "cache",
++        sources={"kitten2": str(path)},
++        offline=True,
++    )
++    with pytest.raises(CatalogError, match="commit SHA"):
++        client.list("kitten2")
++
++
++@pytest.mark.parametrize(
++    ("change", "message"),
++    [
++        (lambda catalog: catalog.update(schema=2), "schema must be 1"),
++        (
++            lambda catalog: catalog["bundles"]["kitten-tts-v2"]["sample_rate"].__class__,
++            "sample_rate must be 24000",
++        ),
++        (
++            lambda catalog: catalog["bundles"]["kitten-tts-v2"]["source"].update(revision="main"),
++            "commit SHA",
++        ),
++        (
++            lambda catalog: catalog["bundles"]["kitten-tts-v2"]["artifacts"][1].update(
++                path="../outside"
++            ),
++            "Unsafe Kitten2 artifact path",
++        ),
++        (
++            lambda catalog: catalog["bundles"]["kitten-tts-v2"]["artifacts"][1].update(
++                sha256="bad"
++            ),
++            "sha256 must be lowercase",
++        ),
++    ],
++)
++def test_catalog_rejects_malformed_records(
++    tmp_path: Path, change: Any, message: str
++) -> None:
++    catalog = _catalog(tmp_path)
++    if message == "sample_rate must be 24000":
++        catalog["bundles"]["kitten-tts-v2"]["sample_rate"] = 16000
++    else:
++        change(catalog)
++    with pytest.raises(CatalogError, match=message):
++        _parse_kitten2(catalog)
++
++
++def test_revision_resolution_and_catalog_build_pin_manifest_artifacts(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    bundle_path = create_bundle(tmp_path / "upstream")
++    bundle_bytes = bundle_path.read_bytes()
++    requests: list[str] = []
++
++    class Response:
++        def __init__(self, payload: bytes) -> None:
++            self.payload = payload
++
++        def __enter__(self) -> Response:
++            return self
++
++        def __exit__(self, *_args: object) -> None:
++            return None
++
++        def read(self) -> bytes:
++            return self.payload
++
++    def fake_urlopen(request: Any, timeout: int) -> Response:
++        requests.append(request.full_url)
++        if "/api/models/" in request.full_url:
++            return Response(json.dumps({"sha": _REVISION}).encode("utf-8"))
++        assert request.full_url.endswith(f"/resolve/{_REVISION}/bundle.json?download=true")
++        return Response(bundle_bytes)
++
++    monkeypatch.setattr(kitten2_catalog_tools.urllib.request, "urlopen", fake_urlopen)
++    catalog = kitten2_catalog_tools.build_catalog(
++        repository=_REPOSITORY, revision="main", license="Apache-2.0"
++    )
++    source = kitten2_catalog_tools.build_source(catalog)
++    kitten2_catalog_tools.verify_catalog(catalog, source)
++    record = catalog["bundles"]["kitten-tts-v2"]
++    assert record["source"]["revision"] == _REVISION
++    assert len(requests) == 2
++    assert len(record["artifacts"]) == len(json.loads(bundle_bytes)["files"]) + 1
++    assert kitten2_catalog_tools.resolve_revision(_REPOSITORY, _REVISION) == _REVISION
++
++
++def test_catalog_verify_is_offline_and_rejects_source_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    catalog = _catalog(tmp_path / "bundle")
++    source = kitten2_catalog_tools.build_source(catalog)
++    catalog_path = tmp_path / "catalog.json"
++    source_path = tmp_path / "source.json"
++    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
++    source_path.write_text(json.dumps(source), encoding="utf-8")
++
++    def fail_network(*_args: Any, **_kwargs: Any) -> None:
++        pytest.fail("offline catalog verification attempted network access")
++
++    monkeypatch.setattr(kitten2_catalog_tools.urllib.request, "urlopen", fail_network)
++    assert kitten2_catalog_tools.load_catalog(catalog_path, source_path) == catalog
++    source["repositories"][0]["revision"] = "b" * 40
++    source_path.write_text(json.dumps(source), encoding="utf-8")
++    with pytest.raises(CatalogError, match="does not match"):
++        kitten2_catalog_tools.load_catalog(catalog_path, source_path)
++
++
++def test_cli_build_and_verify_kitten2_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    catalog = _catalog(tmp_path / "bundle")
++    monkeypatch.setattr(kitten2_catalog_tools, "build_catalog", lambda **_kwargs: catalog)
++    catalog_path = tmp_path / "catalog.json"
++    source_path = tmp_path / "source.json"
++    assert cli_module.main(
++        [
++            "catalog",
++            "kitten2",
++            "build",
++            "--repository",
++            _REPOSITORY,
++            "--revision",
++            "main",
++            "--output",
++            str(catalog_path),
++            "--source-output",
++            str(source_path),
++        ]
++    ) == 0
++    assert cli_module.main(
++        [
++            "catalog",
++            "kitten2",
++            "verify",
++            "--catalog",
++            str(catalog_path),
++            "--source",
++            str(source_path),
++        ]
++    ) == 0
++    assert json.loads(catalog_path.read_text(encoding="utf-8")) == catalog
+diff --git a/tests/test_kitten2_contract.py b/tests/test_kitten2_contract.py
+new file mode 100644
+index 0000000..bd095a0
+--- /dev/null
++++ b/tests/test_kitten2_contract.py
+@@ -0,0 +1,121 @@
++from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++from typing import Any
++
++import pytest
++from _kitten2_fixture import create_bundle
++
++from onnxvoice.errors import RuntimeContractError
++from onnxvoice.systems.kitten2_contract import load_kitten2_bundle
++
++
++def _manifest(path: Path) -> dict[str, Any]:
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def _write_manifest(path: Path, data: dict[str, Any]) -> None:
++    path.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
++
++
++def test_validates_complete_nested_bundle_inventory_and_hashes(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++
++    bundle = load_kitten2_bundle(bundle_path)
++
++    assert bundle.root == bundle_path.parent
++    assert bundle.manifest["default_voice"] == "Bruno"
++    assert bundle.files["decoder/mel2wav/mel2wav.onnx.data"]
++    assert bundle.files["lm/lm.ternary-exact-int8.onnx.data"]
++
++
++@pytest.mark.parametrize(
++    ("field", "value", "message"),
++    [
++        ("format", "kitten-v0.8", "format"),
++        ("sample_rate", 16000, "sample_rate"),
++        ("default_voice", "Unknown", "default_voice"),
++        ("default_preset", "unknown", "default_preset"),
++    ],
++)
++def test_rejects_invalid_bundle_defaults(
++    tmp_path: Path, field: str, value: Any, message: str
++) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    data = _manifest(bundle_path)
++    data[field] = value
++    _write_manifest(bundle_path, data)
++
++    with pytest.raises(RuntimeContractError, match=message):
++        load_kitten2_bundle(bundle_path)
++
++
++def test_rejects_unsafe_file_path(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    data = _manifest(bundle_path)
++    data["files"]["../escape"] = "0" * 64
++    _write_manifest(bundle_path, data)
++
++    with pytest.raises(RuntimeContractError, match="Unsafe bundle file path"):
++        load_kitten2_bundle(bundle_path)
++
++
++def test_rejects_missing_corrupt_and_undeclared_files(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "missing")
++    (bundle_path.parent / "lm/lm.onnx").unlink()
++    with pytest.raises(RuntimeContractError, match="inventory mismatch"):
++        load_kitten2_bundle(bundle_path)
++
++    bundle_path = create_bundle(tmp_path / "corrupt")
++    (bundle_path.parent / "speaker/speaker.onnx").write_bytes(b"corrupt")
++    with pytest.raises(RuntimeContractError, match="SHA-256 mismatch"):
++        load_kitten2_bundle(bundle_path)
++
++    bundle_path = create_bundle(tmp_path / "extra")
++    (bundle_path.parent / "unlisted.bin").write_bytes(b"extra")
++    with pytest.raises(RuntimeContractError, match="undeclared"):
++        load_kitten2_bundle(bundle_path)
++
++
++def test_rejects_invalid_token_map_presets_and_metadata(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "token-map")
++    data = _manifest(bundle_path)
++    data["token_map"]["speech_start_id"] = data["token_map"]["text_start_id"]
++    _write_manifest(bundle_path, data)
++    with pytest.raises(RuntimeContractError, match="token_map IDs must be distinct"):
++        load_kitten2_bundle(bundle_path)
++
++    bundle_path = create_bundle(tmp_path / "preset")
++    data = _manifest(bundle_path)
++    data["decode_presets"]["stable"]["temperature"] = float("nan")
++    _write_manifest(bundle_path, data)
++    with pytest.raises(RuntimeContractError, match="temperature"):
++        load_kitten2_bundle(bundle_path)
++
++    bundle_path = create_bundle(tmp_path / "metadata")
++    metadata_path = bundle_path.parent / "speaker/speaker.meta.json"
++    metadata_path.write_text("[]", encoding="utf-8")
++    data = _manifest(bundle_path)
++    data["files"]["speaker/speaker.meta.json"] = hashlib.sha256(
++        metadata_path.read_bytes()
++    ).hexdigest()
++    _write_manifest(bundle_path, data)
++    with pytest.raises(RuntimeContractError, match="must contain a JSON object"):
++        load_kitten2_bundle(bundle_path)
++
++
++def test_rejects_external_data_without_adjacent_graph(tmp_path: Path) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    bundle = bundle_path.parent
++    source = bundle / "lm/lm.ternary-exact-int8.onnx.data"
++    target = bundle / "orphan.onnx.data"
++    source.rename(target)
++    data = _manifest(bundle_path)
++    data["files"].pop("lm/lm.ternary-exact-int8.onnx.data")
++    data["files"]["orphan.onnx.data"] = hashlib.sha256(target.read_bytes()).hexdigest()
++    _write_manifest(bundle_path, data)
++
++    with pytest.raises(RuntimeContractError, match="external ONNX data must be adjacent"):
++        load_kitten2_bundle(bundle_path)
+diff --git a/tests/test_kitten2_generation.py b/tests/test_kitten2_generation.py
+new file mode 100644
+index 0000000..ad606cf
+--- /dev/null
++++ b/tests/test_kitten2_generation.py
+@@ -0,0 +1,170 @@
++from __future__ import annotations
++
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import pytest
++from _kitten2_fixture import create_bundle
++
++from onnxvoice.errors import CapabilityError
++from onnxvoice.systems import kitten2 as kitten2_module
++from onnxvoice.systems.kitten2 import Kitten2Adapter
++from onnxvoice.systems.kitten2_generation import Kitten2LanguageModel
++from onnxvoice.systems.kitten2_sampling import SamplingSettings
++from onnxvoice.systems.kitten2_tokens import TokenMap
++from onnxvoice.types import Installation, SessionDiagnostic, TensorSpec
++
++
++class FakeLanguageSession:
++    input_specs = (
++        TensorSpec("inputs_embeds", "tensor(float)", ()),
++        TensorSpec("attention_mask", "tensor(int64)", ()),
++        TensorSpec("position_ids", "tensor(int64)", ()),
++    )
++
++    def run(self, inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
++        sequence_length = inputs["inputs_embeds"].shape[1]
++        logits = np.full((1, 120), -100.0, dtype=np.float32)
++        if inputs["past_key_0"].shape[2] > 0:
++            logits[:, 2] = 10.0
++        else:
++            logits[:, 100] = 0.0
++            logits[:, 101] = 0.0
++        cache = np.zeros((1, 1, sequence_length, 1), dtype=np.float32)
++        return [logits, cache, cache]
++
++
++class FakeSpeakerSession:
++    def run(self, inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
++        return [np.zeros((1, 4), dtype=np.float32)]
++
++
++def test_native_language_model_generates_deterministically(tmp_path: Path) -> None:
++    embeddings_path = tmp_path / "embeddings.npy"
++    np.save(embeddings_path, np.zeros((120, 4), dtype=np.float32))
++    metadata = {
++        "runtime_profile": "test",
++        "io_dtype": "float32",
++        "input_mode": "inputs_embeds",
++        "embedding_storage_dtype": "float32",
++        "num_hidden_layers": 1,
++        "num_key_value_heads": 1,
++        "head_dim": 1,
++    }
++    token_map = TokenMap.from_config(
++        {
++            "token_map": {
++                "audio_id_base": 100,
++                "num_audio_tokens": 10,
++                "speech_start_id": 1,
++                "speech_end_id": 2,
++                "text_start_id": 3,
++                "text_end_id": 4,
++                "start_id": 5,
++                "stop_id": 6,
++                "final_seg_id": 110,
++            }
++        }
++    )
++    model = Kitten2LanguageModel(
++        FakeLanguageSession(),
++        FakeSpeakerSession(),
++        metadata,
++        embeddings_path,
++    )
++    settings = SamplingSettings(
++        temperature=1.0,
++        top_k=0,
++        top_p=1.0,
++        repetition_penalty=1.0,
++        token_run_penalty=0.0,
++    )
++    first = model.generate(
++        [5, 3], token_map=token_map, max_new_tokens=4, settings=settings, seed=17
++    )
++    second = model.generate(
++        [5, 3], token_map=token_map, max_new_tokens=4, settings=settings, seed=17
++    )
++    assert first == second
++    assert first.raw_ids in ([100, 2], [101, 2])
++    assert first.s3_ids == [first.raw_ids[0] - token_map.audio_id_base]
++
++
++def test_adapter_defers_sessions_and_propagates_runtime_options(
++    tmp_path: Path, monkeypatch: Any
++) -> None:
++    bundle_path = create_bundle(tmp_path)
++    installation = Installation(
++        system="kitten2",
++        id="kitten2-onnx-bundle-v1",
++        kind="tts",
++        path=bundle_path.parent,
++        artifacts=(),
++        sample_rate=24000,
++        metadata={"runtime": {"layout": "kitten2-onnx-bundle-v1", "sample_rate": 24000}},
++    )
++    providers = ["CUDAExecutionProvider"]
++    provider_options = [{"device_id": "0"}]
++    session_options = object()
++    created: list[dict[str, Any]] = []
++
++    class SessionStub:
++        def __init__(self, model_path: Path, **kwargs: Any) -> None:
++            created.append({"model_path": model_path, **kwargs})
++            self.model_path = model_path
++            self.kwargs = kwargs
++            self.close_count = 0
++
++        def diagnostics(self) -> SessionDiagnostic:
++            providers = tuple(self.kwargs["providers"])
++            return SessionDiagnostic(
++                component=self.kwargs["component"],
++                model_path=self.model_path,
++                providers_requested=providers,
++                providers_active=providers,
++                inputs=(),
++                outputs=(),
++            )
++
++        def close(self) -> None:
++            self.close_count += 1
++
++    monkeypatch.setattr(kitten2_module, "OnnxSession", SessionStub)
++    adapter = Kitten2Adapter(
++        installation,
++        providers=providers,
++        provider_options=provider_options,
++        session_options=session_options,
++    )
++    assert created == []
++    sessions = [adapter._get_session(component) for component in ("lm", "speaker", "flow", "mel2wav")]
++    assert len(created) == 4
++    assert [entry["component"] for entry in created] == [
++        "lm",
++        "speaker",
++        "flow",
++        "mel2wav",
++    ]
++
++    for entry in created:
++        assert entry["providers"] is providers
++        assert entry["provider_options"] is provider_options
++        assert entry["session_options"] is session_options
++    diagnostic = adapter.diagnostics()
++    assert diagnostic.system == "kitten2"
++    assert [entry.component for entry in diagnostic.sessions] == [
++        "lm",
++        "speaker",
++        "flow",
++        "mel2wav",
++    ]
++    assert all(
++        entry.providers_active == ("CUDAExecutionProvider",)
++        for entry in diagnostic.sessions
++    )
++    with pytest.raises(CapabilityError):
++        adapter.infer([1])
++    adapter.close()
++    adapter.close()
++    assert [session.close_count for session in sessions] == [1, 1, 1, 1]
+diff --git a/tests/test_kitten2_integration.py b/tests/test_kitten2_integration.py
+new file mode 100644
+index 0000000..11788b8
+--- /dev/null
++++ b/tests/test_kitten2_integration.py
+@@ -0,0 +1,198 @@
++from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import pytest
++from _kitten2_fixture import create_bundle
++
++import onnxvoice.manager as manager_module
++from onnxvoice import Kitten2Adapter, OnnxVoice, registered_systems
++from onnxvoice.errors import RuntimeContractError
++from onnxvoice.systems import get_adapter
++from onnxvoice.systems.kitten2_frontend import PreparedVoice
++from onnxvoice.systems.kitten2_generation import GenerationResult
++
++
++def _catalog_for_bundle(bundle_path: Path) -> dict[str, Any]:
++    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
++    artifacts = [
++        {
++            "role": "bundle",
++            "path": "bundle.json",
++            "sha256": hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
++        }
++    ]
++    artifacts.extend(
++        {"role": "asset", "path": path, "sha256": digest}
++        for path, digest in sorted(bundle["files"].items())
++    )
++    return {
++        "schema": 1,
++        "kind": "kitten2-onnx-bundle-catalog",
++        "bundles": {
++            "kitten-tts-v2": {
++                "id": "kitten-tts-v2",
++                "aliases": ["v2"],
++                "name": "KittenTTS 2 ONNX",
++                "layout": "kitten2-onnx-bundle-v1",
++                "sample_rate": 24000,
++                "default_voice": "Bruno",
++                "voices": ["Bruno"],
++                "source": {
++                    "provider": "huggingface",
++                    "repository": "example/kitten2-bundle",
++                    "revision": "a" * 40,
++                    "license": "Apache-2.0",
++                },
++                "runtime": {"bundle_format": "kitten2-onnx-bundle-v1"},
++                "metadata": {"default_preset": "stable"},
++                "artifacts": artifacts,
++            }
++        },
++    }
++
++
++def _forbidden(*_args: Any, **_kwargs: Any) -> None:
++    pytest.fail("local Kitten2 opening must not access the catalog or asset store")
++
++
++def test_kitten2_is_registered_and_exported() -> None:
++    assert "kitten2" in registered_systems()
++    assert Kitten2Adapter.system == "kitten2"
++    assert get_adapter("kitten2") is Kitten2Adapter
++
++
++def test_local_open_uses_native_adapter_without_creating_sessions(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    monkeypatch.setattr(manager_module.AssetStore, "__init__", _forbidden)
++    monkeypatch.setattr(manager_module.CatalogClient, "__init__", _forbidden)
++
++    runtime = OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path})
++    try:
++        assert isinstance(runtime, Kitten2Adapter)
++        assert runtime.voices == ("Bruno",)
++        assert runtime.default_voice == "Bruno"
++        assert runtime.default_preset == "stable"
++        assert runtime.sample_rate == 24000
++        assert set(runtime.decode_presets) == {"stable", "expressive"}
++        with pytest.raises(TypeError):
++            runtime.decode_presets["stable"]["top_k"] = 1
++        assert runtime._sessions == {}
++        assert runtime.diagnostics().sessions == ()
++        with pytest.raises(ValueError, match="Unknown decode preset"):
++            runtime.infer_text("Hello", preset="missing")
++        with pytest.raises(ValueError, match="Unknown voice"):
++            runtime.infer_text("Hello", voice="not-a-voice")
++        assert runtime._sessions == {}
++    finally:
++        runtime.close()
++
++
++def test_single_file_import_rejects_kitten2(tmp_path: Path) -> None:
++    manager = OnnxVoice(cache_dir=tmp_path / "cache")
++    model = tmp_path / "lm.onnx"
++    model.write_bytes(b"not a bundle")
++    with pytest.raises(ValueError, match="complete bundle"):
++        manager.import_model(system="kitten2", item_id="bundle", model=model)
++
++
++
++def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    bundle_path = create_bundle(tmp_path / "upstream")
++    catalog_path = tmp_path / "catalog.json"
++    catalog_path.write_text(
++        json.dumps(_catalog_for_bundle(bundle_path)), encoding="utf-8"
++    )
++    manager = OnnxVoice(
++        cache_dir=tmp_path / "cache",
++        catalog_sources={"kitten2": str(catalog_path)},
++    )
++
++    def materialize(
++        _store: Any, artifact: Any, *, ref: str, progress: Any, target: str
++    ) -> tuple[Path, str]:
++        del ref, progress, target
++        return bundle_path.parent / artifact.filename, artifact.sha256
++
++    monkeypatch.setattr(manager_module.AssetStore, "_materialize_artifact", materialize)
++    installation = manager.install("kitten2:kitten-tts-v2")
++    installed_names = {artifact.filename for artifact in installation.artifacts}
++    assert "decoder/mel2wav/mel2wav.onnx.data" in installed_names
++    assert "decoder/mel2wav/mel2wav.onnx" in installed_names
++    graph = installation.path / "decoder/mel2wav/mel2wav.onnx"
++    external_data = installation.path / "decoder/mel2wav/mel2wav.onnx.data"
++    assert graph.parent == external_data.parent
++    assert graph.is_file() and external_data.is_file()
++
++    runtime = manager.open(installation)
++    try:
++        assert isinstance(runtime, Kitten2Adapter)
++        assert runtime.bundle.root == installation.path
++        assert runtime._sessions == {}
++    finally:
++        runtime.close()
++
++
++def test_infer_text_returns_finite_mono_float32_at_bundle_sample_rate(
++    tmp_path: Path,
++) -> None:
++    bundle_path = create_bundle(tmp_path / "bundle")
++    runtime = OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path})
++
++    class FrontendStub:
++        def prepare_voice(self, voice: str) -> PreparedVoice:
++            assert voice == "Bruno"
++            return PreparedVoice(
++                speaker_embedding=np.zeros((1, 4), dtype=np.float32),
++                reference_prefix=[11, 12],
++                conditioning={},
++            )
++
++        def encode_text(self, text: str) -> tuple[str, list[int]]:
++            return text, [3, 4]
++
++    class LanguageModelStub:
++        def generate(self, prompt: list[int], **kwargs: Any) -> GenerationResult:
++            assert prompt
++            assert kwargs["seed"] == 23
++            assert kwargs["max_new_tokens"] == 12
++            return GenerationResult(raw_ids=[100, 2], s3_ids=[0])
++
++    class DecoderStub:
++        def decode(
++            self, s3_ids: list[int], conditioning: dict[str, np.ndarray], *, seed: int | None
++        ) -> np.ndarray:
++            assert s3_ids == [0]
++            assert conditioning == {}
++            assert seed == 23
++            return np.array([[0.0, 0.25, -0.25]], dtype=np.float64)
++
++    runtime.frontend = FrontendStub()
++    runtime._get_language_model = lambda: LanguageModelStub()
++    runtime._get_decoder = lambda: DecoderStub()
++    try:
++        result = runtime.infer_text("Hello", seed=23, max_new_tokens=12)
++        assert result.sample_rate == 24000
++        assert result.audio.dtype == np.float32
++        assert result.audio.ndim == 1
++        assert np.all(np.isfinite(result.audio))
++        assert result.metadata["voice"] == "Bruno"
++        assert result.metadata["preset"] == "stable"
++
++        class NonFiniteDecoder:
++            def decode(self, *_args: Any, **_kwargs: Any) -> np.ndarray:
++                return np.array([np.nan], dtype=np.float32)
++
++        runtime._get_decoder = lambda: NonFiniteDecoder()
++        with pytest.raises(RuntimeContractError, match="NaN or infinite"):
++            runtime.infer_text("Hello", seed=23, max_new_tokens=12)
++    finally:
++        runtime.close()
+diff --git a/tests/test_kitten2_local_open.py b/tests/test_kitten2_local_open.py
+new file mode 100644
+index 0000000..c6048a1
+--- /dev/null
++++ b/tests/test_kitten2_local_open.py
+@@ -0,0 +1,91 @@
++from __future__ import annotations
++
++from pathlib import Path
++from typing import Any
++
++import pytest
++from _kitten2_fixture import create_bundle
++
++import onnxvoice.manager as manager_module
++from onnxvoice.errors import RuntimeContractError
++from onnxvoice.manager import OnnxVoice
++from onnxvoice.types import Installation
++
++
++class RuntimeStub:
++    def __init__(self, installation: Installation, **kwargs: Any) -> None:
++        self.installation = installation
++        self.kwargs = kwargs
++
++
++def _forbidden(*_args: Any, **_kwargs: Any) -> None:
++    pytest.fail("Kitten2 open_local must not access the catalog or asset store")
++
++
++def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    bundle_path = create_bundle(tmp_path / "local-kit")
++    adapter_args: dict[str, Any] = {}
++
++    def make_adapter(system: str):
++        assert system == "kitten2"
++
++        def create(installation: Installation, **kwargs: Any) -> RuntimeStub:
++            adapter_args["installation"] = installation
++            adapter_args["kwargs"] = kwargs
++            return RuntimeStub(installation, **kwargs)
++
++        return create
++
++    monkeypatch.setattr(manager_module.AssetStore, "__init__", _forbidden)
++    monkeypatch.setattr(manager_module.CatalogClient, "__init__", _forbidden)
++    monkeypatch.setattr(manager_module, "get_adapter", make_adapter)
++
++    runtime = OnnxVoice.open_local(
++        system="kitten2",
++        files={"bundle": bundle_path},
++        providers="cpu",
++        provider_options=[{"device_id": "2"}],
++        session_options=object(),
++    )
++
++    installation = runtime.installation
++    filenames = {artifact.filename for artifact in installation.artifacts}
++    assert installation.system == "kitten2"
++    assert installation.path == bundle_path.parent
++    assert installation.sample_rate == 24000
++    assert installation.voices == ("Bruno",)
++    assert installation.default_voice == "Bruno"
++    assert installation.metadata["runtime"] == {"layout": "kitten2-onnx-bundle-v1", "sample_rate": 24000}
++    assert "decoder/mel2wav/mel2wav.onnx.data" in filenames
++    graph = next(
++        artifact
++        for artifact in installation.artifacts
++        if artifact.filename == "decoder/mel2wav/mel2wav.onnx"
++    )
++    external_data = next(
++        artifact
++        for artifact in installation.artifacts
++        if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
++    )
++    assert external_data.path == Path(str(graph.path) + ".data")
++    assert all(artifact.path.is_relative_to(installation.path) for artifact in installation.artifacts)
++    assert adapter_args["kwargs"]["providers"] == "cpu"
++    assert adapter_args["kwargs"]["provider_options"] == [{"device_id": "2"}]
++
++
++def test_open_local_rejects_missing_bundle_and_files_outside_root(tmp_path: Path) -> None:
++    ordinary_file = tmp_path / "not-a-bundle.onnx"
++    ordinary_file.write_bytes(b"model")
++    with pytest.raises(RuntimeContractError, match="exactly one bundle.json"):
++        OnnxVoice.open_local(system="kitten2", model=ordinary_file)
++
++    bundle_path = create_bundle(tmp_path / "bundle")
++    outside = tmp_path / "outside.bin"
++    outside.write_bytes(b"outside")
++    with pytest.raises(RuntimeContractError, match="outside the bundle root"):
++        OnnxVoice.open_local(
++            system="kitten2",
++            files={"bundle": bundle_path, "extra": outside},
++        )
+diff --git a/tests/test_kitten2_real_bundle.py b/tests/test_kitten2_real_bundle.py
+new file mode 100644
+index 0000000..36164ca
+--- /dev/null
++++ b/tests/test_kitten2_real_bundle.py
+@@ -0,0 +1,49 @@
++from __future__ import annotations
++
++import os
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from onnxvoice import OnnxVoice
++
++
++@pytest.mark.integration
++@pytest.mark.resource_heavy
++def test_bruno_cpu_real_bundle_smoke_and_optional_parity() -> None:
++    raw_bundle = os.environ.get("ONNXVOICE_KITTEN2_BUNDLE")
++    if not raw_bundle:
++        pytest.skip("set ONNXVOICE_KITTEN2_BUNDLE to a complete KittenTTS 2 bundle")
++    bundle_path = Path(raw_bundle)
++    if bundle_path.is_dir():
++        bundle_path /= "bundle.json"
++
++    runtime = OnnxVoice.open_local(
++        system="kitten2",
++        files={"bundle": bundle_path},
++        providers="cpu",
++    )
++    try:
++        result = runtime.infer_text(
++            "Hello from KittenTTS 2.",
++            voice="Bruno",
++            preset="stable",
++            seed=7,
++            max_new_tokens=64,
++        )
++        audio = result.audio
++        assert result.sample_rate == 24000
++        assert audio.dtype == np.float32
++        assert audio.ndim == 1
++        assert audio.size > 0
++        assert np.all(np.isfinite(audio))
++        assert float(np.max(np.abs(audio))) > 1e-5
++        assert float(np.sqrt(np.mean(np.square(audio, dtype=np.float64)))) > 1e-6
++        reference_path = os.environ.get("ONNXVOICE_KITTEN2_REFERENCE_AUDIO")
++        if reference_path:
++            reference_audio = np.load(reference_path, allow_pickle=False)
++            assert reference_audio.shape == audio.shape
++            np.testing.assert_allclose(audio, reference_audio, rtol=1e-5, atol=1e-5)
++    finally:
++        runtime.close()
