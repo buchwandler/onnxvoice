@@ -5,8 +5,58 @@ import json
 from pathlib import Path
 from typing import Any
 
+CURRENT_VOICES = (
+    "Alfred",
+    "Arabic",
+    "Bella",
+    "Bruno",
+    "Chinese",
+    "Claire",
+    "Dante",
+    "Diana",
+    "Dolores",
+    "Edith",
+    "Eleanor",
+    "Elliot",
+    "Frank",
+    "French",
+    "German",
+    "Grace",
+    "Herbert",
+    "Hindi",
+    "Hugo",
+    "Iris",
+    "Italian",
+    "Jasper",
+    "Julian",
+    "Kiki",
+    "Laurence",
+    "Leo",
+    "Luna",
+    "Maeve",
+    "Marcus",
+    "Martha",
+    "Matthew",
+    "Miles",
+    "Otis",
+    "Portuguese",
+    "Raven",
+    "Reginald",
+    "Rosie",
+    "Russian",
+    "Sable",
+    "Saoirse",
+    "Serena",
+    "Spanish",
+    "Victor",
+    "Victoria",
+    "Vincent",
+    "Walter",
+    "Willow",
+)
 
-def create_bundle(root: Path) -> Path:
+
+def create_bundle(root: Path, *, voice_names: tuple[str, ...] = ("Bruno",)) -> Path:
     payloads = {
         "lm/lm.onnx": b"lm graph",
         "lm/lm.meta.json": b'{"component":"lm","runtime_profile":"test","io_dtype":"float32","input_mode":"inputs_embeds","embedding_storage_dtype":"float32","runtime_memory_profile":"default","runtime_provider":"CPUExecutionProvider","num_hidden_layers":1,"num_key_value_heads":1,"head_dim":1,"hidden_size":4}',
@@ -21,9 +71,10 @@ def create_bundle(root: Path) -> Path:
         "decoder/mel2wav/mel2wav.meta.json": b'{"component":"mel2wav"}',
         "tokenizer/tokenizer.json": b"{}",
         "tokenizer/vocab.json": b"{}",
-        "voices/Bruno.npz": b"voice data",
-        "voices/Bruno.meta.json": b'{"reference_transcript":"hello"}',
     }
+    for name in voice_names:
+        payloads[f"voices/{name}.npz"] = b"voice data"
+        payloads[f"voices/{name}.meta.json"] = b'{"reference_transcript":"hello"}'
     for relative, payload in payloads.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,7 +83,7 @@ def create_bundle(root: Path) -> Path:
     manifest: dict[str, Any] = {
         "format": "kitten2-onnx-bundle-v1",
         "sample_rate": 24000,
-        "default_voice": "Bruno",
+        "default_voice": "Bruno" if "Bruno" in voice_names else voice_names[0],
         "default_preset": "stable",
         "lm": {
             "model": "lm/lm.onnx",
@@ -48,7 +99,7 @@ def create_bundle(root: Path) -> Path:
         },
         "tokenizer": "tokenizer",
         "tokenizer_assets": ["tokenizer.json", "vocab.json"],
-        "voices": {"Bruno": "voices/Bruno.npz"},
+        "voices": {name: f"voices/{name}.npz" for name in voice_names},
         "token_map": {
             "audio_id_base": 100,
             "num_audio_tokens": 10,

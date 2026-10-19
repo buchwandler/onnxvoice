@@ -29,17 +29,18 @@ _VOCAL_EVENTS = (
     "sob",
     "um",
 )
-_EXPRESSION_TAG = re.compile(
-    r"\[(?P<emotion>" + "|".join(_EMOTIONS) + r")\]"
-    r"|<(?P<event>" + "|".join(_VOCAL_EVENTS) + r")>",
-    re.IGNORECASE,
-)
+_EMOTION_PATTERN = r"\[(?P<emotion>" + "|".join(_EMOTIONS) + r")\]"
+_EVENT_PATTERN = r"<(?P<event>" + "|".join(_VOCAL_EVENTS) + r")>"
+_EMOTION_TAG = re.compile(_EMOTION_PATTERN)
+_VOCAL_EVENT = re.compile(_EVENT_PATTERN)
+_LEADING_EMOTION = re.compile(r"^\s*(?P<tag>" + _EMOTION_PATTERN + r")")
 _EMPHASIS_SPAN = re.compile(r"\(\(\(([^()\n]{1,80})\)\)\)")
 
 
 def expression_markup_spans(text: str) -> tuple[tuple[int, int], ...]:
-    """Return source ranges occupied by recognized Kitten2 markup."""
-    spans = [match.span() for match in _EXPRESSION_TAG.finditer(text)]
+    """Return source ranges occupied by supported Kitten2 markup."""
+    spans = [match.span() for match in _EMOTION_TAG.finditer(text)]
+    spans.extend(match.span() for match in _VOCAL_EVENT.finditer(text))
     spans.extend(match.span() for match in _EMPHASIS_SPAN.finditer(text))
     return tuple(sorted(spans))
 
@@ -54,13 +55,12 @@ class ExpressionInfo:
 
 def inspect_expression_markup(text: str) -> ExpressionInfo:
     """Report supported Kitten2 markup without changing the supplied text."""
-    matches = tuple(_EXPRESSION_TAG.finditer(text))
-    emotions = [match.group("emotion").lower() for match in matches if match.group("emotion")]
-    event_count = sum(match.group("event") is not None for match in matches)
+    leading_emotion = _LEADING_EMOTION.match(text)
+    events = tuple(_VOCAL_EVENT.finditer(text))
     emphasis_count = sum(1 for _ in _EMPHASIS_SPAN.finditer(text))
     return ExpressionInfo(
-        has_expression=bool(emotions or event_count or emphasis_count),
-        emotion=emotions[0] if emotions else None,
-        event_count=event_count,
+        has_expression=bool(leading_emotion or events or emphasis_count),
+        emotion=leading_emotion.group("emotion") if leading_emotion else None,
+        event_count=len(events),
         emphasis_count=emphasis_count,
     )

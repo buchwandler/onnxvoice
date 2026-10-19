@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from _kitten2_fixture import create_bundle
+from _kitten2_fixture import CURRENT_VOICES, create_bundle
 
 import onnxvoice.manager as manager_module
 from onnxvoice.errors import RuntimeContractError
@@ -25,7 +25,7 @@ def _forbidden(*_args: Any, **_kwargs: Any) -> None:
 def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bundle_path = create_bundle(tmp_path / "local-kit")
+    bundle_path = create_bundle(tmp_path / "local-kit", voice_names=CURRENT_VOICES)
     adapter_args: dict[str, Any] = {}
 
     def make_adapter(system: str):
@@ -55,7 +55,8 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
     assert installation.system == "kitten2"
     assert installation.path == bundle_path.parent
     assert installation.sample_rate == 24000
-    assert installation.voices == ("Bruno",)
+    assert installation.voices == CURRENT_VOICES
+    assert "Kiki" in installation.voices
     assert installation.default_voice == "Bruno"
     assert installation.metadata["runtime"] == {
         "layout": "kitten2-onnx-bundle-v1",
@@ -78,6 +79,23 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
     )
     assert adapter_args["kwargs"]["providers"] == "cpu"
     assert adapter_args["kwargs"]["provider_options"] == [{"device_id": "2"}]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"runtime": {}}, "runtime metadata is read from bundle.json"),
+        ({"metadata": {"runtime": {}}}, "runtime metadata is read from bundle.json"),
+        ({"artifact_metadata": {"bundle": {}}}, "artifact metadata is read from bundle.json"),
+    ],
+)
+def test_open_local_rejects_kitten2_metadata_overrides(
+    tmp_path: Path, kwargs: dict[str, Any], message: str
+) -> None:
+    bundle_path = create_bundle(tmp_path / "bundle")
+
+    with pytest.raises(RuntimeContractError, match=message):
+        OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path}, **kwargs)
 
 
 def test_open_local_rejects_missing_bundle_and_files_outside_root(tmp_path: Path) -> None:

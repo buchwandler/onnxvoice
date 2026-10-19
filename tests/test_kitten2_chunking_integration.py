@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 from _kitten2_fixture import create_bundle
 
 from onnxvoice import OnnxVoice
@@ -13,7 +14,19 @@ from onnxvoice.systems.kitten2_frontend import PreparedTarget, PreparedVoice
 from onnxvoice.systems.kitten2_generation import GenerationResult
 
 
-def test_adapter_chunks_unchanged_text_and_shares_request_rng(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("text", "first_chunk_has_expression"),
+    [
+        ("[joyful] We won the grant <laugh> I can (((hardly))) believe it!", True),
+        (
+            "Plain opening sentence before the later <laugh> marker, with more words afterward.",
+            False,
+        ),
+    ],
+)
+def test_adapter_chunks_unchanged_text_and_shares_request_rng(
+    tmp_path: Path, text: str, first_chunk_has_expression: bool
+) -> None:
     bundle_path = create_bundle(tmp_path / "bundle")
     manifest = json.loads(bundle_path.read_text(encoding="utf-8"))
     manifest["generation"]["chunk_chars"] = 30
@@ -68,10 +81,12 @@ def test_adapter_chunks_unchanged_text_and_shares_request_rng(tmp_path: Path) ->
     runtime.frontend = frontend
     runtime._get_language_model = lambda: language_model
     runtime._get_decoder = lambda: DecoderStub()
-    text = "[joyful] We won today. Another sentence with <laugh> after the close."
     try:
         first = runtime.infer_text(text, seed=7)
         first_chunks = frontend.texts[:]
+        assert (
+            inspect_expression_markup(first_chunks[0]).has_expression is first_chunk_has_expression
+        )
         first_draws = language_model.draws[:]
         first_rngs = language_model.rngs[:]
         first_prompts = language_model.prompts[:]

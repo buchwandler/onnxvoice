@@ -82,3 +82,39 @@ def test_bruno_cpu_real_bundle_expression_smoke() -> None:
         assert np.all(np.isfinite(audio))
     finally:
         runtime.close()
+
+
+@pytest.mark.integration
+@pytest.mark.resource_heavy
+def test_kiki_cpu_real_bundle_expressive_smoke() -> None:
+    raw_bundle = os.environ.get("ONNXVOICE_KITTEN2_BUNDLE")
+    if not raw_bundle:
+        pytest.skip("set ONNXVOICE_KITTEN2_BUNDLE to a complete KittenTTS 2 bundle")
+    bundle_path = Path(raw_bundle)
+    if bundle_path.is_dir():
+        bundle_path /= "bundle.json"
+
+    runtime = OnnxVoice.open_local(
+        system="kitten2",
+        files={"bundle": bundle_path},
+        providers="cpu",
+    )
+    try:
+        result = runtime.infer_text(
+            "[joyful] We won the grant <laugh> I can (((hardly))) believe it!",
+            voice="Kiki",
+            preset="expressive",
+            seed=7,
+            max_new_tokens=64,
+        )
+        audio = result.audio
+        assert result.sample_rate == 24000
+        assert audio.dtype == np.float32
+        assert audio.ndim == 1
+        assert audio.size > 0
+        assert np.all(np.isfinite(audio))
+        assert result.metadata["voice"] == "Kiki"
+        assert result.metadata["preset"] == "expressive"
+        assert result.metadata["expression_conditioning"] is True
+    finally:
+        runtime.close()

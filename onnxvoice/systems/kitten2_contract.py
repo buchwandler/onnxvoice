@@ -13,6 +13,7 @@ from ..errors import RuntimeContractError
 from ..types import validate_relative_path, validate_safe_component
 
 _LAYOUT = "kitten2-onnx-bundle-v1"
+_RUNTIME_NAMESPACES = frozenset({"decoder", "lm", "speaker", "tokenizer", "voices"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN_MAP_FIELDS = (
     "audio_id_base",
@@ -87,6 +88,11 @@ def _validate_manifest(
         relative = _relative(raw_path, "bundle file path")
         if relative == "bundle.json":
             raise _invalid("files must not include bundle.json")
+        if relative.split("/", 1)[0] not in _RUNTIME_NAMESPACES:
+            raise _invalid(
+                f"bundle file path is outside the runtime namespaces: {relative}; "
+                "upstream bundle manifest must be regenerated cleanly"
+            )
         if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
             raise _invalid(f"files[{relative!r}] must be a lowercase SHA-256 digest")
         files[relative] = sha256

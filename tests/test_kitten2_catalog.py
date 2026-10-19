@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from _kitten2_fixture import create_bundle
+from _kitten2_fixture import CURRENT_VOICES, create_bundle
 
 import onnxvoice.cli as cli_module
 from onnxvoice.catalog import DEFAULT_SOURCES, CatalogClient, _parse_kitten2
@@ -122,6 +122,12 @@ def test_catalog_client_registers_native_source_and_rejects_mutable_revision(
         ),
         (
             lambda catalog: catalog["bundles"]["kitten-tts-v2"]["artifacts"][1].update(
+                path=".cache/huggingface/model.bin"
+            ),
+            "outside the Kitten2 runtime namespaces",
+        ),
+        (
+            lambda catalog: catalog["bundles"]["kitten-tts-v2"]["artifacts"][1].update(
                 sha256="bad"
             ),
             "sha256 must be lowercase",
@@ -141,7 +147,7 @@ def test_catalog_rejects_malformed_records(tmp_path: Path, change: Any, message:
 def test_revision_resolution_and_catalog_build_pin_manifest_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bundle_path = create_bundle(tmp_path / "upstream")
+    bundle_path = create_bundle(tmp_path / "upstream", voice_names=CURRENT_VOICES)
     bundle_bytes = bundle_path.read_bytes()
     requests: list[str] = []
 
@@ -175,7 +181,71 @@ def test_revision_resolution_and_catalog_build_pin_manifest_artifacts(
     assert record["source"]["revision"] == _REVISION
     assert len(requests) == 2
     assert len(record["artifacts"]) == len(json.loads(bundle_bytes)["files"]) + 1
+    upstream_manifest = json.loads(bundle_bytes)
+    assert record["voices"] == list(CURRENT_VOICES)
+    assert {artifact["path"] for artifact in record["artifacts"]} == {
+        "bundle.json",
+        *upstream_manifest["files"],
+    }
     assert kitten2_catalog_tools.resolve_revision(_REPOSITORY, _REVISION) == _REVISION
+
+
+def test_builder_rejects_polluted_manifest_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_path = create_bundle(tmp_path / "upstream")
+    manifest = json.loads(bundle_path.read_text(encoding="utf-8"))
+    manifest["files"][".cache/huggingface/model.bin"] = "0" * 64
+    bundle_bytes = json.dumps(manifest).encode("utf-8")
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return bundle_bytes
+
+    monkeypatch.setattr(
+        kitten2_catalog_tools.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+    with pytest.raises(CatalogError, match="outside the runtime namespaces"):
+        kitten2_catalog_tools.build_catalog(
+            repository=_REPOSITORY, revision=_REVISION, license="Apache-2.0"
+        )
+
+
+def test_builder_rejects_missing_voice_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_path = create_bundle(tmp_path / "upstream")
+    manifest = json.loads(bundle_path.read_text(encoding="utf-8"))
+    manifest["files"].pop("voices/Bruno.meta.json")
+    bundle_bytes = json.dumps(manifest).encode("utf-8")
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return bundle_bytes
+
+    monkeypatch.setattr(
+        kitten2_catalog_tools.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+    with pytest.raises(CatalogError, match="voice metadata is not declared"):
+        kitten2_catalog_tools.build_catalog(
+            repository=_REPOSITORY, revision=_REVISION, license="Apache-2.0"
+        )
 
 
 def test_catalog_verify_is_offline_and_rejects_source_drift(

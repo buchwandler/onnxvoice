@@ -62,6 +62,26 @@ def test_rejects_unsafe_file_path(tmp_path: Path) -> None:
         load_kitten2_bundle(bundle_path)
 
 
+def test_rejects_polluted_cache_path(tmp_path: Path) -> None:
+    bundle_path = create_bundle(tmp_path / "bundle")
+    data = _manifest(bundle_path)
+    data["files"][".cache/huggingface/model.bin"] = "0" * 64
+    _write_manifest(bundle_path, data)
+
+    with pytest.raises(RuntimeContractError, match="outside the runtime namespaces"):
+        load_kitten2_bundle(bundle_path)
+
+
+def test_requires_metadata_for_each_voice(tmp_path: Path) -> None:
+    bundle_path = create_bundle(tmp_path / "bundle")
+    data = _manifest(bundle_path)
+    data["files"].pop("voices/Bruno.meta.json")
+    _write_manifest(bundle_path, data)
+
+    with pytest.raises(RuntimeContractError, match="voice metadata is not declared"):
+        load_kitten2_bundle(bundle_path)
+
+
 def test_rejects_missing_corrupt_and_undeclared_files(tmp_path: Path) -> None:
     bundle_path = create_bundle(tmp_path / "missing")
     (bundle_path.parent / "lm/lm.onnx").unlink()
@@ -110,11 +130,11 @@ def test_rejects_external_data_without_adjacent_graph(tmp_path: Path) -> None:
     bundle_path = create_bundle(tmp_path / "bundle")
     bundle = bundle_path.parent
     source = bundle / "lm/lm.ternary-exact-int8.onnx.data"
-    target = bundle / "orphan.onnx.data"
+    target = bundle / "voices/orphan.onnx.data"
     source.rename(target)
     data = _manifest(bundle_path)
     data["files"].pop("lm/lm.ternary-exact-int8.onnx.data")
-    data["files"]["orphan.onnx.data"] = hashlib.sha256(target.read_bytes()).hexdigest()
+    data["files"]["voices/orphan.onnx.data"] = hashlib.sha256(target.read_bytes()).hexdigest()
     _write_manifest(bundle_path, data)
 
     with pytest.raises(RuntimeContractError, match="external ONNX data must be adjacent"):

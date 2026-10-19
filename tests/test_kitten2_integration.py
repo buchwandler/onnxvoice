@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from _kitten2_fixture import create_bundle
+from _kitten2_fixture import CURRENT_VOICES, create_bundle
 
 import onnxvoice.manager as manager_module
 from onnxvoice import Kitten2Adapter, OnnxVoice, registered_systems
@@ -40,8 +40,8 @@ def _catalog_for_bundle(bundle_path: Path) -> dict[str, Any]:
                 "name": "KittenTTS 2 ONNX",
                 "layout": "kitten2-onnx-bundle-v1",
                 "sample_rate": 24000,
-                "default_voice": "Bruno",
-                "voices": ["Bruno"],
+                "default_voice": bundle["default_voice"],
+                "voices": sorted(bundle["voices"]),
                 "source": {
                     "provider": "huggingface",
                     "repository": "example/kitten2-bundle",
@@ -69,14 +69,15 @@ def test_kitten2_is_registered_and_exported() -> None:
 def test_local_open_uses_native_adapter_without_creating_sessions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bundle_path = create_bundle(tmp_path / "bundle")
+    bundle_path = create_bundle(tmp_path / "bundle", voice_names=CURRENT_VOICES)
     monkeypatch.setattr(manager_module.AssetStore, "__init__", _forbidden)
     monkeypatch.setattr(manager_module.CatalogClient, "__init__", _forbidden)
 
     runtime = OnnxVoice.open_local(system="kitten2", files={"bundle": bundle_path})
     try:
         assert isinstance(runtime, Kitten2Adapter)
-        assert runtime.voices == ("Bruno",)
+        assert runtime.voices == CURRENT_VOICES
+        assert "Kiki" in runtime.voices
         assert runtime.default_voice == "Bruno"
         assert runtime.default_preset == "stable"
         assert runtime.sample_rate == 24000
@@ -105,7 +106,7 @@ def test_single_file_import_rejects_kitten2(tmp_path: Path) -> None:
 def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bundle_path = create_bundle(tmp_path / "upstream")
+    bundle_path = create_bundle(tmp_path / "upstream", voice_names=CURRENT_VOICES)
     catalog_path = tmp_path / "catalog.json"
     catalog_path.write_text(json.dumps(_catalog_for_bundle(bundle_path)), encoding="utf-8")
     manager = OnnxVoice(
@@ -121,6 +122,7 @@ def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
 
     monkeypatch.setattr(manager_module.AssetStore, "_materialize_artifact", materialize)
     installation = manager.install("kitten2:kitten-tts-v2")
+    assert installation.voices == CURRENT_VOICES
     installed_names = {artifact.filename for artifact in installation.artifacts}
     assert "decoder/mel2wav/mel2wav.onnx.data" in installed_names
     assert "decoder/mel2wav/mel2wav.onnx" in installed_names
@@ -133,6 +135,7 @@ def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
     try:
         assert isinstance(runtime, Kitten2Adapter)
         assert runtime.bundle.root == installation.path
+        assert runtime.default_voice == "Bruno"
         assert runtime._sessions == {}
     finally:
         runtime.close()

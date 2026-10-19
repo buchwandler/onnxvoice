@@ -69,6 +69,7 @@ POCKET_QUALIFIED_ROLES = frozenset(
 _KITTEN2_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _KITTEN2_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _KITTEN2_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_KITTEN2_RUNTIME_NAMESPACES = frozenset({"decoder", "lm", "speaker", "tokenizer", "voices"})
 DEFAULT_SOURCES = {
     "piper": "https://raw.githubusercontent.com/buchwandler/piper-onnx-voices/main/catalog/voices.json",
     "kokoro": "https://raw.githubusercontent.com/buchwandler/kokoro-onnx-models/main/catalog/models.json",
@@ -3192,6 +3193,11 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
                 validate_relative_path(path, field_name="Kitten2 artifact path")
             except ValueError as exc:
                 raise CatalogError(f"{bundle_id}/{role}: {exc}") from exc
+            if role == "asset" and path.split("/", 1)[0] not in _KITTEN2_RUNTIME_NAMESPACES:
+                raise CatalogError(
+                    f"{bundle_id}: artifact path {path!r} is outside the Kitten2 runtime namespaces; "
+                    "upstream bundle manifest must be regenerated cleanly"
+                )
             if path in paths:
                 raise CatalogError(f"{bundle_id}: duplicate artifact path {path!r}")
             paths.add(path)

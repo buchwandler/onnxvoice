@@ -23,6 +23,7 @@ DEFAULT_LICENSE = "stellon-labs-community-license"
 USER_AGENT = "onnxvoice-kitten2-catalog"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_RUNTIME_NAMESPACES = frozenset({"decoder", "lm", "speaker", "tokenizer", "voices"})
 _REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -123,6 +124,11 @@ def build_catalog(
         except ValueError as exc:
             raise CatalogError(str(exc)) from exc
         _require(
+            path.split("/", 1)[0] in _RUNTIME_NAMESPACES,
+            f"Kitten2 artifact path {path!r} is outside the runtime namespaces; "
+            "upstream bundle manifest must be regenerated cleanly",
+        )
+        _require(
             isinstance(sha256, str) and _SHA256_RE.fullmatch(sha256) is not None,
             f"Invalid SHA-256 for Kitten2 artifact {path!r}",
         )
@@ -132,6 +138,31 @@ def build_catalog(
     _require(
         isinstance(voices, Mapping) and bool(voices), "Kitten2 voices must be a non-empty object"
     )
+    declared_files = set(files)
+    for voice_name, raw_path in voices.items():
+        _require(
+            isinstance(voice_name, str) and _SAFE_ID_RE.fullmatch(voice_name) is not None,
+            f"Unsafe Kitten2 voice name: {voice_name!r}",
+        )
+        try:
+            voice_path = validate_relative_path(raw_path, field_name=f"voices.{voice_name}")
+        except ValueError as exc:
+            raise CatalogError(str(exc)) from exc
+        _require(
+            voice_path.split("/", 1)[0] == "voices",
+            f"Kitten2 voice path must be under voices/: {voice_path}",
+        )
+        _require(
+            voice_path in declared_files,
+            f"Kitten2 voice file is not declared: {voice_path}; "
+            "upstream bundle manifest must be regenerated cleanly",
+        )
+        metadata_path = Path(voice_path).with_suffix(".meta.json").as_posix()
+        _require(
+            metadata_path in declared_files,
+            f"Kitten2 voice metadata is not declared: {metadata_path}; "
+            "upstream bundle manifest must be regenerated cleanly",
+        )
     default_voice = manifest.get("default_voice")
     _require(
         isinstance(default_voice, str) and default_voice in voices,
