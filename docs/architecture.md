@@ -35,6 +35,12 @@ InferenceResult(audio, sample_rate, timings, outputs, metadata)
 The Kokoro adapter dispatches from catalog runtime metadata. A single layout owns one ONNX session. `split-onnx-v1` owns prosody, curves, and decoder sessions and keeps source generation, duration expansion, and STFT preparation inside OnnxVoice. Both layouts expose the same `infer(token_ids, style=..., speed=..., seed=...)` contract.
 The Kitten adapter accepts model-ready token IDs, a caller-selected style tensor, and speed. It validates the graph ABI, applies the required 5,000-sample output trim, and returns mono audio at 24 kHz; KittenSynth remains responsible for text processing and style selection.
 
+### Semantic text and model-specific protocols
+
+ONNXVoice does not own semantic text normalization. Callers prepare the linguistic content they want spoken, including number, date, currency, abbreviation, unit, language, and G2P policy. System adapters may inspect or encode checkpoint-specific textual protocols, such as control markup, special tokens, reference prompts, and tokenizer framing, but those operations must not silently rewrite caller content.
+
+The native KittenTTS 2 adapter therefore accepts final text, passes it unchanged to the bundle tokenizer, and only inspects supported emotion, vocal-event, and emphasis markup to choose expression conditioning. The markup remains literal tokenizer input. This is model-specific runtime behavior, not a general ONNXVoice text frontend.
+
 The Chatterbox adapter owns its `speech_encoder`, `embed_tokens`, `language_model`, and `conditional_decoder` graph sessions, plus reference-state preparation and token generation. A frontend such as ChatterboxSynth owns text tokenization, reference WAV decoding/resampling, and the public synthesis API; see [Chatterbox](systems/chatterbox.md) for the exact bundle and input contract.
 
 ## Installation metadata

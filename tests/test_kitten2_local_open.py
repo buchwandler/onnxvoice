@@ -57,7 +57,10 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
     assert installation.sample_rate == 24000
     assert installation.voices == ("Bruno",)
     assert installation.default_voice == "Bruno"
-    assert installation.metadata["runtime"] == {"layout": "kitten2-onnx-bundle-v1", "sample_rate": 24000}
+    assert installation.metadata["runtime"] == {
+        "layout": "kitten2-onnx-bundle-v1",
+        "sample_rate": 24000,
+    }
     assert "decoder/mel2wav/mel2wav.onnx.data" in filenames
     graph = next(
         artifact
@@ -70,7 +73,9 @@ def test_open_local_uses_bundle_root_and_preserves_nested_artifacts(
         if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
     )
     assert external_data.path == Path(str(graph.path) + ".data")
-    assert all(artifact.path.is_relative_to(installation.path) for artifact in installation.artifacts)
+    assert all(
+        artifact.path.is_relative_to(installation.path) for artifact in installation.artifacts
+    )
     assert adapter_args["kwargs"]["providers"] == "cpu"
     assert adapter_args["kwargs"]["provider_options"] == [{"device_id": "2"}]
 

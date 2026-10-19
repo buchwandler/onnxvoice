@@ -72,7 +72,9 @@ def test_native_parser_preserves_pinned_nested_artifacts_and_provenance(tmp_path
         "sample_rate": 24000,
     }
     artifact = next(
-        artifact for artifact in item.artifacts if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
+        artifact
+        for artifact in item.artifacts
+        if artifact.filename == "decoder/mel2wav/mel2wav.onnx.data"
     )
     assert artifact.role == "asset"
     expected_sha = json.loads((tmp_path / "bundle.json").read_text(encoding="utf-8"))["files"][
@@ -85,7 +87,9 @@ def test_native_parser_preserves_pinned_nested_artifacts_and_provenance(tmp_path
     )
 
 
-def test_catalog_client_registers_native_source_and_rejects_mutable_revision(tmp_path: Path) -> None:
+def test_catalog_client_registers_native_source_and_rejects_mutable_revision(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "catalog.json"
     path.write_text(json.dumps(_catalog(tmp_path / "bundle", revision="main")), encoding="utf-8")
     assert DEFAULT_SOURCES["kitten2"].endswith("kitten2-onnx-bundles/main/catalog/bundles.json")
@@ -124,9 +128,7 @@ def test_catalog_client_registers_native_source_and_rejects_mutable_revision(tmp
         ),
     ],
 )
-def test_catalog_rejects_malformed_records(
-    tmp_path: Path, change: Any, message: str
-) -> None:
+def test_catalog_rejects_malformed_records(tmp_path: Path, change: Any, message: str) -> None:
     catalog = _catalog(tmp_path)
     if message == "sample_rate must be 24000":
         catalog["bundles"]["kitten-tts-v2"]["sample_rate"] = 16000
@@ -176,7 +178,9 @@ def test_revision_resolution_and_catalog_build_pin_manifest_artifacts(
     assert kitten2_catalog_tools.resolve_revision(_REPOSITORY, _REVISION) == _REVISION
 
 
-def test_catalog_verify_is_offline_and_rejects_source_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_catalog_verify_is_offline_and_rejects_source_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     catalog = _catalog(tmp_path / "bundle")
     source = kitten2_catalog_tools.build_source(catalog)
     catalog_path = tmp_path / "catalog.json"
@@ -195,35 +199,43 @@ def test_catalog_verify_is_offline_and_rejects_source_drift(tmp_path: Path, monk
         kitten2_catalog_tools.load_catalog(catalog_path, source_path)
 
 
-def test_cli_build_and_verify_kitten2_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_build_and_verify_kitten2_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     catalog = _catalog(tmp_path / "bundle")
     monkeypatch.setattr(kitten2_catalog_tools, "build_catalog", lambda **_kwargs: catalog)
     catalog_path = tmp_path / "catalog.json"
     source_path = tmp_path / "source.json"
-    assert cli_module.main(
-        [
-            "catalog",
-            "kitten2",
-            "build",
-            "--repository",
-            _REPOSITORY,
-            "--revision",
-            "main",
-            "--output",
-            str(catalog_path),
-            "--source-output",
-            str(source_path),
-        ]
-    ) == 0
-    assert cli_module.main(
-        [
-            "catalog",
-            "kitten2",
-            "verify",
-            "--catalog",
-            str(catalog_path),
-            "--source",
-            str(source_path),
-        ]
-    ) == 0
+    assert (
+        cli_module.main(
+            [
+                "catalog",
+                "kitten2",
+                "build",
+                "--repository",
+                _REPOSITORY,
+                "--revision",
+                "main",
+                "--output",
+                str(catalog_path),
+                "--source-output",
+                str(source_path),
+            ]
+        )
+        == 0
+    )
+    assert (
+        cli_module.main(
+            [
+                "catalog",
+                "kitten2",
+                "verify",
+                "--catalog",
+                str(catalog_path),
+                "--source",
+                str(source_path),
+            ]
+        )
+        == 0
+    )
     assert json.loads(catalog_path.read_text(encoding="utf-8")) == catalog

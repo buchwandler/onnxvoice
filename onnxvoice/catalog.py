@@ -3063,7 +3063,6 @@ def filter_items(
     return result
 
 
-
 def _parse_kitten2(data: Any) -> list[CatalogItem]:
     """Parse pinned Kitten2 bundle catalog records without adapting the legacy Kitten schema."""
     if not isinstance(data, Mapping) or set(data) != {"schema", "kind", "bundles"}:
@@ -3097,7 +3096,9 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
             "artifacts",
         }
         if not required_fields.issubset(raw) or set(raw) - (required_fields | {"metadata"}):
-            raise CatalogError(f"{bundle_id}: Kitten2 bundle fields do not match the catalog contract")
+            raise CatalogError(
+                f"{bundle_id}: Kitten2 bundle fields do not match the catalog contract"
+            )
         if raw.get("id") != bundle_id:
             raise CatalogError(f"{bundle_id}: bundle map key does not match id")
         layout = raw.get("layout")
@@ -3177,7 +3178,9 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
         bundle_count = 0
         for index, item in enumerate(raw_artifacts):
             if not isinstance(item, Mapping) or set(item) != {"role", "path", "sha256"}:
-                raise CatalogError(f"{bundle_id}: artifact {index} must contain role, path, and sha256")
+                raise CatalogError(
+                    f"{bundle_id}: artifact {index} must contain role, path, and sha256"
+                )
             role = item.get("role")
             path = item.get("path")
             sha256 = item.get("sha256")
@@ -3221,13 +3224,12 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
             )
         if bundle_count != 1:
             raise CatalogError(f"{bundle_id}: exactly one bundle.json artifact is required")
-        if not all(any(path.startswith(prefix) for path in paths) for prefix in (
-            "decoder/", "lm/", "speaker/", "tokenizer/", "voices/"
-        )):
+        if not all(
+            any(path.startswith(prefix) for path in paths)
+            for prefix in ("decoder/", "lm/", "speaker/", "tokenizer/", "voices/")
+        ):
             raise CatalogError(f"{bundle_id}: incomplete Kitten2 component artifact coverage")
-        graph_directories = {
-            str(Path(path).parent) for path in paths if path.endswith(".onnx")
-        }
+        graph_directories = {str(Path(path).parent) for path in paths if path.endswith(".onnx")}
         for path in paths:
             if path.endswith(".onnx.data") and str(Path(path).parent) not in graph_directories:
                 raise CatalogError(f"{bundle_id}: external data is not adjacent to a graph: {path}")

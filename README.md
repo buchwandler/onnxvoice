@@ -72,18 +72,18 @@ finally:
 
 ## Supported systems
 
-| System     | Built-in adapter | Catalog | Named voices                 |
-| ---------- | ---------------- | ------- | ---------------------------- |
-| Piper      | Yes              | Yes     | Yes                          |
-| Kokoro     | Yes              | Yes     | Yes                          |
-| Pocket     | Yes              | Yes     | Catalog-dependent            |
-| Supertonic | Yes              | Yes     | Yes                          |
-| Kitten     | Yes              | Yes     | Yes                          |
-| KittenTTS 2 | Yes              | Yes     | Catalog child voices          |
-| Inflect    | Yes              | Yes     | Fixed `default` voice        |
-| Sopro      | Yes (partial)    | Yes     | Zero-shot reference audio    |
-| Qwen3-TTS  | Yes              | Yes     | No; VoiceDesign/Base bundles |
-| Chatterbox | Yes              | Yes     | Zero-shot reference audio    |
+| System      | Built-in adapter | Catalog | Named voices                 |
+| ----------- | ---------------- | ------- | ---------------------------- |
+| Piper       | Yes              | Yes     | Yes                          |
+| Kokoro      | Yes              | Yes     | Yes                          |
+| Pocket      | Yes              | Yes     | Catalog-dependent            |
+| Supertonic  | Yes              | Yes     | Yes                          |
+| Kitten      | Yes              | Yes     | Yes                          |
+| KittenTTS 2 | Yes              | Yes     | Catalog child voices         |
+| Inflect     | Yes              | Yes     | Fixed `default` voice        |
+| Sopro       | Yes (partial)    | Yes     | Zero-shot reference audio    |
+| Qwen3-TTS   | Yes              | Yes     | No; VoiceDesign/Base bundles |
+| Chatterbox  | Yes              | Yes     | Zero-shot reference audio    |
 
 Sopro currently provides bundle management, graph inspection, tokenization, and reference preparation only. End-to-end Python synthesis remains capability-gated pending the real native-runtime and parity gate; see [Sopro support](docs/systems/sopro.md).
 Catalog contents determine which named voices are available. Discovery does not depend on a separate capability list. Adapters execute system-specific model contracts and do not imply text normalization or phonemization support.

@@ -58,7 +58,9 @@ class Kitten2LanguageModel:
                 raise ValueError("Embedding array dtype differs from LM metadata")
         elif self.input_mode == "input_ids":
             if self.meta.get("embedding_file") is not None:
-                raise ValueError("input_ids LM metadata must not reference a separate embedding table")
+                raise ValueError(
+                    "input_ids LM metadata must not reference a separate embedding table"
+                )
             self.embeddings = None
             self.embedding_storage_dtype = None
         else:
@@ -98,6 +100,7 @@ class Kitten2LanguageModel:
         if speaker_embedding.ndim == 1:
             speaker_embedding = speaker_embedding[None, :]
         return self.speaker_session.run({"speaker_embedding": speaker_embedding})[0]
+
     def _embed(
         self,
         token_ids: np.ndarray,
@@ -183,6 +186,7 @@ class Kitten2LanguageModel:
         speaker_embedding: np.ndarray | None = None,
         settings: SamplingSettings | None = None,
         seed: int | None = None,
+        rng: np.random.Generator | None = None,
         stop_ids: set[int] | None = None,
         logits_callback: Callable[[int, np.ndarray], None] | None = None,
     ) -> GenerationResult:
@@ -195,7 +199,7 @@ class Kitten2LanguageModel:
             return GenerationResult(raw_ids=[], s3_ids=[])
 
         settings = settings or SamplingSettings()
-        rng = np.random.default_rng(seed)
+        rng = np.random.default_rng(seed) if rng is None else rng
         history = [int(token) for token in prompt_ids]
         prompt_length = len(history)
         logits, past = self.step(
@@ -231,5 +235,3 @@ class Kitten2LanguageModel:
             if token_map.audio_id_base <= token < token_map.audio_id_end
         ]
         return GenerationResult(raw_ids=raw_ids, s3_ids=s3_ids)
-
-

@@ -11,8 +11,10 @@ from ..errors import CapabilityError, RuntimeContractError
 from ..runtime import OnnxSession, resolve_providers
 from ..types import InferenceResult, Installation
 from .base import SystemAdapter
+from .kitten2_chunking import split_kitten2_text
 from .kitten2_contract import load_kitten2_bundle
 from .kitten2_decoder import Kitten2Decoder, _cpu_session_options
+from .kitten2_expression import inspect_expression_markup
 from .kitten2_frontend import Kitten2Frontend, PreparedVoice, build_generation_prompt
 from .kitten2_generation import Kitten2LanguageModel
 from .kitten2_sampling import sampling_settings_from_config
@@ -119,6 +121,8 @@ class Kitten2Adapter(SystemAdapter):
         preset: str | None = None,
         seed: int | None = None,
         max_new_tokens: int = 512,
+        use_emotion: bool | None = None,
+        use_reference_prompt: bool | None = None,
     ) -> InferenceResult:
         if max_new_tokens < 1:
             raise ValueError("max_new_tokens must be positive")
@@ -126,40 +130,68 @@ class Kitten2Adapter(SystemAdapter):
         resolved_preset = preset or self.default_preset
         if resolved_preset not in self.decode_presets:
             available = ", ".join(sorted(self.decode_presets))
-            raise ValueError(f"Unknown decode preset {resolved_preset!r}; available presets: {available}")
+            raise ValueError(
+                f"Unknown decode preset {resolved_preset!r}; available presets: {available}"
+            )
         prepared = self._prepared_voices.get(resolved_voice)
         if prepared is None:
             prepared = self.frontend.prepare_voice(resolved_voice)
             self._prepared_voices[resolved_voice] = prepared
-        _, text_ids = self.frontend.encode_text(text)
-        reference_prefix = (
-            prepared.reference_prefix
-            if self.manifest["generation"].get("use_reference_prompt", True)
-            else None
+        generation = self.manifest["generation"]
+        chunks = split_kitten2_text(
+            text,
+            int(generation.get("chunk_chars", 0)),
+            int(generation.get("chunk_min_chars", 0)),
         )
-        prompt_ids = build_generation_prompt(
-            self.token_map, text_ids, reference_prefix=reference_prefix
+        targets = [self.frontend.prepare_target(chunk) for chunk in chunks]
+        has_expression = (
+            targets[0].has_expression
+            if len(targets) == 1
+            else inspect_expression_markup(text).has_expression
         )
-        generated = self._get_language_model().generate(
-            prompt_ids,
-            token_map=self.token_map,
-            max_new_tokens=max_new_tokens,
-            speaker_embedding=prepared.speaker_embedding,
-            settings=sampling_settings_from_config(self.manifest, resolved_preset),
-            seed=seed,
+        configured_reference_prompt = generation.get("use_reference_prompt", True)
+        resolved_use_reference_prompt = (
+            configured_reference_prompt if use_reference_prompt is None else use_reference_prompt
         )
-        if not generated.s3_ids:
-            raise RuntimeContractError("LM generation produced no valid S3 speech tokens")
-        waveform = self._get_decoder().decode(generated.s3_ids, prepared.conditioning, seed=seed)
-        if waveform is None:
-            raise RuntimeContractError("S3 decoder produced no waveform")
-        audio = np.asarray(waveform, dtype=np.float32)
-        if audio.ndim == 2 and audio.shape[0] == 1:
-            audio = audio[0]
-        if audio.ndim != 1:
-            raise RuntimeContractError(f"decoder waveform must be mono, found shape {audio.shape}")
-        if not np.all(np.isfinite(audio)):
-            raise RuntimeContractError("decoder waveform contains NaN or infinite samples")
+        reference_prefix = prepared.reference_prefix if resolved_use_reference_prompt else None
+        resolved_use_emotion = has_expression if use_emotion is None else use_emotion
+        emotion_ids = self.frontend.emotion_control_ids if resolved_use_emotion else None
+        language_model = self._get_language_model()
+        decoder = self._get_decoder()
+        settings = sampling_settings_from_config(self.manifest, resolved_preset)
+        rng = np.random.default_rng(seed)
+        audio_chunks: list[np.ndarray] = []
+        for target in targets:
+            prompt_ids = build_generation_prompt(
+                self.token_map,
+                target.token_ids,
+                reference_prefix=reference_prefix,
+                emotion_ids=emotion_ids,
+            )
+            generated = language_model.generate(
+                prompt_ids,
+                token_map=self.token_map,
+                max_new_tokens=max_new_tokens,
+                speaker_embedding=prepared.speaker_embedding,
+                settings=settings,
+                rng=rng,
+            )
+            if not generated.s3_ids:
+                raise RuntimeContractError("LM generation produced no valid S3 speech tokens")
+            waveform = decoder.decode(generated.s3_ids, prepared.conditioning, seed=seed)
+            if waveform is None:
+                raise RuntimeContractError("S3 decoder produced no waveform")
+            audio = np.asarray(waveform, dtype=np.float32)
+            if audio.ndim == 2 and audio.shape[0] == 1:
+                audio = audio[0]
+            if audio.ndim != 1:
+                raise RuntimeContractError(
+                    f"decoder waveform must be mono, found shape {audio.shape}"
+                )
+            if not np.all(np.isfinite(audio)):
+                raise RuntimeContractError("decoder waveform contains NaN or infinite samples")
+            audio_chunks.append(audio)
+        audio = np.concatenate(audio_chunks)
         return InferenceResult(
             audio=audio,
             sample_rate=self.sample_rate,
@@ -170,6 +202,8 @@ class Kitten2Adapter(SystemAdapter):
                 "seed": seed,
                 "max_new_tokens": max_new_tokens,
                 "layout": "kitten2-onnx-bundle-v1",
+                "expression_conditioning": resolved_use_emotion,
+                "chunk_count": len(chunks),
             },
         )
 
@@ -227,7 +261,9 @@ class Kitten2Adapter(SystemAdapter):
         if metadata.get("runtime_memory_profile", "default") != "low-memory-exact-ternary":
             return self.session_options
         if metadata.get("runtime_provider") != "CPUExecutionProvider":
-            raise CapabilityError("Low-memory exact-ternary Kitten2 LM requires CPUExecutionProvider")
+            raise CapabilityError(
+                "Low-memory exact-ternary Kitten2 LM requires CPUExecutionProvider"
+            )
         selected = resolve_providers(self.providers)
         if selected != ("CPUExecutionProvider",):
             raise CapabilityError("Low-memory exact-ternary Kitten2 LM requires CPU only")

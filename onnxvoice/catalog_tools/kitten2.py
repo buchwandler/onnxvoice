@@ -105,7 +105,10 @@ def build_catalog(
     _require(layout == "kitten2-onnx-bundle-v1", "Unsupported Kitten2 bundle layout")
     _require(type(sample_rate) is int and sample_rate == 24000, "Kitten2 sample_rate must be 24000")
     files = manifest.get("files")
-    _require(isinstance(files, Mapping) and bool(files), "Kitten2 bundle files must be a non-empty object")
+    _require(
+        isinstance(files, Mapping) and bool(files),
+        "Kitten2 bundle files must be a non-empty object",
+    )
     artifacts = [
         {
             "role": "bundle",
@@ -126,7 +129,9 @@ def build_catalog(
         artifacts.append({"role": "asset", "path": path, "sha256": sha256})
 
     voices = manifest.get("voices")
-    _require(isinstance(voices, Mapping) and bool(voices), "Kitten2 voices must be a non-empty object")
+    _require(
+        isinstance(voices, Mapping) and bool(voices), "Kitten2 voices must be a non-empty object"
+    )
     default_voice = manifest.get("default_voice")
     _require(
         isinstance(default_voice, str) and default_voice in voices,

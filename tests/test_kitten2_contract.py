@@ -119,3 +119,24 @@ def test_rejects_external_data_without_adjacent_graph(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeContractError, match="external ONNX data must be adjacent"):
         load_kitten2_bundle(bundle_path)
+
+
+@pytest.mark.parametrize("emotion_control", ["", " \t\n"])
+def test_rejects_empty_emotion_control(tmp_path: Path, emotion_control: str) -> None:
+    bundle_path = create_bundle(tmp_path / "bundle")
+    data = _manifest(bundle_path)
+    data["generation"]["emotion_control"] = emotion_control
+    _write_manifest(bundle_path, data)
+
+    with pytest.raises(RuntimeContractError, match="emotion_control must be a non-empty string"):
+        load_kitten2_bundle(bundle_path)
+
+
+def test_requires_tokenizer_json_asset(tmp_path: Path) -> None:
+    bundle_path = create_bundle(tmp_path / "bundle")
+    data = _manifest(bundle_path)
+    data["tokenizer_assets"].remove("tokenizer.json")
+    _write_manifest(bundle_path, data)
+
+    with pytest.raises(RuntimeContractError, match="tokenizer_assets must include tokenizer.json"):
+        load_kitten2_bundle(bundle_path)

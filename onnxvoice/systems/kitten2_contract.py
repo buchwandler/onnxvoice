@@ -106,14 +106,15 @@ def _validate_manifest(
         (decoder, "mel2wav_metadata", "decoder.mel2wav_metadata"),
     )
     referenced = {
-        _referenced_file(section.get(key), label, files)
-        for section, key, label in file_fields
+        _referenced_file(section.get(key), label, files) for section, key, label in file_fields
     }
 
     tokenizer = _relative(data.get("tokenizer"), "tokenizer")
     raw_tokenizer_assets = data.get("tokenizer_assets")
     if not isinstance(raw_tokenizer_assets, list) or not raw_tokenizer_assets:
         raise _invalid("tokenizer_assets must be a non-empty list")
+    if "tokenizer.json" not in raw_tokenizer_assets:
+        raise _invalid("tokenizer_assets must include tokenizer.json")
     for name in raw_tokenizer_assets:
         asset_path = _relative(name, "tokenizer asset")
         relative = f"{tokenizer}/{asset_path}"
@@ -194,14 +195,18 @@ def _validate_manifest(
         raise _invalid("token_map.final_seg_id must equal audio_id_base + num_audio_tokens")
 
     generation = _mapping(data.get("generation"), "generation")
-    if "use_reference_prompt" in generation and type(generation["use_reference_prompt"]) is not bool:
+    if (
+        "use_reference_prompt" in generation
+        and type(generation["use_reference_prompt"]) is not bool
+    ):
         raise _invalid("generation.use_reference_prompt must be a boolean")
     for key in ("repetition_window", "chunk_chars", "chunk_min_chars"):
         if key in generation:
             _positive_int(generation[key], f"generation.{key}")
-    if "emotion_control" in generation and not isinstance(generation["emotion_control"], str):
-        raise _invalid("generation.emotion_control must be a string")
-
+    if "emotion_control" in generation:
+        emotion_control = generation["emotion_control"]
+        if not isinstance(emotion_control, str) or not emotion_control.strip():
+            raise _invalid("generation.emotion_control must be a non-empty string")
 
     actual_files: set[str] = set()
     for path in root.rglob("*"):
@@ -219,9 +224,7 @@ def _validate_manifest(
         raise _invalid(f"file inventory mismatch; missing={missing}, undeclared={extra}")
 
     graph_directories = {
-        Path(relative).parent.as_posix()
-        for relative in files
-        if relative.endswith(".onnx")
+        Path(relative).parent.as_posix() for relative in files if relative.endswith(".onnx")
     }
     for relative in files:
         if (

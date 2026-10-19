@@ -62,4 +62,3 @@ def load_decoder_reference(path: str | Path) -> DecoderReference:
     if not np.array_equal(arrays["flow_mel"], arrays["mel2wav_input"]):
         raise ValueError("The captured mel2wav input differs from the flow output mel")
     return DecoderReference(arrays=arrays, metadata=metadata)
-

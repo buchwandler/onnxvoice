@@ -387,7 +387,9 @@ class OnnxVoice:
             installation_sample_rate = 24000
         installation = Installation(
             system=installation_system,
-            id=f"local-{kitten2_bundle.root.name}" if kitten2_bundle is not None else f"local-{Path(model_artifact.filename).stem}",
+            id=f"local-{kitten2_bundle.root.name}"
+            if kitten2_bundle is not None
+            else f"local-{Path(model_artifact.filename).stem}",
             kind="external",
             path=kitten2_bundle.root if kitten2_bundle is not None else model_artifact.path.parent,
             artifacts=tuple(local_artifacts),

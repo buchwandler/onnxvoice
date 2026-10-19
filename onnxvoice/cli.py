@@ -278,11 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
     qwen3_verify_parser.add_argument("--catalog", type=Path, required=True)
     qwen3_verify_parser.add_argument("--source", type=Path)
 
-
-    kitten2_parser = catalog_sub.add_parser("kitten2", help="Manage the native KittenTTS 2 bundle catalog")
+    kitten2_parser = catalog_sub.add_parser(
+        "kitten2", help="Manage the native KittenTTS 2 bundle catalog"
+    )
     kitten2_sub = kitten2_parser.add_subparsers(dest="catalog_action", required=True)
-    kitten2_build_parser = kitten2_sub.add_parser("build", help="Build a pinned KittenTTS 2 catalog")
-    kitten2_build_parser.add_argument("--repository", default=kitten2_catalog_tools.DEFAULT_REPOSITORY)
+    kitten2_build_parser = kitten2_sub.add_parser(
+        "build", help="Build a pinned KittenTTS 2 catalog"
+    )
+    kitten2_build_parser.add_argument(
+        "--repository", default=kitten2_catalog_tools.DEFAULT_REPOSITORY
+    )
     kitten2_build_parser.add_argument("--revision", default=kitten2_catalog_tools.DEFAULT_REVISION)
     kitten2_build_parser.add_argument("--output", type=Path, required=True)
     kitten2_build_parser.add_argument("--source-output", type=Path, required=True)

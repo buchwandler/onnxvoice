@@ -72,7 +72,7 @@ mobile = []  # Convenience marker for platform-managed mobile providers.
 huggingface = ["huggingface_hub>=0.24,<2"]
 pocket = ["huggingface_hub>=0.24,<2", "safetensors>=0.4,<1"]
 inno = ["scipy>=1.10", "praat-parselmouth>=0.4.7"]
-kitten2 = ["kitten-text-processing==0.1.0", "transformers==4.57.1"]
+kitten2 = ["tokenizers>=0.22,<0.23"]
 inno-export = ["onnx>=1.16", "safetensors>=0.4", "torch>=2.0"]
 dev = [
   "pytest>=8",

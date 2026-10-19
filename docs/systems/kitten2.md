@@ -12,9 +12,9 @@ The KittenTTS 2 text frontend is optional. Install it together with an ONNX Runt
 python -m pip install "onnxvoice[kitten2,cpu]"
 ```
 
-For a compatible GPU runtime, use `onnxvoice[kitten2,gpu]`. The `kitten2` extra pins the frontend dependencies used by the validated implementation: `kitten-text-processing==0.1.0` and `transformers==4.57.1`. The `cpu` and `gpu` extras select ONNX Runtime; the KittenTTS 2 frontend extra alone does not install an inference provider.
+The `kitten2` extra installs only `tokenizers>=0.22,<0.23`, the lightweight runtime used to execute the bundle's `tokenizer/tokenizer.json`. The `cpu` and `gpu` extras select ONNX Runtime; use `onnxvoice[kitten2,gpu]` with a compatible GPU runtime. The KittenTTS 2 extra alone does not install an inference provider.
 
-Tokenizer assets are loaded from the installed bundle with `local_files_only=True`. Text inference does not download tokenizer or model files at runtime. The first text inference requires the `kitten2` extra; bundle installation and catalog maintenance do not.
+Text inference executes the bundled `tokenizer/tokenizer.json` locally and never downloads tokenizer or model files. The `tokenizers` dependency is loaded only when Kitten2 text synthesis is requested, so importing `onnxvoice` and using other systems does not require the Kitten2 extra.
 
 ## Managed and local use
 
@@ -36,7 +36,19 @@ with manager.open(installation, providers="cpu") as runtime:
     )
 ```
 
-`infer_text()` accepts text, an optional manifest voice, a decode preset, a seed, and a generation limit. It returns the normal `InferenceResult` with finite mono `float32` audio at 24 kHz. The adapter exposes read-only `voices`, `default_voice`, `default_preset`, `decode_presets`, and `sample_rate` properties. `infer(token_ids)` is not supported for this text-level multi-stage system and raises `CapabilityError` directing callers to `infer_text()`.
+`infer_text()` accepts caller-prepared text, an optional manifest voice, a decode preset, a seed, a generation limit, `use_emotion`, and `use_reference_prompt`. It returns the normal `InferenceResult` with finite mono `float32` audio at 24 kHz. Its metadata reports resolved expression conditioning and chunk count. The adapter exposes read-only `voices`, `default_voice`, `default_preset`, `decode_presets`, and `sample_rate` properties. `infer(token_ids)` is not supported for this text-level multi-stage system and raises `CapabilityError` directing callers to `infer_text()`.
+
+## Text ownership and expression conditioning
+
+ONNXVoice does not normalize KittenTTS 2 text. It passes the caller's non-empty string to the bundled tokenizer unchanged, including punctuation, numbers, whitespace, and Unicode. Callers that need number, date, currency, abbreviation, unit, or other written-to-spoken conversion must do that before `infer_text()`.
+
+Kitten2 only inspects its supported model-specific expression markup: a known emotion tag such as `[joyful]`, a supported vocal event such as `<laugh>`, or a supported `(((emphasis)))` span. The markup remains in the tokenizer input. Recognized markup automatically enables the bundle's `generation.emotion_control` prompt IDs, inserted after the reference prefix and before `text_start`. Unknown markup is passed through unchanged and does not enable expression conditioning.
+
+`use_emotion=None` selects automatic detection, `True` forces the control prompt, and `False` disables it without changing text. `use_reference_prompt=None` follows `generation.use_reference_prompt` from the bundle, while `True` and `False` override that setting.
+
+## Long-form generation
+
+The runtime uses the bundle's `generation.chunk_chars` and `generation.chunk_min_chars` settings for Kitten2-specific chunking. Boundaries are selected from existing whitespace or punctuation where possible. Chunks preserve the original character sequence and expression markup. A single request-level random generator is shared across the generated chunks, so repeating a request with the same seed is deterministic without restarting the stream for each chunk.
 
 A complete local bundle can be opened without catalog or store access:
 
@@ -60,7 +72,7 @@ The bundle directory is derived from `bundle.json`. Every declared relative path
 
 `bundle.json` is authoritative for the runtime layout, sample rate, component paths and metadata, embedding file, tokenizer directory and assets, voice reference files, token IDs, decode presets, and generation defaults. The runtime requires layout `kitten2-onnx-bundle-v1` and sample rate `24000`.
 
-The bundle includes the language model, speaker projection, flow decoder, and mel-to-wave decoder, with their metadata. It also includes the LM embedding matrix, local tokenizer files, voice reference arrays and metadata, and any graph external-data files. The `files` object must enumerate every runtime asset other than `bundle.json` with a lowercase SHA-256 digest. The validator rejects unsafe paths, missing or extra files, hash mismatches, malformed metadata, invalid voice or preset defaults, malformed token maps, and non-adjacent `.onnx.data` files before creating ONNX sessions.
+The bundle includes the language model, speaker projection, flow decoder, and mel-to-wave decoder, with their metadata. It also includes the LM embedding matrix, `tokenizer/tokenizer.json`, any other declared tokenizer assets, voice reference arrays and metadata, and any graph external-data files. The `files` object must enumerate every runtime asset other than `bundle.json` with a lowercase SHA-256 digest. The validator rejects unsafe paths, missing or extra files, hash mismatches, malformed metadata, invalid voice or preset defaults, malformed token maps, empty `generation.emotion_control`, and non-adjacent `.onnx.data` files before creating ONNX sessions.
 
 The four ONNX sessions (`lm`, `speaker`, `flow`, and `mel2wav`) are created lazily. `runtime.diagnostics().sessions` reports the component sessions after they have been opened. `close()` releases created sessions and is safe to call repeatedly.
 
@@ -94,4 +106,6 @@ onnxvoice catalog kitten2 verify \
 
 A real-bundle CPU smoke test uses voice `Bruno`, preset `stable`, seed `7`, and `max_new_tokens=64`. It must produce valid finite mono speech at 24 kHz. Passing unit tests or successfully constructing ONNX sessions is not evidence that a real bundle synthesizes valid speech.
 
-The migration parity check compares this native implementation with the validated `kitten2-onnx` implementation using the same bundle, text, voice, preset, seed, and generation limit. Supply the out-of-band reference as a float32 NumPy array through `ONNXVOICE_KITTEN2_REFERENCE_AUDIO`; the resource-heavy test asserts equal shape and `numpy.testing.assert_allclose(rtol=1e-5, atol=1e-5)`. The ONNXVoice runtime and test do not import or depend on `kitten2_onnx`. On the current CPU bundle/text/seed run, all 55,200 samples matched exactly (maximum absolute error 0). The legacy `kitten` v0.8 adapter and its model/style/speed contract remain independent.
+The expression smoke uses `[joyful] I can (((hardly))) believe it! <laugh>` with the same CPU, voice, preset, seed, and token limit. It verifies finite mono float32 audio at 24 kHz and confirms `expression_conditioning` is enabled. The runtime rejects a request that produces no speech tokens before decoding.
+
+The migration parity check compares this native implementation with the validated `kitten2-onnx` implementation using the same bundle, raw text, voice, preset, seed, and generation limit. Supply the out-of-band reference as a float32 NumPy array through `ONNXVOICE_KITTEN2_REFERENCE_AUDIO`; the resource-heavy test asserts equal shape and `numpy.testing.assert_allclose(rtol=1e-5, atol=1e-5)`. The reference is generated with text normalization disabled. The ONNXVoice runtime and test do not import or depend on `kitten2_onnx`. The current CPU bundle/text/seed run matched all 52,320 samples exactly (maximum absolute error 0). The legacy `kitten` v0.8 adapter and its model/style/speed contract remain independent.

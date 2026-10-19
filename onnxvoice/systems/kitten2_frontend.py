@@ -9,8 +9,10 @@ from typing import Any
 
 import numpy as np
 
-from ..errors import OptionalDependencyError, RuntimeContractError
+from ..errors import RuntimeContractError
 from .kitten2_decoder_reference import load_decoder_reference
+from .kitten2_expression import inspect_expression_markup
+from .kitten2_tokenizer import Kitten2Tokenizer
 from .kitten2_tokens import TokenMap
 
 
@@ -60,6 +62,13 @@ def build_generation_prompt(
     ]
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedTarget:
+    text: str
+    token_ids: tuple[int, ...]
+    has_expression: bool
+
+
 @dataclass(frozen=True)
 class PreparedVoice:
     speaker_embedding: np.ndarray
@@ -72,39 +81,49 @@ class Kitten2Frontend:
         self.root = Path(root)
         self.manifest = manifest
         self.token_map = token_map
-        self._tokenizer: Any | None = None
-        self._normalize_text: Any | None = None
+        self._tokenizer: Kitten2Tokenizer | None = None
+        self._emotion_control_ids: tuple[int, ...] | None = None
 
     def _load_tokenizer(self) -> None:
         if self._tokenizer is not None:
             return
-        try:
-            import kitten_text_processing
-            from transformers import AutoTokenizer
-        except ImportError as exc:
-            raise OptionalDependencyError(
-                "Kitten2 text processing requires onnxvoice[kitten2]."
-            ) from exc
-        self._normalize_text = kitten_text_processing.normalize_text
         tokenizer_path = self.root / self.manifest["tokenizer"]
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            str(tokenizer_path), local_files_only=True
+        self._tokenizer = Kitten2Tokenizer(tokenizer_path / "tokenizer.json")
+
+    def prepare_target(self, text: str) -> PreparedTarget:
+        if not isinstance(text, str):
+            raise TypeError("text must be a string")
+        if not text.strip():
+            raise ValueError("text must not be empty")
+        expression = inspect_expression_markup(text)
+        self._load_tokenizer()
+        tokenizer = self._tokenizer
+        assert tokenizer is not None
+        return PreparedTarget(
+            text=text,
+            token_ids=tuple(tokenizer.encode(text)),
+            has_expression=expression.has_expression,
         )
 
-    def encode_text(self, text: str) -> tuple[str, list[int]]:
-        self._load_tokenizer()
-        normalize_text = self._normalize_text
-        tokenizer = self._tokenizer
-        assert normalize_text is not None and tokenizer is not None
-        normalized = normalize_text(text).strip()
-        if not normalized:
-            raise ValueError("text must not be empty after normalization")
-        return normalized, tokenizer.encode(normalized, add_special_tokens=False)
+    @property
+    def emotion_control_ids(self) -> tuple[int, ...]:
+        if self._emotion_control_ids is None:
+            emotion_control = self.manifest["generation"].get("emotion_control")
+            if emotion_control is None:
+                self._emotion_control_ids = ()
+            else:
+                self._load_tokenizer()
+                tokenizer = self._tokenizer
+                assert tokenizer is not None
+                self._emotion_control_ids = tuple(tokenizer.encode(emotion_control))
+        return self._emotion_control_ids
 
     def prepare_voice(self, voice: str) -> PreparedVoice:
         voices = self.manifest["voices"]
         if voice not in voices:
-            raise ValueError(f"Unknown voice {voice!r}; available voices: {', '.join(sorted(voices))}")
+            raise ValueError(
+                f"Unknown voice {voice!r}; available voices: {', '.join(sorted(voices))}"
+            )
         self._load_tokenizer()
         tokenizer = self._tokenizer
         assert tokenizer is not None
@@ -112,7 +131,7 @@ class Kitten2Frontend:
         transcript = reference.metadata.get("reference_transcript")
         if not isinstance(transcript, str):
             raise RuntimeContractError(f"Voice {voice!r} is missing its reference transcript")
-        reference_text_ids = tokenizer.encode(transcript.strip(), add_special_tokens=False)
+        reference_text_ids = tokenizer.encode(transcript)
         reference_prefix = build_reference_prefix(
             self.token_map,
             reference_text_ids,

@@ -1,0 +1,87 @@
+{
+  "reference": "transformers==4.57.1 AutoTokenizer.from_pretrained(local_files_only=True), encode(add_special_tokens=False)",
+  "tokenizers_compatibility_tested": "0.22.2",
+  "vectors": [
+    {
+      "name": "plain_sentence",
+      "text": "Hello from KittenTTS 2.",
+      "ids": [9707, 504, 730, 22449, 51, 9951, 220, 17, 13]
+    },
+    {
+      "name": "punctuation",
+      "text": "Dr. Smith paid $12.50 on 10/12/2026.",
+      "ids": [
+        8847, 13, 9082, 7171, 400, 16, 17, 13, 20, 15, 389, 220, 16, 15, 14, 16,
+        17, 14, 17, 15, 17, 21, 13
+      ]
+    },
+    {
+      "name": "newlines",
+      "text": "First line.\nSecond line.\n",
+      "ids": [5338, 1555, 624, 15666, 1555, 624]
+    },
+    {
+      "name": "unicode",
+      "text": "Café naïve — こんにちは 🌍",
+      "ids": [34, 2577, 963, 94880, 586, 1959, 220, 89015, 11162, 234, 235]
+    },
+    {
+      "name": "emotion_tags",
+      "text": "[angry] [contemplative] [excited] [joyful] [mundane] [nervous] [sad] [stern] [surprised] [tender]",
+      "ids": [
+        58, 524, 884, 60, 508, 772, 25892, 1388, 60, 508, 39441, 1608, 60, 508,
+        4123, 1262, 60, 508, 35314, 2145, 60, 508, 77, 648, 782, 60, 508, 82114,
+        60, 508, 267, 932, 60, 508, 19784, 649, 4056, 60, 508, 83, 1659, 60
+      ]
+    },
+    {
+      "name": "vocal_event_tags",
+      "text": "<gasp> <giggle> <growl> <gulp> <laugh> <pause> <scoff> <sigh> <sob> <um>",
+      "ids": [
+        94407, 13367, 29, 366, 70, 343, 3408, 29, 366, 66218, 75, 29, 366,
+        23328, 29, 366, 4260, 7443, 29, 366, 27448, 29, 366, 82, 1015, 542, 29,
+        366, 82, 1090, 29, 366, 82, 674, 29, 366, 372, 29
+      ]
+    },
+    {
+      "name": "emphasis",
+      "text": "(((word))) (((short phrase)))",
+      "ids": [6636, 1158, 7705, 11600, 8676, 17133, 7705]
+    },
+    {
+      "name": "combined_markup",
+      "text": "[angry] I told you (((never))) to open that door. <sigh>",
+      "ids": [
+        58, 524, 884, 60, 358, 3229, 498, 11600, 36493, 7705, 311, 1787, 429,
+        6006, 13, 366, 82, 1090, 29
+      ]
+    },
+    {
+      "name": "emotion_control",
+      "text": "{emo: 1}",
+      "ids": [90, 6726, 25, 220, 16, 92]
+    },
+    {
+      "name": "unknown_markup",
+      "text": "[whisper] <door> ((hello))",
+      "ids": [58, 1312, 27370, 60, 366, 10787, 29, 1781, 14990, 593]
+    },
+    {
+      "name": "markup_adjacent",
+      "text": "Hi[angry]there<laugh>friend(((really))),okay",
+      "ids": [
+        13048, 58, 524, 884, 60, 18532, 27, 4260, 7443, 29, 10701, 6636, 53660,
+        36363, 93217
+      ]
+    },
+    {
+      "name": "voice_reference_transcript",
+      "text": "When the Western music overwhelms the Chinese music, it evokes the long history of conflict between Asia and the Western nations that sought to exploit and dominate it.",
+      "ids": [
+        4498, 279, 10867, 4627, 16783, 1011, 279, 8453, 4627, 11, 432, 3637,
+        7940, 279, 1293, 3840, 315, 12055, 1948, 13622, 323, 279, 10867, 16675,
+        429, 16105, 311, 32194, 323, 40736, 432, 13
+      ]
+    }
+  ]
+}

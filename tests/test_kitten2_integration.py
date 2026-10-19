@@ -13,7 +13,7 @@ import onnxvoice.manager as manager_module
 from onnxvoice import Kitten2Adapter, OnnxVoice, registered_systems
 from onnxvoice.errors import RuntimeContractError
 from onnxvoice.systems import get_adapter
-from onnxvoice.systems.kitten2_frontend import PreparedVoice
+from onnxvoice.systems.kitten2_frontend import PreparedTarget, PreparedVoice
 from onnxvoice.systems.kitten2_generation import GenerationResult
 
 
@@ -102,15 +102,12 @@ def test_single_file_import_rejects_kitten2(tmp_path: Path) -> None:
         manager.import_model(system="kitten2", item_id="bundle", model=model)
 
 
-
 def test_managed_install_preserves_nested_bundle_files_and_opens_natively(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     bundle_path = create_bundle(tmp_path / "upstream")
     catalog_path = tmp_path / "catalog.json"
-    catalog_path.write_text(
-        json.dumps(_catalog_for_bundle(bundle_path)), encoding="utf-8"
-    )
+    catalog_path.write_text(json.dumps(_catalog_for_bundle(bundle_path)), encoding="utf-8")
     manager = OnnxVoice(
         cache_dir=tmp_path / "cache",
         catalog_sources={"kitten2": str(catalog_path)},
@@ -156,13 +153,13 @@ def test_infer_text_returns_finite_mono_float32_at_bundle_sample_rate(
                 conditioning={},
             )
 
-        def encode_text(self, text: str) -> tuple[str, list[int]]:
-            return text, [3, 4]
+        def prepare_target(self, text: str) -> PreparedTarget:
+            return PreparedTarget(text=text, token_ids=(3, 4), has_expression=False)
 
     class LanguageModelStub:
         def generate(self, prompt: list[int], **kwargs: Any) -> GenerationResult:
             assert prompt
-            assert kwargs["seed"] == 23
+            assert isinstance(kwargs["rng"], np.random.Generator)
             assert kwargs["max_new_tokens"] == 12
             return GenerationResult(raw_ids=[100, 2], s3_ids=[0])
 
@@ -186,6 +183,8 @@ def test_infer_text_returns_finite_mono_float32_at_bundle_sample_rate(
         assert np.all(np.isfinite(result.audio))
         assert result.metadata["voice"] == "Bruno"
         assert result.metadata["preset"] == "stable"
+        assert result.metadata["expression_conditioning"] is False
+        assert result.metadata["chunk_count"] == 1
 
         class NonFiniteDecoder:
             def decode(self, *_args: Any, **_kwargs: Any) -> np.ndarray:

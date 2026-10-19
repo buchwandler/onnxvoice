@@ -62,8 +62,6 @@ finally:
     runtime.close()
 ```
 
-
-
 ## KittenTTS 2 component sessions
 
 KittenTTS 2 creates four lazy ONNX sessions for its LM, speaker, flow, and mel2wav components. The selected provider list and provider options are passed to each component session without adding an implicit CPU fallback. A bundle LM profile that requires low-memory exact-ternary execution is CPU-only and uses its required component-specific session settings; conflicting caller-provided LM options are rejected. See [KittenTTS 2](systems/kitten2.md).

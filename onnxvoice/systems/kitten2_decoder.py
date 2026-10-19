@@ -60,6 +60,7 @@ def append_s3_silence_tail(
     tail = np.full(tail_shape, token_id, dtype=np.int64)
     return np.concatenate((tokens, tail), axis=-1)
 
+
 class Kitten2Decoder:
     """Run the deterministic S3 flow and HiFT ONNX stages for zero-based S3 IDs."""
 
@@ -103,9 +104,9 @@ class Kitten2Decoder:
         tokens = clean_s3_tokens(speech_tokens, self.speech_vocab_size)
         if tokens.size == 0:
             return None
-        tokens = append_s3_silence_tail(
-            tokens, self.silence_token_id, self.silence_tail_count
-        )[None, :]
+        tokens = append_s3_silence_tail(tokens, self.silence_token_id, self.silence_tail_count)[
+            None, :
+        ]
 
         prompt_token = np.asarray(conditioning["conditioning_prompt_token"], dtype=np.int64)
         prompt_token_len = np.asarray(conditioning["conditioning_prompt_token_len"], dtype=np.int64)
@@ -156,7 +157,9 @@ class Kitten2Decoder:
         else:
             sine_noise = np.asarray(sine_noise, dtype=np.float32)
         if phase_noise.shape != phase_shape:
-            raise ValueError(f"phase_noise must have shape {phase_shape}, found {phase_noise.shape}")
+            raise ValueError(
+                f"phase_noise must have shape {phase_shape}, found {phase_noise.shape}"
+            )
         if sine_noise.shape != sine_shape:
             raise ValueError(f"sine_noise must have shape {sine_shape}, found {sine_noise.shape}")
 

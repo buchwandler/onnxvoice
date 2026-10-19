@@ -9,6 +9,7 @@ from _kitten2_fixture import create_bundle
 
 from onnxvoice.errors import CapabilityError
 from onnxvoice.systems import kitten2 as kitten2_module
+from onnxvoice.systems import kitten2_generation as kitten2_generation_module
 from onnxvoice.systems.kitten2 import Kitten2Adapter
 from onnxvoice.systems.kitten2_generation import Kitten2LanguageModel
 from onnxvoice.systems.kitten2_sampling import SamplingSettings
@@ -40,7 +41,9 @@ class FakeSpeakerSession:
         return [np.zeros((1, 4), dtype=np.float32)]
 
 
-def test_native_language_model_generates_deterministically(tmp_path: Path) -> None:
+def test_native_language_model_generates_deterministically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     embeddings_path = tmp_path / "embeddings.npy"
     np.save(embeddings_path, np.zeros((120, 4), dtype=np.float32))
     metadata = {
@@ -90,6 +93,29 @@ def test_native_language_model_generates_deterministically(tmp_path: Path) -> No
     assert first.raw_ids in ([100, 2], [101, 2])
     assert first.s3_ids == [first.raw_ids[0] - token_map.audio_id_base]
 
+    with_rng = model.generate(
+        [5, 3],
+        token_map=token_map,
+        max_new_tokens=4,
+        settings=settings,
+        rng=np.random.default_rng(17),
+    )
+    assert with_rng == first
+
+    samples: list[float] = []
+
+    def capture_sample(*args: Any, **_kwargs: Any) -> int:
+        samples.append(args[4])
+        return token_map.speech_end_id
+
+    monkeypatch.setattr(kitten2_generation_module, "sample", capture_sample)
+    shared_rng = np.random.default_rng(31)
+    for _ in range(2):
+        model.generate(
+            [5, 3], token_map=token_map, max_new_tokens=4, settings=settings, rng=shared_rng
+        )
+    assert samples == list(np.random.default_rng(31).random(2))
+
 
 def test_adapter_defers_sessions_and_propagates_runtime_options(
     tmp_path: Path, monkeypatch: Any
@@ -138,7 +164,9 @@ def test_adapter_defers_sessions_and_propagates_runtime_options(
         session_options=session_options,
     )
     assert created == []
-    sessions = [adapter._get_session(component) for component in ("lm", "speaker", "flow", "mel2wav")]
+    sessions = [
+        adapter._get_session(component) for component in ("lm", "speaker", "flow", "mel2wav")
+    ]
     assert len(created) == 4
     assert [entry["component"] for entry in created] == [
         "lm",
@@ -160,8 +188,7 @@ def test_adapter_defers_sessions_and_propagates_runtime_options(
         "mel2wav",
     ]
     assert all(
-        entry.providers_active == ("CUDAExecutionProvider",)
-        for entry in diagnostic.sessions
+        entry.providers_active == ("CUDAExecutionProvider",) for entry in diagnostic.sessions
     )
     with pytest.raises(CapabilityError):
         adapter.infer([1])
