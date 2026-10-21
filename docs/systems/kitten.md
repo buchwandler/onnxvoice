@@ -14,6 +14,8 @@ onnxvoice voices show kitten:nano-0.8-int8/Bella
 
 A voice reference identifies the catalog voice, not an ONNX style tensor. The backing asset reference, such as `kitten:nano-0.8-int8`, is the model to install or open. The current catalog has no authoritative per-voice gender metadata, so discovered Kitten voices report `unknown` rather than inferring gender from names or style IDs.
 
+For model-level controls and explicit unknown-limit reporting, use `onnxvoice engines options --engine kitten --target nano-0.8-int8`. This does not load the model; named voices remain separate catalog voice records selected through `onnxvoice voices`.
+
 ## Managed model use
 
 ```python

@@ -103,6 +103,36 @@ def build_parser() -> argparse.ArgumentParser:
     voices_show_parser.add_argument(
         "--format", choices=["table", "plain", "json", "tsv"], default="table"
     )
+    # --- engine option and capability discovery ---
+    engines_parser = sub.add_parser(
+        "engines", help="Discover engine targets, options, and capabilities"
+    )
+    engines_sub = engines_parser.add_subparsers(dest="engines_command", required=True)
+
+    engines_list_parser = engines_sub.add_parser(
+        "list", help="List target-level engine capability variants"
+    )
+    engines_list_parser.add_argument("--engine", help="Filter by engine name")
+    engines_list_parser.add_argument(
+        "--capability", choices=["voice-cloning"], help="Filter by capability"
+    )
+    engines_list_parser.add_argument("--refresh", action="store_true", help="Refresh catalogs")
+    engines_list_parser.add_argument(
+        "--format", choices=["table", "plain", "json", "tsv"], default="table"
+    )
+
+    engines_options_parser = engines_sub.add_parser(
+        "options", help="Show typed inputs, controls, capabilities, and limits"
+    )
+    engines_options_parser.add_argument("--engine", required=True, help="Engine name")
+    engines_options_parser.add_argument("--target", help="Catalog target ID or alias")
+    engines_options_parser.add_argument("--quality", help="Select a quality/profile")
+    engines_options_parser.add_argument("--distribution", help="Select a distribution variant")
+    engines_options_parser.add_argument("--refresh", action="store_true", help="Refresh catalogs")
+    engines_options_parser.add_argument(
+        "--format", choices=["table", "plain", "json", "tsv"], default="table"
+    )
+
     # --- installed ---
     installed_parser = sub.add_parser(
         "installed", help="List installed entries (local-only, no network)"
@@ -422,6 +452,268 @@ def _cmd_voices(args: argparse.Namespace) -> int:
     raise ValueError(f"unknown voices command: {args.voices_command}")
 
 
+def _engine_display_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _engine_detail(parts: list[Any]) -> str:
+    return "; ".join(_engine_display_value(part) for part in parts if part not in (None, ""))
+
+
+def _append_engine_summary(rows: list[list[str]], data: dict[str, Any], prefix: str = "") -> None:
+    label = f"{prefix} / " if prefix else ""
+    for name, value in (
+        ("engine", data.get("engine")),
+        ("target", data.get("target")),
+        ("reference", data.get("ref")),
+        ("quality", data.get("quality")),
+        ("distribution", data.get("distribution")),
+        ("layout", data.get("layout")),
+        ("sample_rate", data.get("sample_rate")),
+        ("contract_status", data.get("contract_status")),
+    ):
+        status = data.get("field_status", {}).get(name, "")
+        rows.append(
+            [
+                f"{label}metadata",
+                name,
+                "",
+                _engine_display_value(value),
+                _engine_detail([f"status={status}" if status else None]),
+            ]
+        )
+    discovery = data.get("target_discovery")
+    if isinstance(discovery, dict):
+        rows.append(
+            [
+                f"{label}metadata",
+                "target_discovery",
+                "",
+                discovery.get("status", "unknown"),
+                _engine_display_value(discovery.get("reason")),
+            ]
+        )
+
+
+def _append_engine_contract_rows(
+    rows: list[list[str]], data: dict[str, Any], prefix: str = ""
+) -> None:
+    label = f"{prefix} / " if prefix else ""
+    for name, capability in sorted(data.get("capabilities", {}).items()):
+        supported = capability.get("supported")
+        value = (
+            "supported"
+            if supported is True
+            else "not supported"
+            if supported is False
+            else capability.get("status", "unknown")
+        )
+        detail = _engine_detail(
+            [
+                f"mode={capability.get('mode')}" if capability.get("mode") else None,
+                f"requires={_engine_display_value(capability.get('requires', []))}"
+                if capability.get("requires")
+                else None,
+                f"requires_reference_transcript={capability.get('requires_reference_transcript')}"
+                if capability.get("requires_reference_transcript") is not None
+                else None,
+                f"source={capability.get('source')}" if capability.get("source") else None,
+                capability.get("reason"),
+                *capability.get("constraints", []),
+            ]
+        )
+        rows.append([f"{label}capability", name, "boolean", value, detail])
+
+    for group, key in (("input", "inputs"), ("parameter", "parameters")):
+        for option in sorted(data.get(key, []), key=lambda item: item.get("name", "")):
+            if option.get("required"):
+                value = "required"
+            else:
+                value = _engine_display_value(option.get("default"))
+                if option.get("default_status") not in {None, "known", "not_applicable"}:
+                    value = f"{value} ({option.get('default_status')})"
+            details: list[Any] = [option.get("description")]
+            if option.get("minimum") is not None or option.get("maximum") is not None:
+                low = (
+                    "-∞"
+                    if option.get("minimum") is None
+                    else _engine_display_value(option.get("minimum"))
+                )
+                high = (
+                    "+∞"
+                    if option.get("maximum") is None
+                    else _engine_display_value(option.get("maximum"))
+                )
+                left = "[" if option.get("minimum_inclusive") is not False else "("
+                right = "]" if option.get("maximum_inclusive") is not False else ")"
+                details.append(f"range={left}{low}, {high}{right}")
+            if option.get("choices"):
+                details.append(f"choices={_engine_display_value(option['choices'])}")
+            if option.get("supported") is False:
+                details.append("supported=false")
+            elif option.get("supported") is None:
+                details.append("supported=unknown")
+            for key_name in ("status", "availability", "constraint_status", "source"):
+                if option.get(key_name):
+                    details.append(f"{key_name}={option[key_name]}")
+            details.extend(option.get("notes", []))
+            rows.append(
+                [
+                    f"{label}{group}",
+                    option.get("name", ""),
+                    option.get("type", ""),
+                    value,
+                    _engine_detail(details),
+                ]
+            )
+
+    for limit in sorted(data.get("limits", []), key=lambda item: item.get("name", "")):
+        value = _engine_display_value(limit.get("value"))
+        if limit.get("value") is None:
+            value = limit.get("status", "unknown")
+        detail = _engine_detail(
+            [
+                f"unit={limit.get('unit')}" if limit.get("unit") else None,
+                f"source={limit.get('source')}" if limit.get("source") else None,
+                f"constraint_status={limit.get('constraint_status')}"
+                if limit.get("constraint_status")
+                else None,
+                limit.get("description"),
+                *limit.get("notes", []),
+            ]
+        )
+        rows.append([f"{label}limit", limit.get("name", ""), limit.get("unit", ""), value, detail])
+
+    for selection in sorted(
+        data.get("selection_metadata", []), key=lambda item: item.get("name", "")
+    ):
+        detail = _engine_detail(
+            [
+                f"status={selection.get('status')}" if selection.get("status") else None,
+                f"source={selection.get('source')}" if selection.get("source") else None,
+                selection.get("description"),
+            ]
+        )
+        rows.append(
+            [
+                f"{label}selection",
+                selection.get("name", ""),
+                "metadata",
+                _engine_display_value(selection.get("value")),
+                detail,
+            ]
+        )
+
+    for target in sorted(data.get("known_targets", []), key=lambda item: item.get("target", "")):
+        details = [
+            f"ref={target.get('ref')}",
+            f"quality={_engine_display_value(target.get('quality'))}",
+            f"qualities={_engine_display_value(target.get('qualities', []))}",
+            f"distributions={_engine_display_value(target.get('distributions', []))}",
+            f"layout={_engine_display_value(target.get('layout'))}",
+            f"sample_rate={_engine_display_value(target.get('sample_rate'))}",
+        ]
+        rows.append(
+            [
+                f"{label}target",
+                target.get("target", ""),
+                "catalog",
+                "available",
+                _engine_detail(details),
+            ]
+        )
+
+
+def _render_engine_options(data: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    rows: list[list[str]] = []
+    _append_engine_summary(rows, data)
+    variants = data.get("variants")
+    if isinstance(variants, list):
+        for variant in variants:
+            label = (
+                variant.get("distribution")
+                or variant.get("quality")
+                or variant.get("layout")
+                or variant.get("target")
+                or "variant"
+            )
+            _append_engine_summary(rows, variant, prefix=str(label))
+            _append_engine_contract_rows(rows, variant, prefix=str(label))
+    else:
+        _append_engine_contract_rows(rows, data)
+    from ._table import render_inventory
+
+    render_inventory(["SECTION", "NAME", "TYPE", "VALUE", "DETAIL"], rows, format=output_format)
+
+
+def _cmd_engines(args: argparse.Namespace) -> int:
+    from .engine_options import list_engine_targets, resolve_engine_options
+
+    manager = _manager(args)
+    if args.engines_command == "list":
+        data = list_engine_targets(
+            manager,
+            engine=args.engine,
+            capability=args.capability,
+            refresh=args.refresh,
+        )
+        if args.format == "json":
+            print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            columns = [
+                "ENGINE",
+                "TARGET",
+                "REF",
+                "QUALITY",
+                "DISTRIBUTION",
+                "LAYOUT",
+                "SAMPLE_RATE",
+                "VOICE_CLONING",
+                "MODE",
+                "DISCOVERY",
+            ]
+            rows = [
+                [
+                    _engine_display_value(row.get("engine")),
+                    _engine_display_value(row.get("target")),
+                    _engine_display_value(row.get("ref")),
+                    _engine_display_value(row.get("quality")),
+                    _engine_display_value(row.get("distribution")),
+                    _engine_display_value(row.get("layout")),
+                    _engine_display_value(row.get("sample_rate")),
+                    _engine_display_value(row.get("voice_cloning")),
+                    _engine_display_value(row.get("cloning_mode")),
+                    _engine_display_value(row.get("target_discovery")),
+                ]
+                for row in data["rows"]
+            ]
+            from ._table import render_inventory
+
+            render_inventory(columns, rows, format=args.format)
+        return 0
+    if args.engines_command == "options":
+        data = resolve_engine_options(
+            manager,
+            args.engine,
+            target=args.target,
+            quality=args.quality,
+            distribution=args.distribution,
+            refresh=args.refresh,
+        )
+        _render_engine_options(data, args.format)
+        return 0
+    raise ValueError(f"unknown engines command: {args.engines_command}")
+
+
 def _cmd_list(args: argparse.Namespace) -> int:
     from ._table import format_bytes, render_inventory
 
@@ -643,7 +935,7 @@ _PROVIDER_LIST_ALIASES = (
 def _jsonable(value: Any) -> Any:
     from dataclasses import asdict, is_dataclass
 
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return _jsonable(asdict(value))
     if isinstance(value, Path):
         return value.as_posix()
@@ -1356,6 +1648,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "voices":
             return _cmd_voices(args)
+        if args.command == "engines":
+            return _cmd_engines(args)
 
         handlers = {
             "list": _cmd_list,

@@ -18,6 +18,8 @@ Sopro native offline inference is currently enabled only for the parity-tested `
 `OnnxVoice` discovers voices from the normalized catalog data shown above. A catalog item whose kind is `voice` contributes its own ID; items with child voices contribute the IDs already present in `CatalogItem.voices`. The catalog determines which voices are available.
 Adapter registration and catalog availability are distinct. A built-in adapter does not guarantee that external catalog data is available.
 
+`onnxvoice engines list` and `onnxvoice engines options` expose the same distinction at discovery time: static adapter controls are separate from target-, quality-, distribution-, and installed-manifest facts. These commands are read-only and do not create model sessions. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery) for selectors and status semantics.
+
 ```{toctree}
 :maxdepth: 1
 

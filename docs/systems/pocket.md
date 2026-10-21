@@ -2,6 +2,8 @@
 
 Pocket is a bundle runtime with explicit graph contracts and recurrent state. Catalog assets and predefined voice-state downloads are separate concerns. A public ONNX bundle does not necessarily make every predefined voice state public.
 
+Use `onnxvoice engines options --engine pocket --target <catalog-target>` to inspect bundle-specific controls and facts. Catalog metadata may declare voice-cloning support and frame limits; absent declarations remain unknown rather than being presented as token limits. Discovery does not download voice state or create a model session. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
+
 For direct Hugging Face downloads, optional dependencies, credentials, and offline caching, see [Pocket downloads](../pocket-downloads.md). The `doctor` command reports local, non-secret configuration and does not test access to a gated repository over the network.
 
 ## Managed bundle and voice preparation

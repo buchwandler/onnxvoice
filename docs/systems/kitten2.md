@@ -2,6 +2,8 @@
 
 ONNXVoice provides a native `kitten2` system for the `kitten2-onnx-bundle-v1` layout. It is separate from the existing Kitten v0.8 `kitten` system and does not import or depend on the sibling `kitten2-onnx` runtime package.
 
+`onnxvoice engines options --engine kitten2 --target kitten-tts-v2` reports the installed bundle's named voices, presets, and declared generation controls without executing text synthesis. The bundle manifest provides target-specific details after installation; metadata not available to discovery remains unavailable. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
+
 The adapter owns bundle validation, local tokenizer loading, text and voice preparation, seeded generation, ONNX session lifecycle, and waveform decoding. It does not own application-specific text policy or voice selection.
 
 ## Install

@@ -2,6 +2,8 @@
 
 Supertonic has a built-in adapter and catalog support. The runtime is a multi-component bundle rather than a single ONNX file. `onnxvoice` executes the model contract; the caller supplies the prepared token IDs, text mask, and style tensors. It does not add text normalization or phonemization.
 
+`onnxvoice engines options --engine supertonic --target supertonic-3` describes the bundle's runtime contract without creating sessions. Its catalog child styles are named voices, not cloning capability; resolve a style through `onnxvoice voices show`.
+
 ## Catalog voice identity and languages
 
 Supertonic catalog children use the semantic ref `<system>:<asset-id>/<voice-id>`. The ten current styles in `supertonic-3` therefore use refs from `supertonic:supertonic-3/F1` through `supertonic:supertonic-3/M5`. The backing asset ref is `supertonic:supertonic-3`, and a style ID such as `F1` is only unique within that bundle.

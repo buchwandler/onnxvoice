@@ -2,6 +2,8 @@
 
 ONNXVoice provides a low-level runtime adapter for Inflect Nano v2 and Inflect Micro v2. Both models use a fixed `default` voice and produce 24 kHz audio. The catalog carries the voice description (including locale and gender); the adapter does not infer or invent voice metadata.
 
+`onnxvoice engines options --engine inflect --target nano-v2` describes the fixed `default` voice and declared generation controls; it does not invent selectable speakers or cloning support. Discovery uses catalog metadata without installing ONNX files or creating sessions. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
+
 Inflect v2 is a two-graph runtime:
 
 | Artifact role | File            |

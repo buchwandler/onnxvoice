@@ -2,6 +2,8 @@
 
 OnnxVoice provides catalog-backed installation and a cleanroom ONNX runtime adapter for the supported Chatterbox bundles. It is the graph/runtime layer, not a complete user-facing text-to-speech package: ChatterboxSynth owns the tokenizer frontend, reference-audio workflow, and public synthesis result/API.
 
+Use `onnxvoice engines options --engine chatterbox --target nano-v2` or `--target turbo` to inspect each bundle's profile, generation controls, and reference-audio capability without installing artifacts or opening graph sessions. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
+
 ## Supported bundles and profiles
 
 | Bundle reference     | Aliases             | Profiles        |

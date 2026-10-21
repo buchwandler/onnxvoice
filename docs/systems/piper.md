@@ -2,6 +2,8 @@
 
 Piper runs an installed Piper ONNX model and optional JSON config. `onnxvoice` does not phonemize text or choose a speaker by name. The caller supplies model-ready token IDs and, when the graph has a `sid` input, the numeric speaker ID.
 
+`onnxvoice engines options --engine piper --target <voice-id>` reports the target's numeric speaker controls when known. `speaker_id` selects an existing graph speaker; it is not reference-audio cloning. Unknown model limits remain unasserted. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
+
 ## Managed installation and inference
 
 ```python

@@ -22,6 +22,24 @@ The CLI is organized around catalog discovery, local inventory, installation lif
 | `onnxvoice cache`     | Report usage or garbage-collect unreachable cache data                |
 | `onnxvoice import`    | Import a model and optional config or voices file into the store      |
 | `onnxvoice catalog`   | Maintainer commands to build and verify catalogs                      |
+| `onnxvoice engines`   | Discover target-specific controls, capabilities, and limits           |
+
+## Engine option and capability discovery
+
+The `engines` commands describe registered adapter contracts alongside catalog targets, selected profiles, installed manifests, and target-specific capability variants. Discovery is read-only: it does not install artifacts, create ONNX sessions, benchmark models, or generate audio. Use `--offline` to prevent catalog network access; static contracts and locally installed metadata remain available, while missing catalog facts are reported as unavailable.
+
+```bash
+onnxvoice engines list
+onnxvoice engines list --engine qwen3 --capability voice-cloning --format json
+onnxvoice engines options --engine piper
+onnxvoice engines options --engine kokoro --target v1.0 --format json
+onnxvoice engines options --engine qwen3 --target base-0.6b
+onnxvoice --offline engines options --engine kokoro --target v1.0
+```
+
+`engines list` reports target/variant rows and accepts `--engine`, `--capability voice-cloning`, `--refresh`, and `--format`. `engines options` accepts an engine plus optional target ID or alias, `--quality`, `--distribution`, `--refresh`, and `--format`. Quality and distribution selectors require `--target`; valid values come from that target's catalog metadata. Without a target, the command reports the static adapter contract and known catalog targets. With a target, it resolves that target's parameter, input, capability, quality/distribution, and limit details. The supported output formats are `table`, `plain`, `json`, and `tsv`.
+
+Capability and limit rows are target-specific where metadata varies by model type, profile, distribution, or installed manifest. A `null` value with `not_declared`, `unknown`, or `unavailable` status is intentional: ONNXVoice does not infer undocumented limits. For example, Qwen3 Base supports reference-conditioned cloning, while VoiceDesign is instruction-conditioned voice design, not cloning. Kokoro cloning distributions require reference audio and transcript token IDs; stock voice styles and optional Inno enrollment on ordinary layouts are separate capabilities. Piper's numeric `speaker_id` selects an existing speaker and is not cloning. See the relevant [system pages](systems/index.md) for adapter boundaries and [voice records](voices.md) for catalog voice selection.
 
 ## Inventory and filters
 

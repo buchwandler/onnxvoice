@@ -9,6 +9,8 @@ OnnxVoice supports two WaveKat Qwen3-TTS ONNX bundles through the explicit `qwen
 
 The catalog also accepts the short aliases `voice-design-1.7b` and `base-0.6b`. These entries refer to immutable source revisions in the [qwen3-onnx-bundles catalog](https://github.com/buchwandler/qwen3-onnx-bundles). Other Qwen3 exporters or graph layouts are not compatible by implication; they require a separately versioned ABI and their own validation/parity evidence.
 
+`onnxvoice engines options --engine qwen3 --target base-0.6b` reports the selected bundle's typed controls and capabilities; `--target voice-design-1.7b` describes the instruction-conditioned design model instead. Base cloning and VoiceDesign are deliberately reported as different modes. This is metadata-only discovery and does not install either profile or create sessions; see [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
+
 ## Ownership boundary
 
 OnnxVoice owns Qwen3 catalog parsing and selection, asset acquisition and integrity checks, installation layout, config/embedding/graph validation, provider/session lifecycle, generation, codec prediction, vocoding, and non-sensitive runtime diagnostics.

@@ -11,6 +11,7 @@ import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -66,6 +67,40 @@ _SUPPORTED_DTYPES = {
 PREDEFINED_VOICE_REPOSITORY = "kyutai/pocket-tts"
 PREDEFINED_VOICE_REVISION = "d18466fc6d3ad070afee1bde2f0db8992007c48f"
 POCKET_MIN_FRAMES_BEFORE_EOS = 6
+
+
+def _validate_generation_controls(
+    temperature: Any,
+    lsd_steps: Any,
+    max_frames: Any,
+    frames_after_eos: Any,
+) -> tuple[float, int, int, int | None]:
+    if isinstance(temperature, bool) or not isinstance(temperature, Real):
+        raise RuntimeContractError("temperature must be a finite number")
+    temperature_value = float(temperature)
+    if not math.isfinite(temperature_value):
+        raise RuntimeContractError("temperature must be a finite number")
+    if temperature_value < 0:
+        raise RuntimeContractError("temperature must be non-negative")
+    if isinstance(lsd_steps, bool) or not isinstance(lsd_steps, Integral):
+        raise RuntimeContractError("lsd_steps must be an integer")
+    if lsd_steps < 1:
+        raise RuntimeContractError("lsd_steps must be at least 1")
+    if isinstance(max_frames, bool) or not isinstance(max_frames, Integral):
+        raise RuntimeContractError("max_frames must be an integer frame count")
+    if max_frames <= 0:
+        raise RuntimeContractError("max_frames must be a positive frame count")
+    if frames_after_eos is not None:
+        if isinstance(frames_after_eos, bool) or not isinstance(frames_after_eos, Integral):
+            raise RuntimeContractError("frames_after_eos must be an integer frame count")
+        if frames_after_eos < 0:
+            raise RuntimeContractError("frames_after_eos must be non-negative")
+    return (
+        temperature_value,
+        int(lsd_steps),
+        int(max_frames),
+        None if frames_after_eos is None else int(frames_after_eos),
+    )
 
 
 def _load_safetensors(path: Path) -> Mapping[str, np.ndarray]:
@@ -1095,8 +1130,9 @@ class PocketAdapter(SystemAdapter):
         latent_dim: int,
         conditioning_dim: int,
     ) -> _PocketGenerationResult:
-        if lsd_steps < 1:
-            raise RuntimeContractError("lsd_steps must be at least 1")
+        temperature, lsd_steps, max_frames, frames_after_eos = _validate_generation_controls(
+            temperature, lsd_steps, max_frames, frames_after_eos
+        )
         frames: list[np.ndarray] = []
         previous_latent: np.ndarray | None = None
         eos_observed = False
@@ -1221,17 +1257,27 @@ class PocketAdapter(SystemAdapter):
         **kwargs: Any,
     ) -> InferenceResult:
         metadata = self._ensure_validated()
-        if temperature < 0:
-            raise RuntimeContractError("temperature must be non-negative")
-        if frames_after_eos is not None and frames_after_eos < 0:
-            raise RuntimeContractError("frames_after_eos must be non-negative")
-        frame_limit = (
-            max_frames
-            if max_frames is not None
-            else int(metadata.get("max_frames", self.DEFAULT_MAX_FRAMES))
+        frame_limit: Any
+        if max_frames is None:
+            configured_frame_limit = metadata.get("max_frames", self.DEFAULT_MAX_FRAMES)
+            if configured_frame_limit is None:
+                configured_frame_limit = self.DEFAULT_MAX_FRAMES
+            if isinstance(configured_frame_limit, bool) or not isinstance(
+                configured_frame_limit, Integral
+            ):
+                raise RuntimeContractError(
+                    "Pocket max_frames metadata must be an integer frame count"
+                )
+            if configured_frame_limit <= 0:
+                raise RuntimeContractError(
+                    "Pocket max_frames metadata must be a positive frame count"
+                )
+            frame_limit = configured_frame_limit
+        else:
+            frame_limit = max_frames
+        temperature, lsd_steps, frame_limit, frames_after_eos = _validate_generation_controls(
+            temperature, lsd_steps, frame_limit, frames_after_eos
         )
-        if frame_limit <= 0:
-            raise RuntimeContractError("max_frames must be a positive frame count")
         text_conditioner = self._get_session("text_conditioner")
         main = self._get_session("flow_lm_main")
         flow = self._get_session("flow_lm_flow")

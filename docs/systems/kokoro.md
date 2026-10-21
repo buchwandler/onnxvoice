@@ -2,6 +2,15 @@
 
 Kokoro supports a single ONNX model, the `split-onnx-v1` multi-component layout, and the reference-conditioned `cloning-onnx-v1` layout. Single and split inference accept caller-prepared model-ready style tensors. Ordinary single and split installations may also advertise optional Inno voice enrollment through `runtime.voice_enrollers`; Inno adds components without changing the Kokoro layout. Cloning remains separate and uses a reusable `KokoroReferenceState` instead of stock voices.
 
+Inspect the target-specific controls and limits without installing a model or creating sessions:
+
+```bash
+onnxvoice engines options --engine kokoro --target v1.0 --format json
+onnxvoice engines list --engine kokoro --capability voice-cloning
+```
+
+The options response keeps single, split, and cloning layouts separate. Cloning requires reference audio plus reference transcript token IDs; optional Inno enrollment on ordinary layouts is a different capability and does not imply cloning. Unknown limits remain explicitly unknown. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery) for output formats and status meanings.
+
 ## Quality and distribution
 
 A quality selection chooses a base Kokoro model variant within a distribution. It does not install every quality variant. Required runtime artifacts are installed with the selected model. An Inno distribution keeps its shared `model:inno_voicepack` and `metadata:inno_tuner` artifacts when selecting a base-model quality. Explicit quality and distribution selections can have separate installation identities. A cloning distribution includes its enrollment graphs, synthesis graphs, source parameters, and config together for each supported quality.

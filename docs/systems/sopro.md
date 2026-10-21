@@ -2,6 +2,8 @@
 
 Sopro is a manifest-backed, zero-shot voice-cloning system. The pinned `sopro:v2-turbo` catalog bundle declares a 24 kHz output rate and English (`en`), European Portuguese (`pt`), French (`fr`), and German (`de`) language tags. It does not provide predefined named voices; reference audio supplies the reusable voice state.
 
+`onnxvoice engines options --engine sopro --target v2-turbo` reports catalog-declared limits and controls; after installation, the small local bundle manifest may fill otherwise unavailable fields. The response identifies each fact's source. Discovery does not download the bundle or create an inference session, and unsupported profile/provider combinations are not presented as available native inference. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
+
 ## Current implementation status
 
 The adapter supports catalog-managed/local opening, graph inspection, token preparation, reusable reference preparation, one-segment offline synthesis, and stateful sequential `SoproRun` segment generation with automatic semantic carry. `SoproRun.stream_segment()` performs synchronous incremental inference on installed split acoustic ODE graphs, keeps acoustic/vocoder/ISTFT state, and yields raw mono float32 chunks; references too short for the streaming prompt safely fall back to one offline chunk. Bounded prompt/vocoder caches, synchronous `prepare_streaming()`, and final-chunk stream timings are available. The gated `wasm-uint8`/CPU real-bundle integration verifies incremental output, exact generated sample count, streaming graph use, and recovery after an early consumer stop.

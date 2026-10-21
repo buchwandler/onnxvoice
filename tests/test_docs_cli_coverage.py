@@ -19,6 +19,7 @@ EXPECTED_DOCUMENTED_COMMANDS = {
     "cache",
     "import",
     "catalog",
+    "engines",
 }
 
 

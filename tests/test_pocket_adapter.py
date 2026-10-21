@@ -891,6 +891,35 @@ def test_infer_rejects_negative_temperature() -> None:
         adapter.infer([1], temperature=-0.1)
 
 
+@pytest.mark.parametrize(
+    ("controls", "message"),
+    [
+        ({"temperature": True}, "temperature must be a finite number"),
+        ({"temperature": float("nan")}, "temperature must be a finite number"),
+        ({"temperature": float("inf")}, "temperature must be a finite number"),
+        ({"lsd_steps": True}, "lsd_steps must be an integer"),
+        ({"lsd_steps": 1.5}, "lsd_steps must be an integer"),
+        ({"lsd_steps": 0}, "lsd_steps must be at least 1"),
+        ({"max_frames": True}, "max_frames must be an integer"),
+        ({"max_frames": 1.5}, "max_frames must be an integer"),
+        ({"max_frames": 0}, "max_frames must be a positive"),
+        ({"frames_after_eos": True}, "frames_after_eos must be an integer"),
+        ({"frames_after_eos": 1.5}, "frames_after_eos must be an integer"),
+        ({"frames_after_eos": -1}, "frames_after_eos must be non-negative"),
+    ],
+)
+def test_infer_rejects_invalid_numeric_controls_before_loading_sessions(
+    controls: dict[str, Any], message: str
+) -> None:
+    adapter = PocketAdapter(_make_installation())
+    with (
+        patch.object(adapter, "_ensure_validated", return_value={}),
+        patch.object(adapter, "_get_session", side_effect=AssertionError("session loaded")),
+        pytest.raises(RuntimeContractError, match=message),
+    ):
+        adapter.infer([1], **controls)
+
+
 def _predefined_adapter(
     tmp_path: Path,
     *,
