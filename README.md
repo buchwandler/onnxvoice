@@ -20,6 +20,15 @@ python -m pip install "onnxvoice[directml]"
 python -m pip install "onnxvoice[openvino]"
 ```
 
+ONNX Runtime distributions (the Python build providing `onnxruntime`) are separate from execution providers (such as CUDA or CPU). Inspect the current build and select ONNXVoice's default policy with:
+
+```bash
+onnxvoice runtime
+onnxvoice runtime list
+onnxvoice runtime use auto
+```
+
+`runtime use` changes only future ONNXVoice sessions; it does not install or switch runtime packages. See [provider setup](docs/providers.md) for precedence and Python API controls.
 KittenTTS 2 text normalization and tokenization are optional: install `onnxvoice[kitten2]` with a runtime extra such as `onnxvoice[kitten2,cpu]`. The native runtime does not depend on the separate `kitten2-onnx` package. See [KittenTTS 2](docs/systems/kitten2.md).
 
 Hugging Face is an optional **download transport**, separate from runtime selection: use `onnxvoice[huggingface]` for transport only, or `onnxvoice[cpu,huggingface]` for CPU inference plus Hub downloads. Pocket users can continue using the compatible `onnxvoice[pocket]` extra (and add a runtime provider, e.g. `onnxvoice[pocket,cpu]`). See [Pocket download setup](docs/pocket-downloads.md).

@@ -10,6 +10,7 @@ EXPECTED_DOCUMENTED_COMMANDS = {
     "updates",
     "update",
     "info",
+    "runtime",
     "doctor",
     "path",
     "show",

@@ -362,6 +362,52 @@ class SessionDiagnostic:
     providers_active: tuple[str, ...]
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
+    providers_resolved: tuple[str, ...] = ()
+    provider_source: str = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeDistributionInfo:
+    """Metadata for a Python distribution that may provide ``onnxruntime``."""
+
+    name: str
+    version: str | None
+    location: Path | None
+    owns_import: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderPreference:
+    """Ordered provider policy and the configuration source that selected it."""
+
+    requested: tuple[str, ...]
+    source: Literal[
+        "explicit",
+        "ONNXVOICE_PROVIDERS",
+        "ONNXVOICE_PROVIDER",
+        "user_config",
+        "default",
+    ]
+
+
+@dataclass(frozen=True, slots=True)
+class OnnxRuntimeStatus:
+    """Snapshot of the imported ONNX Runtime build and ONNXVoice provider policy."""
+
+    importable: bool
+    module_version: str | None
+    module_path: Path | None
+    build_device: str | None
+    build_info: str | None
+    distributions: tuple[RuntimeDistributionInfo, ...]
+    imported_distribution: str | None
+    distribution_state: Literal["resolved", "ambiguous", "vendor", "not_installed", "import_failed"]
+    available_providers: tuple[str, ...]
+    configured_providers: tuple[str, ...]
+    provider_source: str
+    resolved_providers: tuple[str, ...]
+    import_error: str | None = None
+    resolution_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

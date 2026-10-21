@@ -22,7 +22,14 @@ from .inventory import (
     normalize_language_tag,
 )
 from .manager import OnnxVoice
-from .runtime import OnnxSession, available_providers
+from .runtime import (
+    OnnxSession,
+    available_providers,
+    clear_default_providers,
+    get_default_providers,
+    runtime_status,
+    set_default_providers,
+)
 from .store import AssetStore
 from .systems import (
     Kitten2Adapter,
@@ -47,7 +54,10 @@ from .types import (
     InferenceResult,
     Installation,
     InstalledArtifact,
+    OnnxRuntimeStatus,
+    ProviderPreference,
     RuntimeDiagnostic,
+    RuntimeDistributionInfo,
     SequenceLengthContract,
     SessionDiagnostic,
     TensorSpec,
@@ -150,9 +160,16 @@ __all__ = [
     "SequenceLengthContract",
     "RuntimeDiagnostic",
     "SessionDiagnostic",
+    "OnnxRuntimeStatus",
+    "ProviderPreference",
+    "RuntimeDistributionInfo",
     "CatalogItem",
     "Installation",
     "available_providers",
+    "runtime_status",
+    "get_default_providers",
+    "set_default_providers",
+    "clear_default_providers",
     "VoiceRecord",
     "VoiceMetadata",
     "register_adapter",

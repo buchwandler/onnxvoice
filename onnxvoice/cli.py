@@ -139,10 +139,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # --- diagnostics ---
-    doctor_parser = sub.add_parser("doctor", help="Show non-secret download diagnostics")
-    doctor_parser.add_argument("--system", choices=["pocket"], default="pocket")
-    doctor_parser.add_argument("--format", choices=["plain", "json"], default="plain")
+    # --- ONNX Runtime management ---
+    runtime_parser = sub.add_parser("runtime", help="Inspect and select ONNX Runtime providers")
+    runtime_sub = runtime_parser.add_subparsers(dest="runtime_command")
+    runtime_parser.set_defaults(runtime_command="status")
 
+    runtime_status_parser = runtime_sub.add_parser(
+        "status", help="Show imported runtime and provider policy"
+    )
+    runtime_status_parser.add_argument("--format", choices=["plain", "json"], default="plain")
+
+    runtime_list_parser = runtime_sub.add_parser(
+        "list", help="List installed distributions and reported providers"
+    )
+    runtime_list_parser.add_argument("--format", choices=["table", "json"], default="table")
+
+    runtime_use_parser = runtime_sub.add_parser("use", help="Persist the default provider policy")
+    runtime_use_parser.add_argument(
+        "providers", help="Provider alias or ordered comma-separated provider list"
+    )
+
+    runtime_sub.add_parser("reset", help="Remove the saved provider preference")
+
+    # --- diagnostics ---
+    doctor_parser = sub.add_parser(
+        "doctor", help="Show ONNXVoice environment and runtime diagnostics"
+    )
+    doctor_parser.add_argument("--system", choices=["pocket"], default=None, help=argparse.SUPPRESS)
+    doctor_parser.add_argument("--format", choices=["plain", "json"], default="plain")
     # --- path ---
     path_parser = sub.add_parser("path", help="Print an installed model/voice path")
     path_parser.add_argument("ref")
@@ -589,23 +613,326 @@ def _cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_doctor(args: argparse.Namespace) -> int:
-    from .huggingface import huggingface_diagnostics
+_PROVIDER_INSTALL_HINTS = {
+    "CPUExecutionProvider": 'python -m pip install "onnxvoice[cpu]"',
+    "CUDAExecutionProvider": 'python -m pip install "onnxvoice[gpu]"',
+    "TensorrtExecutionProvider": 'python -m pip install "onnxvoice[gpu]"',
+    "DmlExecutionProvider": 'python -m pip install "onnxvoice[directml]"',
+    "OpenVINOExecutionProvider": 'python -m pip install "onnxvoice[openvino]"',
+}
+_PROVIDER_LIST_ALIASES = (
+    ("cpu", "CPUExecutionProvider"),
+    ("cuda", "CUDAExecutionProvider"),
+    ("tensorrt", "TensorrtExecutionProvider"),
+    ("directml", "DmlExecutionProvider"),
+    ("openvino", "OpenVINOExecutionProvider"),
+    ("rocm", "ROCMExecutionProvider"),
+    ("coreml", "CoreMLExecutionProvider"),
+    ("nnapi", "NnapiExecutionProvider"),
+    ("xnnpack", "XnnpackExecutionProvider"),
+)
 
-    report = {
-        "system": args.system,
-        **huggingface_diagnostics(offline=args.offline),
-    }
+
+def _jsonable(value: Any) -> Any:
+    from dataclasses import asdict, is_dataclass
+
+    if is_dataclass(value):
+        return _jsonable(asdict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _provider_source_label(source: str) -> str:
+    return {
+        "default": "built-in default",
+        "user_config": "user config",
+    }.get(source, source)
+
+
+def _distribution_label(status: Any) -> str:
+    if status.imported_distribution:
+        item = next(
+            (dist for dist in status.distributions if dist.name == status.imported_distribution),
+            None,
+        )
+        return (
+            f"{item.name} {item.version}" if item and item.version else status.imported_distribution
+        )
+    if status.distribution_state == "ambiguous":
+        return "ambiguous (multiple distributions claim the import)"
+    if status.distribution_state == "vendor":
+        return "vendor/custom build"
+    if status.distributions:
+        return ", ".join(
+            f"{item.name} {item.version}" if item.version else item.name
+            for item in status.distributions
+        )
+    return "none detected"
+
+
+def _runtime_status_plain(status: Any) -> None:
+    print("ONNX Runtime status")
+    print()
+    print(f"Importable              : {'yes' if status.importable else 'no'}")
+    print(f"Distribution             : {_distribution_label(status)}")
+    print(f"Distribution state       : {status.distribution_state}")
+    if not status.importable and status.distributions:
+        print(
+            "Installed distributions : "
+            + ", ".join(
+                f"{item.name} {item.version}" if item.version else item.name
+                for item in status.distributions
+            )
+        )
+    if status.module_version is not None:
+        print(f"Module version           : {status.module_version}")
+    if status.module_path is not None:
+        print(f"Module path              : {status.module_path}")
+    if status.build_device is not None:
+        print(f"Build device             : {status.build_device}")
+    if status.build_info is not None:
+        print(f"Build information        : {status.build_info}")
+    if status.available_providers:
+        print("\nProviders reported by ORT:")
+        for provider in status.available_providers:
+            print(f"  {provider}")
+    else:
+        print("Providers reported by ORT: none")
+    configured = ", ".join(status.configured_providers) or "invalid"
+    resolved = ", ".join(status.resolved_providers) or "unavailable"
+    print(f"\nConfigured providers    : {configured}")
+    print(f"Configuration source    : {_provider_source_label(status.provider_source)}")
+    print(f"Resolved providers      : {resolved}")
+    if status.import_error:
+        print(f"Import error             : {status.import_error}")
+    if status.resolution_error:
+        print(f"Resolution error         : {status.resolution_error}")
+    if not status.importable:
+        print("\nInstall a compatible runtime, for example:")
+        print('  python -m pip install "onnxvoice[cpu]"')
+
+
+def _cmd_runtime_status(args: argparse.Namespace) -> int:
+    from . import runtime
+
+    status = runtime.runtime_status()
+    if getattr(args, "format", "plain") == "json":
+        print(json.dumps(_jsonable(status), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        _runtime_status_plain(status)
+    return 0
+
+
+def _cmd_runtime_list(args: argparse.Namespace) -> int:
+    from . import runtime
+    from ._table import render_table
+
+    status = runtime.runtime_status()
     if args.format == "json":
-        print(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(_jsonable(status), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
-    print("Pocket download diagnostics")
-    print(f"Hugging Face integration : {report['huggingface_hub']}")
-    print(f"Credentials             : {report['credentials']}")
-    print(f"Offline mode            : {'yes' if report['offline'] else 'no'}")
-    print(f"Implicit token disabled : {'yes' if report['implicit_token_disabled'] else 'no'}")
-    print(f"Gated repository access : {report['gated_access']}")
+    print("Installed ONNX Runtime distributions")
+    distribution_rows = []
+    for distribution in status.distributions:
+        if distribution.owns_import is None:
+            owner = "unknown"
+        elif status.distribution_state == "ambiguous" and distribution.owns_import:
+            owner = "ambiguous"
+        else:
+            owner = "yes" if distribution.owns_import else "no"
+        distribution_rows.append([distribution.name, distribution.version or "-", owner])
+    if not distribution_rows:
+        distribution_rows.append(["none detected", "-", "no"])
+    render_table(["NAME", "VERSION", "IMPORT OWNER"], distribution_rows)
+
+    print("\nProviders reported by imported ORT")
+    aliases = {provider: alias for alias, provider in _PROVIDER_LIST_ALIASES}
+    provider_rows = []
+    for provider in status.available_providers:
+        provider_rows.append(
+            [
+                aliases.get(provider, provider),
+                provider,
+                "yes" if provider in status.resolved_providers else "no",
+            ]
+        )
+    if not provider_rows:
+        provider_rows.append(["none reported", "-", "no"])
+    render_table(["ALIAS", "PROVIDER", "SELECTED"], provider_rows)
+    if status.distribution_state == "ambiguous":
+        print("\nWarning: multiple distributions claim the same onnxruntime import.")
+        print("The imported files may have been overwritten by package installation order.")
+        print("Use one ONNX Runtime distribution per environment.")
+    return 0
+
+
+def _provider_install_hint(provider: str | None) -> str:
+    from . import runtime
+
+    if provider is not None:
+        canonical = runtime.normalize_provider_name(provider)
+        hint = _PROVIDER_INSTALL_HINTS.get(canonical)
+        if hint:
+            return hint
+        return f"Install a compatible ONNX Runtime build that provides {canonical}."
+    return 'Install a compatible runtime, for example: python -m pip install "onnxvoice[gpu]"'
+
+
+def _cmd_runtime_use(args: argparse.Namespace) -> int:
+    from . import runtime
+    from .errors import RuntimeContractError
+    from .runtime_config import runtime_config_path
+
+    status = runtime.runtime_status()
+    if not status.importable:
+        print(
+            f"Cannot select {args.providers}: ONNX Runtime is not importable in this environment.",
+            file=sys.stderr,
+        )
+        for distribution in status.distributions:
+            version = f" {distribution.version}" if distribution.version else ""
+            print(f"  Detected distribution: {distribution.name}{version}", file=sys.stderr)
+        if status.import_error:
+            print(f"  Import error: {status.import_error}", file=sys.stderr)
+        print(_provider_install_hint(args.providers), file=sys.stderr)
+        return 2
+
+    try:
+        preference = runtime.set_default_providers(args.providers)
+        resolved = runtime.resolve_provider_preference(
+            preference, available=status.available_providers
+        )
+    except RuntimeContractError as exc:
+        try:
+            requested = runtime.provider_preference(args.providers, environment={}).requested
+            unavailable = [
+                runtime.normalize_provider_name(name)
+                for name in requested
+                if name.lower() != "auto"
+                and runtime.normalize_provider_name(name) not in status.available_providers
+            ]
+        except RuntimeContractError:
+            unavailable = []
+        if unavailable:
+            provider = unavailable[0]
+            print(
+                f"Cannot select {args.providers}: {provider} is not available in the imported "
+                "ONNX Runtime build.",
+                file=sys.stderr,
+            )
+            if status.distributions:
+                print("\nDetected distribution:", file=sys.stderr)
+                for distribution in status.distributions:
+                    version = f" {distribution.version}" if distribution.version else ""
+                    print(f"  {distribution.name}{version}", file=sys.stderr)
+            print(
+                "\nInstall a compatible runtime in this Python environment, then retry:",
+                file=sys.stderr,
+            )
+            print(f"  {_provider_install_hint(provider)}", file=sys.stderr)
+        else:
+            print(f"Cannot select {args.providers}: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Default ONNX Runtime provider set to: {','.join(preference.requested)}")
+    print(f"Resolved now as: {', '.join(resolved)}")
+    print(f"Configuration: {runtime_config_path()}")
+    return 0
+
+
+def _cmd_runtime_reset(args: argparse.Namespace) -> int:
+    from . import runtime
+
+    runtime.clear_default_providers()
+    status = runtime.runtime_status()
+    print("Removed saved ONNX Runtime provider preference.")
+    print(f"Effective provider source: {_provider_source_label(status.provider_source)}")
+    print(
+        "Effective provider: "
+        + (", ".join(status.resolved_providers) if status.resolved_providers else "unavailable")
+    )
+    if status.resolution_error:
+        print(f"Resolution error: {status.resolution_error}")
+    return 0
+
+
+def _cmd_runtime(args: argparse.Namespace) -> int:
+    action = getattr(args, "runtime_command", "status")
+    if action == "status":
+        return _cmd_runtime_status(args)
+    if action == "list":
+        return _cmd_runtime_list(args)
+    if action == "use":
+        return _cmd_runtime_use(args)
+    if action == "reset":
+        return _cmd_runtime_reset(args)
+    raise ValueError(f"unknown runtime command: {action}")
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    import platform
+
+    from . import __version__, runtime
+    from .huggingface import huggingface_diagnostics
+
+    if args.system == "pocket":
+        print(
+            "warning: `onnxvoice doctor --system pocket` is deprecated; use `onnxvoice doctor`",
+            file=sys.stderr,
+        )
+
+    status = runtime.runtime_status()
+    report = {
+        "schema": 1,
+        "onnxvoice": {"version": __version__},
+        "python": {"version": platform.python_version(), "executable": sys.executable},
+        "onnxruntime": _jsonable(status),
+        "huggingface": huggingface_diagnostics(offline=args.offline),
+    }
+    if args.format == "json":
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    print("ONNXVoice doctor\n")
+    print("Python")
+    print(f"  executable              : {sys.executable}")
+    print(f"  version                 : {platform.python_version()}")
+    print("\nONNX Runtime")
+    print(f"  importable              : {'yes' if status.importable else 'no'}")
+    print(f"  distribution            : {_distribution_label(status)}")
+    print(f"  distribution state      : {status.distribution_state}")
+    if status.module_version is not None:
+        print(f"  module version          : {status.module_version}")
+    if status.module_path is not None:
+        print(f"  module path             : {status.module_path}")
+    if status.build_device is not None:
+        print(f"  build device            : {status.build_device}")
+    print("  available providers     : " + (", ".join(status.available_providers) or "none"))
+    print("  configured providers    : " + (", ".join(status.configured_providers) or "invalid"))
+    print(f"  configuration source    : {_provider_source_label(status.provider_source)}")
+    print("  resolved providers      : " + (", ".join(status.resolved_providers) or "unavailable"))
+    print("  inference readiness     : provider reported by ORT; session not probed")
+    if status.import_error:
+        print(f"  import error            : {status.import_error}")
+    if status.resolution_error:
+        print(f"  resolution error        : {status.resolution_error}")
+
+    hf = report["huggingface"]
+    print("\nHugging Face")
+    print(f"  integration             : {hf['huggingface_hub']}")
+    print(f"  credentials             : {hf['credentials']}")
+    print(f"  offline mode            : {'yes' if hf['offline'] else 'no'}")
+    print(f"  implicit token disabled : {'yes' if hf['implicit_token_disabled'] else 'no'}")
+    print(f"  gated repository access : {hf['gated_access']}")
+    healthy = status.importable and status.resolution_error is None
+    print("\nResult")
+    print(f"  runtime configuration   : {'OK' if healthy else 'needs attention'}")
     return 0
 
 
@@ -1015,6 +1342,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"Unsupported catalog system: {args.catalog_system}")
 
         # Command dispatch
+        if args.command == "runtime":
+            return _cmd_runtime(args)
         if args.command == "doctor":
             return _cmd_doctor(args)
 

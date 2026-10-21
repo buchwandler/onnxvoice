@@ -34,11 +34,11 @@ Alternatively, provide `HF_TOKEN` through the application's normal secret-manage
 The Pocket diagnostic reports whether the optional Hub package and credentials appear configured, whether offline mode is active, and whether implicit tokens are disabled. It does not make a network request and cannot confirm access to a gated repository:
 
 ```bash
-onnxvoice doctor --system pocket
-onnxvoice --offline doctor --system pocket --format json
+onnxvoice doctor
+onnxvoice --offline doctor --format json
 ```
 
-For a gated-access failure, verify account access on the repository page and confirm the active Hugging Face account with `hf auth whoami`. If the application runs in a service, container, or a different user environment, verify that it sees the intended `HF_HOME`, `HF_TOKEN_PATH`, or `HF_TOKEN` configuration without displaying token contents.
+The system-neutral doctor is network-free and reports credential state without exposing token contents; it does not test gated repository access. For a gated-access failure, verify account access on the repository page and confirm the active Hugging Face account with `hf auth whoami`. If the application runs in a service, container, or a different user environment, verify that it sees the intended `HF_HOME`, `HF_TOKEN_PATH`, or `HF_TOKEN` configuration without displaying token contents.
 
 ## Reference WAVs and Pocket runtime
 

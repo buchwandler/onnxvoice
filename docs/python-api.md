@@ -85,19 +85,49 @@ OnnxVoice manages Chatterbox bundles and runs the four-graph adapter. The tokeni
 
 Qwen3 requires its WaveKat tokenizer/chat frontend to provide model-ready token IDs. OnnxVoice owns Qwen3 catalog/install/runtime and exposes VoiceDesign inference, Base reference preparation, `Qwen3VoiceState`, graph/provider diagnostics, and local bundle opening. See [Qwen3-TTS WaveKat](systems/qwen3.md) for the exact ID, audio, bundle, and provider contracts; use [Qwen3Synth](https://github.com/buchwandler/qwen3synth) for the text/WAV/profile workflow.
 
-## Providers and diagnostics
+## Runtime inspection and provider policy
 
-Pass `provider=` or `providers=` to `open()` or `open_local()`. `OnnxSession` resolves aliases against the installed ONNX Runtime provider set. `runtime.diagnostics()` returns provider and graph details for every session, including multi-session adapters:
+ONNX Runtime distributions/builds and execution providers are distinct. The top-level API exposes the same structured runtime status used by the CLI:
+
+```python
+import onnxvoice
+
+status = onnxvoice.runtime_status()
+print(status.module_version)
+print(status.imported_distribution)
+print(status.available_providers)
+print(status.configured_providers)
+print(status.provider_source)
+print(status.resolved_providers)
+```
+
+`OnnxRuntimeStatus` includes the imported module path/build, discovered distribution metadata and ownership state, providers reported by ORT, and any import or provider-resolution error. Reported providers are not a hardware/native-library self-test. Runtime status does not initialize a model session.
+
+The effective provider policy precedence is:
+
+1. Explicit `provider=` / `providers=` Python argument.
+2. `ONNXVOICE_PROVIDERS`.
+3. `ONNXVOICE_PROVIDER`.
+4. Saved user-level provider preference.
+5. Built-in `cpu` default.
+
+Persist or clear the default with `onnxvoice.set_default_providers("cuda")` and `onnxvoice.clear_default_providers()`. Saved preferences apply only when explicit arguments and environment overrides are absent. They affect future sessions; they do not mutate an already-open runtime. Environment values remain process-owned and are not changed by clearing the saved preference.
+
+## Providers and session diagnostics
+
+Pass `provider=` or `providers=` to `open()` or `open_local()` for an explicit per-runtime override. `OnnxSession` resolves aliases against the providers reported by the imported build. `runtime.diagnostics()` returns provider and graph details for every session, including multi-session adapters:
 
 ```python
 diagnostics = runtime.diagnostics()
 for session in diagnostics.sessions:
     print(session.providers_requested)
+    print(session.provider_source)
+    print(session.providers_resolved)
     print(session.providers_active)
     print(session.inputs, session.outputs)
 ```
 
-See [ONNX Runtime providers](providers.md) for installation extras, automatic selection, and environment configuration.
+`providers_active` is specific to an initialized inference session and is obtained from that session; it is not a global runtime setting. See [ONNX Runtime providers](providers.md) for CLI commands, distribution guidance, persistence, automatic selection, and environment configuration.
 
 ## Runtime result
 

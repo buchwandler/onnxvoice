@@ -20,6 +20,14 @@ python -m pip install "onnxvoice[directml]"
 python -m pip install "onnxvoice[openvino]"
 ```
 
+Inspect the imported ONNX Runtime build and its reported providers after installation:
+
+```bash
+onnxvoice runtime status
+```
+
+To persist a default provider policy for future sessions, use `onnxvoice runtime use cuda`, `onnxvoice runtime use cpu`, or `onnxvoice runtime use auto`. This selects a provider; it does not change the installed ONNX Runtime distribution. See [ONNX Runtime providers](providers.md) for selection precedence and environment overrides.
+
 Hugging Face download support is an engine-neutral transport extra; it does not install an inference runtime:
 
 ```bash

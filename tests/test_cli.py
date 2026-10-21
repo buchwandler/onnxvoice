@@ -122,9 +122,46 @@ class TestRenderInventory:
         assert "x\ty" in output.getvalue()
 
 
-def test_doctor_reports_non_secret_huggingface_status(monkeypatch, capsys, tmp_path) -> None:
+def _runtime_status(
+    *,
+    importable: bool = True,
+    available: tuple[str, ...] = ("CUDAExecutionProvider", "CPUExecutionProvider"),
+):
+    from pathlib import Path
+
+    from onnxvoice.types import OnnxRuntimeStatus, RuntimeDistributionInfo
+
+    distributions = (
+        (RuntimeDistributionInfo("onnxruntime-gpu", "1.24.1", Path("/site-packages"), True),)
+        if importable
+        else ()
+    )
+    return OnnxRuntimeStatus(
+        importable=importable,
+        module_version="1.24.1" if importable else None,
+        module_path=Path("/site-packages/onnxruntime/__init__.py") if importable else None,
+        build_device="GPU" if importable else None,
+        build_info="test build" if importable else None,
+        distributions=distributions,
+        imported_distribution="onnxruntime-gpu" if importable else None,
+        distribution_state="resolved" if importable else "not_installed",
+        available_providers=available if importable else (),
+        configured_providers=("cuda",),
+        provider_source="ONNXVOICE_PROVIDER",
+        resolved_providers=("CUDAExecutionProvider",) if importable else (),
+        import_error=None if importable else "ImportError: missing",
+        resolution_error=None,
+    )
+
+
+def test_doctor_is_system_neutral_and_keeps_non_secret_huggingface_status(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    from onnxvoice import runtime
     from onnxvoice.cli import main
 
+    status = _runtime_status()
+    monkeypatch.setattr(runtime, "runtime_status", lambda: status)
     secret = "hf_FAKE_SECRET_SENTINEL"
     monkeypatch.setenv("HF_TOKEN", secret)
     monkeypatch.setenv("HF_TOKEN_PATH", str(tmp_path / "token"))
@@ -132,11 +169,171 @@ def test_doctor_reports_non_secret_huggingface_status(monkeypatch, capsys, tmp_p
     monkeypatch.setenv("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 
     assert main(["--offline", "doctor", "--system", "pocket", "--format", "json"]) == 0
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report["schema"] == 1
+    assert report["python"]["executable"]
+    assert report["onnxruntime"]["distribution_state"] == "resolved"
+    assert report["onnxruntime"]["module_path"] == "/site-packages/onnxruntime/__init__.py"
+    assert report["huggingface"]["credentials"] == "configured"
+    assert report["huggingface"]["offline"] is True
+    assert report["huggingface"]["implicit_token_disabled"] is True
+    assert report["huggingface"]["gated_access"].startswith("not checked")
+    assert "Pocket download diagnostics" not in captured.out
+    assert "deprecated" in captured.err
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+def test_runtime_status_defaults_to_status_and_serializes_public_status(
+    monkeypatch, capsys
+) -> None:
+    from onnxvoice import runtime
+    from onnxvoice.cli import main
+
+    monkeypatch.setattr(runtime, "runtime_status", lambda: _runtime_status())
+
+    assert main(["runtime", "status", "--format", "json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["importable"] is True
+    assert report["imported_distribution"] == "onnxruntime-gpu"
+    assert report["configured_providers"] == ["cuda"]
+    assert report["module_path"] == "/site-packages/onnxruntime/__init__.py"
+
+    assert main(["runtime"]) == 0
+    assert "ONNX Runtime status" in capsys.readouterr().out
+
+
+def test_runtime_status_absent_runtime_is_successful_json_diagnostic(monkeypatch, capsys) -> None:
+    from onnxvoice import runtime
+    from onnxvoice.cli import main
+
+    monkeypatch.setattr(runtime, "runtime_status", lambda: _runtime_status(importable=False))
+
+    assert main(["runtime", "status", "--format", "json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["importable"] is False
+    assert report["distribution_state"] == "not_installed"
+    assert report["configured_providers"] == ["cuda"]
+    assert report["resolved_providers"] == []
+
+
+def test_runtime_list_table_and_json(monkeypatch, capsys) -> None:
+    from onnxvoice import runtime
+    from onnxvoice.cli import main
+
+    monkeypatch.setattr(runtime, "runtime_status", lambda: _runtime_status())
+
+    assert main(["runtime", "list"]) == 0
+    table_output = capsys.readouterr().out
+    assert "Installed ONNX Runtime distributions" in table_output
+    assert "IMPORT OWNER" in table_output
+    assert "Providers reported by imported ORT" in table_output
+    assert "CUDAExecutionProvider" in table_output
+
+    assert main(["runtime", "list", "--format", "json"]) == 0
+    assert json.loads(capsys.readouterr().out)["distribution_state"] == "resolved"
+
+
+def test_runtime_use_persists_valid_provider_without_installing(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    from onnxvoice import runtime, runtime_config
+    from onnxvoice.cli import main
+
+    stored: list[tuple[str, ...]] = []
+
+    class FakeOrt:
+        @staticmethod
+        def get_available_providers():
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    monkeypatch.setattr(runtime, "runtime_status", lambda: _runtime_status())
+    monkeypatch.setattr(runtime, "_ort", lambda: FakeOrt())
+    monkeypatch.setattr(
+        runtime, "save_runtime_config", lambda providers: stored.append(tuple(providers))
+    )
+    monkeypatch.setattr(runtime_config, "runtime_config_path", lambda: tmp_path / "runtime.json")
+
+    assert main(["runtime", "use", "cuda,cpu"]) == 0
     output = capsys.readouterr().out
-    report = json.loads(output)
-    assert report["system"] == "pocket"
-    assert report["credentials"] == "configured"
-    assert report["offline"] is True
-    assert report["implicit_token_disabled"] is True
-    assert report["gated_access"].startswith("not checked")
-    assert secret not in output
+    assert stored == [("cuda", "cpu")]
+    assert "Default ONNX Runtime provider set to: cuda,cpu" in output
+    assert "Resolved now as: CUDAExecutionProvider, CPUExecutionProvider" in output
+    assert str(tmp_path / "runtime.json") in output
+
+
+def test_runtime_use_auto_and_cpu(monkeypatch, capsys, tmp_path) -> None:
+    from onnxvoice import runtime, runtime_config
+    from onnxvoice.cli import main
+
+    class FakeOrt:
+        @staticmethod
+        def get_available_providers():
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    saved: list[tuple[str, ...]] = []
+    monkeypatch.setattr(runtime, "runtime_status", lambda: _runtime_status())
+    monkeypatch.setattr(runtime, "_ort", lambda: FakeOrt())
+    monkeypatch.setattr(
+        runtime, "save_runtime_config", lambda providers: saved.append(tuple(providers))
+    )
+    monkeypatch.setattr(runtime_config, "runtime_config_path", lambda: tmp_path / "runtime.json")
+
+    assert main(["runtime", "use", "auto"]) == 0
+    auto_output = capsys.readouterr().out
+    assert "Default ONNX Runtime provider set to: auto" in auto_output
+    assert "Resolved now as: CUDAExecutionProvider" in auto_output
+
+    assert main(["runtime", "use", "cpu"]) == 0
+    cpu_output = capsys.readouterr().out
+    assert "Default ONNX Runtime provider set to: cpu" in cpu_output
+    assert "Resolved now as: CPUExecutionProvider" in cpu_output
+    assert saved == [("auto",), ("cpu",)]
+
+
+def test_runtime_use_unavailable_provider_fails_with_install_hint(monkeypatch, capsys) -> None:
+    from onnxvoice import runtime
+    from onnxvoice.cli import main
+
+    class CpuOnlyOrt:
+        @staticmethod
+        def get_available_providers():
+            return ["CPUExecutionProvider"]
+
+    monkeypatch.setattr(
+        runtime, "runtime_status", lambda: _runtime_status(available=("CPUExecutionProvider",))
+    )
+    monkeypatch.setattr(runtime, "_ort", lambda: CpuOnlyOrt())
+    saved: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        runtime, "save_runtime_config", lambda providers: saved.append(tuple(providers))
+    )
+
+    assert main(["runtime", "use", "cuda"]) == 2
+    captured = capsys.readouterr()
+    assert "CUDAExecutionProvider is not available" in captured.err
+    assert "onnxvoice[gpu]" in captured.err
+    assert saved == []
+
+
+def test_runtime_reset_keeps_environment_override(monkeypatch, capsys, tmp_path) -> None:
+    import os
+
+    from onnxvoice import runtime, runtime_config
+    from onnxvoice.cli import main
+
+    monkeypatch.setenv("ONNXVOICE_PROVIDER", "cuda")
+    monkeypatch.setattr(runtime_config, "user_config_path", lambda app: tmp_path / app)
+    config_path = tmp_path / "onnxvoice" / "runtime.json"
+    config_path.parent.mkdir()
+    config_path.write_text("malformed", encoding="utf-8")
+    monkeypatch.setattr(runtime, "runtime_status", lambda: _runtime_status())
+
+    assert main(["runtime", "reset"]) == 0
+    output = capsys.readouterr().out
+    assert "Removed saved ONNX Runtime provider preference." in output
+    assert "Effective provider source: ONNXVOICE_PROVIDER" in output
+    assert "Effective provider: CUDAExecutionProvider" in output
+    assert not config_path.exists()
+    assert os.environ["ONNXVOICE_PROVIDER"] == "cuda"

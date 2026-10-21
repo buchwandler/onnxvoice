@@ -13,7 +13,8 @@ The CLI is organized around catalog discovery, local inventory, installation lif
 | `onnxvoice updates`   | Compare installed assets with catalog entries                         |
 | `onnxvoice update`    | Update one or all outdated installations                              |
 | `onnxvoice info`      | Detailed installed-asset information, optionally with an update check |
-| `onnxvoice doctor`    | Non-secret Pocket download diagnostics                                |
+| `onnxvoice runtime`   | Inspect ONNX Runtime distributions and select provider policy         |
+| `onnxvoice doctor`    | System-neutral Python, runtime, and download diagnostics              |
 | `onnxvoice path`      | Print an installation path                                            |
 | `onnxvoice show`      | Show an installed manifest                                            |
 | `onnxvoice remove`    | Remove installation variants                                          |
@@ -161,14 +162,33 @@ onnxvoice voices show inflect:nano-v2/default
 
 `voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`; Inflect models expose a fixed `default` voice such as `inflect:nano-v2/default`. See [Inflect v2](systems/inflect.md) for its token-ID runtime boundary and [KittenTTS](systems/kitten.md) for the Kitten boundary. See [Catalog voices](voices.md) for reference forms and record fields.
 
-## Pocket diagnostics and offline use
+## Runtime selection
+
+The runtime command inspects the imported ONNX Runtime distribution/build separately from the execution providers it reports. With no subcommand, `runtime` is equivalent to `runtime status`:
 
 ```bash
-onnxvoice doctor --system pocket
-onnxvoice --offline doctor --system pocket --format json
+onnxvoice runtime
+onnxvoice runtime status --format json
+onnxvoice runtime list
+onnxvoice runtime use cuda
+onnxvoice runtime use cuda,cpu
+onnxvoice runtime use auto
+onnxvoice runtime reset
 ```
 
-The diagnostic does not reveal tokens or test access to a gated repository over the network. See [Pocket downloads](pocket-downloads.md) for authentication and offline-cache details.
+`use` persists a provider policy for future ONNXVoice sessions. It does not install or switch Python distributions, silently add CPU fallback, or modify already initialized sessions. Environment variables and explicit Python provider arguments retain their precedence; see [ONNX Runtime providers](providers.md).
+
+## Diagnostics and offline downloads
+
+`doctor` reports Python, ONNX Runtime, and non-secret Hugging Face diagnostics. JSON is a versioned object, and diagnostic status generation makes no network request:
+
+```bash
+onnxvoice doctor
+onnxvoice doctor --format json
+onnxvoice --offline doctor --format json
+```
+
+Credentials are reported only as configured/not configured; tokens and credential contents are never printed. Pocket users can use the same general doctor output; see [Pocket downloads](pocket-downloads.md) for Pocket-specific gated-access and offline-cache details.
 
 ## Import local files
 

@@ -55,9 +55,9 @@ Pocket predefined voice states keep their existing `pocket-voice-states` cache l
 
 ## Providers and diagnostics
 
-Provider aliases are normalized without importing ONNX Runtime. The explicit `auto` policy checks TensorRT, CUDA, ROCm, DirectML, OpenVINO, CoreML, XNNPACK, NNAPI, and CPU in that order. Platform-managed CoreML and mobile providers use marker extras because the compatible ONNX Runtime build supplies the provider implementation.
+Provider alias normalization and persisted provider policy are centralized runtime infrastructure, independent of catalog entries, model metadata, or individual system adapters. The optional ONNX Runtime import is deferred until inspection or session creation; `auto` resolves against providers reported by the imported build in deterministic priority order.
 
-`runtime.diagnostics()` returns producer-neutral session records containing model paths, requested and active providers, graph inputs, and graph outputs. Consumers do not need to know whether an adapter owns one or several sessions.
+`runtime.diagnostics()` returns producer-neutral per-session records containing requested providers and their source, resolved providers, providers active on each initialized session, model paths, and graph inputs/outputs. A provider change affects future sessions only, and reported provider availability is not an inference-readiness probe.
 
 ## Local resources
 

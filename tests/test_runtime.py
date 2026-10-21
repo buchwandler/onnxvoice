@@ -96,3 +96,21 @@ def test_strict_provider_policy_disables_implicit_cpu_fallback(tmp_path, monkeyp
     assert ort.session_options is not None
     assert ort.session_options.entries == [("session.disable_cpu_ep_fallback", "1")]
     assert session.active_providers == ("CUDAExecutionProvider", "CPUExecutionProvider")
+
+
+def test_session_diagnostics_capture_environment_provider_preference(tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"model")
+    ort = FakeOrt()
+    monkeypatch.setattr(runtime, "_ort", lambda: ort)
+    monkeypatch.setattr(runtime, "load_runtime_config", lambda: None)
+    monkeypatch.setenv("ONNXVOICE_PROVIDER", "cuda")
+
+    session = runtime.OnnxSession(model, providers=None)
+    monkeypatch.setenv("ONNXVOICE_PROVIDER", "cpu")
+    diagnostic = session.diagnostics()
+
+    assert diagnostic.providers_requested == ("CUDAExecutionProvider",)
+    assert diagnostic.provider_source == "ONNXVOICE_PROVIDER"
+    assert diagnostic.providers_resolved == ("CUDAExecutionProvider",)
+    assert diagnostic.providers_active == ("CUDAExecutionProvider", "CPUExecutionProvider")
