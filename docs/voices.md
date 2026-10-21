@@ -33,6 +33,18 @@ for record in voice.list_voices(language="en-US"):
     print(record.ref, record.system, record.asset_id, record.voice_id)
 ```
 
+To filter voice discovery by its backing catalog asset, pass the exact catalog item ID as `asset_id`. The CLI spelling is `--asset`; the Python API keyword is `asset_id`:
+
+```python
+from onnxvoice import OnnxVoice
+
+manager = OnnxVoice()
+for voice in manager.list_voices(system="kokoro", asset_id="v1.0"):
+    print(voice.ref)
+```
+
+This selects the backing asset without changing the semantic voice reference, for example `kokoro:v1.0/af_heart`.
+
 `VoiceRecord` includes the semantic `ref`, `system`, `asset_id`, `voice_id`, and `backing_ref`, along with descriptive language, locale, label, and gender metadata. Its `languages` field separately lists supported synthesis-language capabilities. Neither those capabilities nor descriptive language and gender form part of voice identity. A multilingual Supertonic style keeps the same ref, such as `supertonic:supertonic-3/F1`, across its supported languages. Missing authoritative gender metadata is represented as `unknown`.
 
 Pocket discovery is limited to voice IDs already present in normalized `CatalogItem.voices`. Predefined names or descriptive details outside that field are not added as voices by discovery.

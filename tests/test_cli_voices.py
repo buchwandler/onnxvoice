@@ -96,6 +96,27 @@ def test_voices_list_parser_accepts_supertonic() -> None:
     assert args.system == "supertonic"
 
 
+def test_voices_list_parser_accepts_exact_asset_filter() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["voices", "list", "--system", "kokoro", "--asset", "v1.0"])
+
+    assert args.system == "kokoro"
+    assert args.asset_id == "v1.0"
+
+    commands = next(action for action in parser._actions if action.dest == "command").choices
+    voices = commands["voices"]
+    subcommands = next(
+        action for action in voices._actions if action.dest == "voices_command"
+    ).choices
+    list_parser = subcommands["list"]
+    asset_action = next(
+        action for action in list_parser._actions if "--asset" in action.option_strings
+    )
+    assert asset_action.option_strings == ["--asset"]
+    assert asset_action.dest == "asset_id"
+    assert "exact backing catalog asset ID" in list_parser.format_help()
+
+
 def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
     parser = build_parser()
     commands = next(action for action in parser._actions if action.dest == "command").choices
@@ -110,6 +131,7 @@ def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
     show_options = {option for action in show_parser._actions for option in action.option_strings}
     assert list_options - {"-h", "--help"} == {
         "--system",
+        "--asset",
         "--lang",
         "--language",
         "--refresh",
@@ -124,10 +146,29 @@ def test_voices_list_renders_semantic_refs_as_json(monkeypatch, capsys) -> None:
     monkeypatch.setattr("onnxvoice.cli._manager", lambda _args: manager)
 
     assert (
-        main(["voices", "list", "--system", "kokoro", "--lang", "en-US", "--format", "json"]) == 0
+        main(
+            [
+                "voices",
+                "list",
+                "--system",
+                "kokoro",
+                "--asset",
+                "v1.0",
+                "--lang",
+                "en-US",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
     )
 
-    assert manager.list_args == {"system": "kokoro", "language": "en-US", "refresh": False}
+    assert manager.list_args == {
+        "system": "kokoro",
+        "asset_id": "v1.0",
+        "language": "en-US",
+        "refresh": False,
+    }
     payload = json.loads(capsys.readouterr().out)["items"][0]
     assert payload == {
         "ref": "kokoro:v1.0/af_heart",
@@ -150,7 +191,12 @@ def test_supertonic_list_and_show_json_keep_canonical_identity(monkeypatch, caps
     assert (
         main(["voices", "list", "--system", "supertonic", "--lang", "de", "--format", "json"]) == 0
     )
-    assert manager.list_args == {"system": "supertonic", "language": "de", "refresh": False}
+    assert manager.list_args == {
+        "system": "supertonic",
+        "asset_id": None,
+        "language": "de",
+        "refresh": False,
+    }
     listed = json.loads(capsys.readouterr().out)["items"][0]
     expected = {
         "ref": "supertonic:supertonic-3/F1",

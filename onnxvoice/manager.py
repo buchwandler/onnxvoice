@@ -136,6 +136,7 @@ class OnnxVoice:
         self,
         system: str | None = None,
         *,
+        asset_id: str | None = None,
         language: str | None = None,
         refresh: bool = False,
         progress: ProgressCallback | None = None,
@@ -145,6 +146,8 @@ class OnnxVoice:
         items: list[CatalogItem] = []
         for catalog_system in systems:
             items.extend(self.catalog.list(catalog_system, refresh=refresh, progress=progress))
+        if asset_id is not None:
+            items = [item for item in items if item.id == asset_id]
 
         records: list[VoiceRecord] = []
         seen: set[tuple[str, str, str]] = set()

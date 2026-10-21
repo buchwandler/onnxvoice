@@ -144,6 +144,48 @@ def test_list_voices_flattens_all_catalogs_and_filters_descriptive_language() ->
     }
 
 
+def test_list_voices_filters_exact_asset_id_and_composes_filters() -> None:
+    kokoro_v11 = CatalogItem(
+        system="kokoro",
+        id="v1.1",
+        kind="model",
+        artifacts=(),
+        voices=("af_heart",),
+        metadata={"language_codes": ["en-GB"]},
+    )
+    other_v10 = CatalogItem(
+        system="other",
+        id="v1.0",
+        kind="bundle",
+        artifacts=(),
+        voices=("other_voice",),
+        metadata={"language_codes": ["ja"]},
+    )
+    manager = object.__new__(OnnxVoice)
+    manager.catalog = _Catalog((_kokoro_model(), kokoro_v11, other_v10))
+
+    all_kokoro = manager.list_voices("kokoro")
+    assert {record.asset_id for record in all_kokoro} == {"v1.0", "v1.1"}
+
+    filtered = manager.list_voices(system="kokoro", asset_id="v1.0")
+    assert [(record.system, record.asset_id, record.voice_id) for record in filtered] == [
+        ("kokoro", "v1.0", "af_heart")
+    ]
+    assert manager.list_voices(system="kokoro", asset_id="v1") == []
+    assert manager.list_voices(system="kokoro", asset_id="kokoro:v1.0") == []
+
+    composed = manager.list_voices(system="kokoro", asset_id="v1.0", language="en-US")
+    assert [record.ref for record in composed] == ["kokoro:v1.0/af_heart"]
+    assert manager.list_voices(system="kokoro", asset_id="v1.0", language="en-GB") == []
+
+    cross_system = manager.list_voices(asset_id="v1.0")
+    assert {(record.system, record.asset_id) for record in cross_system} == {
+        ("kokoro", "v1.0"),
+        ("other", "v1.0"),
+    }
+    assert manager.list_voices("kokoro") == all_kokoro
+
+
 def test_multilingual_bundle_capabilities_filter_list_and_resolve() -> None:
     languages = ("en", "ko", "ja", "de")
     item = CatalogItem(

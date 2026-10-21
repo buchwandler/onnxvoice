@@ -160,6 +160,22 @@ onnxvoice voices list --system inflect
 onnxvoice voices show inflect:nano-v2/default
 ```
 
+```bash
+# All Kokoro voices
+onnxvoice voices list --system kokoro
+
+# Voices backed by the exact asset ID v1.0
+onnxvoice voices list --system kokoro --asset v1.0
+
+# Combine asset and language filters
+onnxvoice voices list --system kokoro --asset v1.0 --lang en-US
+
+# Request JSON output
+onnxvoice voices list --system kokoro --asset v1.0 --format json
+```
+
+`--asset` matches the backing catalog asset ID exactly. It is a selection filter, not a voice ID or a complete semantic voice reference, and it can be used without `--system`.
+
 `voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`; Inflect models expose a fixed `default` voice such as `inflect:nano-v2/default`. See [Inflect v2](systems/inflect.md) for its token-ID runtime boundary and [KittenTTS](systems/kitten.md) for the Kitten boundary. See [Catalog voices](voices.md) for reference forms and record fields.
 
 ## Runtime selection

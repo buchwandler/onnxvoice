@@ -85,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
         "list", help="List voices exposed by normalized catalogs"
     )
     voices_list_parser.add_argument("--system", choices=registered_systems())
+    voices_list_parser.add_argument(
+        "--asset",
+        dest="asset_id",
+        metavar="ASSET_ID",
+        help="Filter by exact backing catalog asset ID (e.g. v1.0)",
+    )
     voices_list_parser.add_argument("--lang", "--language", dest="language")
     voices_list_parser.add_argument("--refresh", action="store_true")
     voices_list_parser.add_argument(
@@ -390,6 +396,7 @@ def _cmd_voices_list(args: argparse.Namespace) -> int:
     manager = _manager(args)
     records = manager.list_voices(
         system=args.system,
+        asset_id=args.asset_id,
         language=args.language,
         refresh=args.refresh,
     )
