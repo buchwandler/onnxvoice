@@ -8,7 +8,7 @@ The default catalog currently includes `nano-0.8-int8`, `nano-0.8-fp32`, `micro-
 
 ```bash
 onnxvoice list --system kitten
-onnxvoice voices list --system kitten --lang en-US
+onnxvoice voices list --engine kitten --lang en-US
 onnxvoice voices show kitten:nano-0.8-int8/Bella
 ```
 

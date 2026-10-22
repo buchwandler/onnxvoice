@@ -84,12 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
     voices_list_parser = voices_sub.add_parser(
         "list", help="List voices exposed by normalized catalogs"
     )
-    voices_list_parser.add_argument("--system", choices=registered_systems())
     voices_list_parser.add_argument(
-        "--asset",
-        dest="asset_id",
-        metavar="ASSET_ID",
-        help="Filter by exact backing catalog asset ID (e.g. v1.0)",
+        "--engine", choices=registered_systems(), help="Filter by engine"
+    )
+    voices_list_parser.add_argument(
+        "--target",
+        dest="target",
+        metavar="TARGET_ID",
+        help="Filter by exact catalog target ID (e.g. v1.0)",
     )
     voices_list_parser.add_argument("--lang", "--language", dest="language")
     voices_list_parser.add_argument("--refresh", action="store_true")
@@ -425,8 +427,8 @@ def _render_voice_records(records, output_format: str) -> None:
 def _cmd_voices_list(args: argparse.Namespace) -> int:
     manager = _manager(args)
     records = manager.list_voices(
-        system=args.system,
-        asset_id=args.asset_id,
+        system=args.engine,
+        asset_id=args.target,
         language=args.language,
         refresh=args.refresh,
     )

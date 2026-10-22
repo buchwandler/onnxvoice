@@ -8,7 +8,7 @@ Supertonic has a built-in adapter and catalog support. The runtime is a multi-co
 
 Supertonic catalog children use the semantic ref `<system>:<asset-id>/<voice-id>`. The ten current styles in `supertonic-3` therefore use refs from `supertonic:supertonic-3/F1` through `supertonic:supertonic-3/M5`. The backing asset ref is `supertonic:supertonic-3`, and a style ID such as `F1` is only unique within that bundle.
 
-The `VoiceRecord.languages` field lists the bundle-declared synthesis-language capabilities inherited by each style. For example, `onnxvoice voices list --system supertonic --lang de` returns all styles while German remains declared by the catalog. Language capability does not form part of the voice ref, and descriptive `language`/`locale` metadata does not replace the full capability list. Gender is not inferred from style names, so it remains `unknown` unless supplied by authoritative metadata.
+The `VoiceRecord.languages` field lists the bundle-declared synthesis-language capabilities inherited by each style. For example, `onnxvoice voices list --engine supertonic --lang de` returns all styles while German remains declared by the catalog. Language capability does not form part of the voice ref, and descriptive `language`/`locale` metadata does not replace the full capability list. Gender is not inferred from style names, so it remains `unknown` unless supplied by authoritative metadata.
 
 ## Runtime components
 

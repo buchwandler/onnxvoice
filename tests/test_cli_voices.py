@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from onnxvoice.cli import build_parser, main
 from onnxvoice.types import CatalogItem, VoiceMetadata, VoiceRecord
 
@@ -91,17 +93,17 @@ def _supertonic_record() -> VoiceRecord:
 
 
 def test_voices_list_parser_accepts_supertonic() -> None:
-    args = build_parser().parse_args(["voices", "list", "--system", "supertonic"])
+    args = build_parser().parse_args(["voices", "list", "--engine", "supertonic"])
 
-    assert args.system == "supertonic"
+    assert args.engine == "supertonic"
 
 
-def test_voices_list_parser_accepts_exact_asset_filter() -> None:
+def test_voices_list_parser_accepts_exact_target_filter() -> None:
     parser = build_parser()
-    args = parser.parse_args(["voices", "list", "--system", "kokoro", "--asset", "v1.0"])
+    args = parser.parse_args(["voices", "list", "--engine", "kokoro", "--target", "v1.0"])
 
-    assert args.system == "kokoro"
-    assert args.asset_id == "v1.0"
+    assert args.engine == "kokoro"
+    assert args.target == "v1.0"
 
     commands = next(action for action in parser._actions if action.dest == "command").choices
     voices = commands["voices"]
@@ -109,12 +111,36 @@ def test_voices_list_parser_accepts_exact_asset_filter() -> None:
         action for action in voices._actions if action.dest == "voices_command"
     ).choices
     list_parser = subcommands["list"]
-    asset_action = next(
-        action for action in list_parser._actions if "--asset" in action.option_strings
+    target_action = next(
+        action for action in list_parser._actions if "--target" in action.option_strings
     )
-    assert asset_action.option_strings == ["--asset"]
-    assert asset_action.dest == "asset_id"
-    assert "exact backing catalog asset ID" in list_parser.format_help()
+    assert target_action.option_strings == ["--target"]
+    assert target_action.dest == "target"
+    assert "exact catalog target ID" in list_parser.format_help()
+
+
+@pytest.mark.parametrize("legacy_option", ["--system", "--asset"])
+def test_voices_list_parser_rejects_legacy_filter_options(legacy_option: str) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["voices", "list", legacy_option, "kokoro"])
+
+
+def test_voices_list_parser_rejects_unregistered_engine() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["voices", "list", "--engine", "not-registered"])
+
+
+def test_voices_list_target_filter_does_not_require_engine(monkeypatch) -> None:
+    manager = _Manager(_record())
+    monkeypatch.setattr("onnxvoice.cli._manager", lambda _args: manager)
+
+    assert main(["voices", "list", "--target", "v1.0"]) == 0
+    assert manager.list_args == {
+        "system": None,
+        "asset_id": "v1.0",
+        "language": None,
+        "refresh": False,
+    }
 
 
 def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
@@ -130,8 +156,8 @@ def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
     list_options = {option for action in list_parser._actions for option in action.option_strings}
     show_options = {option for action in show_parser._actions for option in action.option_strings}
     assert list_options - {"-h", "--help"} == {
-        "--system",
-        "--asset",
+        "--engine",
+        "--target",
         "--lang",
         "--language",
         "--refresh",
@@ -150,9 +176,9 @@ def test_voices_list_renders_semantic_refs_as_json(monkeypatch, capsys) -> None:
             [
                 "voices",
                 "list",
-                "--system",
+                "--engine",
                 "kokoro",
-                "--asset",
+                "--target",
                 "v1.0",
                 "--lang",
                 "en-US",
@@ -189,7 +215,7 @@ def test_supertonic_list_and_show_json_keep_canonical_identity(monkeypatch, caps
     monkeypatch.setattr("onnxvoice.cli._manager", lambda _args: manager)
 
     assert (
-        main(["voices", "list", "--system", "supertonic", "--lang", "de", "--format", "json"]) == 0
+        main(["voices", "list", "--engine", "supertonic", "--lang", "de", "--format", "json"]) == 0
     )
     assert manager.list_args == {
         "system": "supertonic",

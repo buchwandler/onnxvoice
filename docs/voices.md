@@ -33,7 +33,7 @@ for record in voice.list_voices(language="en-US"):
     print(record.ref, record.system, record.asset_id, record.voice_id)
 ```
 
-To filter voice discovery by its backing catalog asset, pass the exact catalog item ID as `asset_id`. The CLI spelling is `--asset`; the Python API keyword is `asset_id`:
+To filter voice discovery in the CLI, use `--engine` for the engine (the Python API uses `system`) and `--target` for an exact canonical catalog item ID (the Python API keyword is `asset_id`). `--target` is not a voice ID or semantic voice reference and works without `--engine`:
 
 ```python
 from onnxvoice import OnnxVoice

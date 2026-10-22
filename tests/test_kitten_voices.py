@@ -169,13 +169,13 @@ def test_manager_and_cli_list_filter_show_public_kitten_voice_aliases(
 
     monkeypatch.setenv("ONNXVOICE_KITTEN_CATALOG", str(catalog_path))
     args = ["--cache-dir", str(cache), "voices"]
-    assert main([*args, "list", "--system", "kitten"]) == 0
+    assert main([*args, "list", "--engine", "kitten"]) == 0
     table = capsys.readouterr().out
     assert "kitten:nano-0.8-int8/Bella" in table
     assert "Bella" in table
     assert "expr-voice-2-f" not in table
 
-    assert main([*args, "list", "--system", "kitten", "--lang", "en-US", "--format", "json"]) == 0
+    assert main([*args, "list", "--engine", "kitten", "--lang", "en-US", "--format", "json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert [item["voice_id"] for item in payload["items"]] == ["Bella", "Jasper"]
     assert all(item["gender"] == "unknown" for item in payload["items"])

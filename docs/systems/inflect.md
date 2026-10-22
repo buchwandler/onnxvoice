@@ -32,7 +32,7 @@ A repeated request with the same tokens, controls, model, runtime stack, and see
 ```bash
 onnxvoice list --system inflect
 onnxvoice install inflect:nano-v2
-onnxvoice voices list --system inflect
+onnxvoice voices list --engine inflect
 onnxvoice voices show inflect:nano-v2/default
 ```
 
