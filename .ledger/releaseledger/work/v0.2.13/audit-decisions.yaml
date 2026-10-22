@@ -1,0 +1,131 @@
+rows:
+  - sha: 1754357d1116c3cfbc4677fadbe3023b3218d13a
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/api/runtime.md
+      - docs/api/types.md
+      - docs/architecture.md
+      - docs/cli.md
+      - docs/getting-started.md
+      - docs/pocket-downloads.md
+      - docs/providers.md
+      - docs/python-api.md
+      - onnxvoice/__init__.py
+      - onnxvoice/cli.py
+      - onnxvoice/runtime.py
+      - onnxvoice/runtime_config.py
+      - onnxvoice/types.py
+      - tests/test_cli.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_public_api.py
+      - tests/test_runtime.py
+      - tests/test_runtime_status.py
+    observed_behavior: Added runtime status and provider-policy inspection, CLI commands for status/list/use/reset, persistent validated provider preferences, and public Python runtime status/configuration APIs with focused tests and documentation
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: Reviewed implementation, documentation, and regression tests
+    stale: false
+  - sha: 3c5d5680ac5b918650eed4bc2eb4b9d06dc330d0
+    inspected: true
+    inspected_paths:
+      - onnxvoice/cli.py
+    observed_behavior: Changed JSON path serialization to use POSIX formatting for stable cross-platform diagnostic output
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: Internal portability correction; retained as an internal release record
+    stale: false
+  - sha: 7c323f55d4eed54492f0e5c4a6c4b9f91b587d96
+    inspected: true
+    inspected_paths:
+      - docs/cli.md
+      - docs/voices.md
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - tests/test_cli_voices.py
+      - tests/test_voices.py
+    observed_behavior: Added exact catalog asset filtering to voice discovery and documented the filter behavior with CLI and manager tests
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: Reviewed implementation, documentation, and regression tests; covered by the combined voice-filter entry
+    stale: false
+  - sha: 716c576a4f7b8358d27e51c0afaf737dbcf0c129
+    inspected: true
+    inspected_paths:
+      - docs/cli.md
+      - docs/systems/chatterbox.md
+      - docs/systems/index.md
+      - docs/systems/inflect.md
+      - docs/systems/kitten.md
+      - docs/systems/kitten2.md
+      - docs/systems/kokoro.md
+      - docs/systems/piper.md
+      - docs/systems/pocket.md
+      - docs/systems/qwen3.md
+      - docs/systems/sopro.md
+      - docs/systems/supertonic.md
+      - onnxvoice/cli.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/systems/pocket.py
+      - tests/test_cli_engines.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_engine_options.py
+      - tests/test_pocket_adapter.py
+    observed_behavior: Added read-only engine discovery commands that expose adapter contracts, catalog targets, target-specific options, capabilities, distributions, profiles, and declared limits without installing models or creating inference sessions
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: Reviewed implementation, system documentation, and engine discovery tests
+    stale: false
+  - sha: b5da3b310997cd731f52bcea672e8afa60139481
+    inspected: true
+    inspected_paths:
+      - docs/cli.md
+      - docs/systems/inflect.md
+      - docs/systems/kitten.md
+      - docs/systems/supertonic.md
+      - docs/voices.md
+      - onnxvoice/cli.py
+      - tests/test_cli_voices.py
+      - tests/test_kitten_voices.py
+    observed_behavior: Renamed voice-list CLI selectors from system and asset to engine and target, updated documentation and tests, and preserved manager asset filtering through the target argument
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: Reviewed implementation, documentation, and regression tests; covered by the combined voice-filter entry
+    stale: false
+  - sha: 3566b429f5b980db31d69d0f62b04ba9ce0200dd
+    inspected: true
+    inspected_paths:
+      - onnxvoice/runtime.py
+      - onnxvoice/systems/pocket.py
+      - tests/test_cli_voices.py
+      - tests/test_huggingface.py
+      - tests/test_inflect_adapter.py
+      - tests/test_kitten2_generation.py
+      - tests/test_kitten2_integration.py
+      - tests/test_kitten2_tokenizer.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_catalog.py
+      - tests/test_qwen3_catalog.py
+      - tests/test_qwen3_contract.py
+      - tests/test_sopro_local_open.py
+      - tests/test_store.py
+      - tests/test_supertonic_adapter.py
+      - tests/test_supertonic_catalog.py
+      - tests/test_voices.py
+    observed_behavior: Improved static typing annotations across runtime and adapter code and updated tests to satisfy type-checking without changing user-facing behavior
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: Internal quality maintenance; retained as an internal release record
+    stale: false

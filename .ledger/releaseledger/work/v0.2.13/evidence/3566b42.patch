@@ -1,0 +1,581 @@
+ onnxvoice/runtime.py              | 14 ++++++++++----
+ onnxvoice/systems/pocket.py       |  2 +-
+ tests/test_cli_voices.py          | 13 +++++++------
+ tests/test_huggingface.py         |  2 +-
+ tests/test_inflect_adapter.py     | 22 ++++++++++++++++------
+ tests/test_kitten2_generation.py  |  8 ++++----
+ tests/test_kitten2_integration.py |  3 ++-
+ tests/test_kitten2_tokenizer.py   |  2 +-
+ tests/test_pocket_adapter.py      | 27 +++++++++++++++++----------
+ tests/test_pocket_catalog.py      |  3 ++-
+ tests/test_qwen3_catalog.py       |  2 +-
+ tests/test_qwen3_contract.py      |  8 +++++---
+ tests/test_sopro_local_open.py    |  7 ++++---
+ tests/test_store.py               |  3 ++-
+ tests/test_supertonic_adapter.py  |  2 +-
+ tests/test_supertonic_catalog.py  |  2 ++
+ tests/test_voices.py              | 18 ++++++++++--------
+ 17 files changed, 86 insertions(+), 52 deletions(-)
+
+diff --git a/onnxvoice/runtime.py b/onnxvoice/runtime.py
+index 91adee6..897b557 100644
+--- a/onnxvoice/runtime.py
++++ b/onnxvoice/runtime.py
+@@ -5,7 +5,7 @@ import os
+ from collections.abc import Mapping, Sequence
+ from importlib import metadata
+ from pathlib import Path
+-from typing import Any
++from typing import Any, Literal
+
+ from .errors import OptionalDependencyError, RuntimeContractError
+ from .runtime_config import (
+@@ -100,6 +100,9 @@ def provider_preference(
+ ) -> ProviderPreference:
+     """Capture the configured provider policy without importing ONNX Runtime."""
+     env = os.environ if environment is None else environment
++    source: Literal[
++        "explicit", "ONNXVOICE_PROVIDERS", "ONNXVOICE_PROVIDER", "user_config", "default"
++    ]
+     if providers is not None:
+         requested: str | Sequence[str] = providers
+         source = "explicit"
+@@ -174,7 +177,9 @@ def _safe_exception_text(exc: BaseException) -> str:
+
+ def _module_path(module: Any | None) -> Path | None:
+     value = getattr(module, "__file__", None) if module is not None else None
+-    if not isinstance(value, (str, os.PathLike)):
++    if isinstance(value, os.PathLike):
++        value = os.fspath(value)
++    if not isinstance(value, str):
+         return None
+     try:
+         return Path(value).resolve()
+@@ -225,7 +230,7 @@ def _runtime_distributions(
+         except Exception:
+             version = None
+         try:
+-            location = Path(distribution.locate_file("")).resolve()
++            location = Path(str(distribution.locate_file(""))).resolve()
+         except Exception:
+             location = None
+
+@@ -241,7 +246,7 @@ def _runtime_distributions(
+                 if len(parts) < 2 or parts[-2:] != ("onnxruntime", "__init__.py"):
+                     continue
+                 try:
+-                    recorded_path = Path(distribution.locate_file(file)).resolve()
++                    recorded_path = Path(str(distribution.locate_file(file))).resolve()
+                 except Exception:
+                     continue
+                 if recorded_path == module_path:
+@@ -301,6 +306,7 @@ def runtime_status(*, environment: Mapping[str, str] | None = None) -> OnnxRunti
+     module, import_error = _safe_import_ort()
+     module_path = _module_path(module)
+     distributions = _runtime_distributions(module_path)
++    state: Literal["resolved", "ambiguous", "vendor", "not_installed", "import_failed"]
+     if module is None:
+         state = "import_failed" if distributions else "not_installed"
+         return OnnxRuntimeStatus(
+diff --git a/onnxvoice/systems/pocket.py b/onnxvoice/systems/pocket.py
+index 9f4e108..4d2d1d7 100644
+--- a/onnxvoice/systems/pocket.py
++++ b/onnxvoice/systems/pocket.py
+@@ -625,7 +625,7 @@ class PocketAdapter(SystemAdapter):
+                 details.append(f"missing outputs: {', '.join(missing_outputs)}")
+             raise RuntimeContractError(f"{role} state contract mismatch ({'; '.join(details)})")
+
+-    def _validate_session_contract(self, role: str, session: OnnxSession) -> None:
++    def _validate_session_contract(self, role: str, session: Any) -> None:
+         if role in self._validated_contracts:
+             return
+         input_names = self._names(session, "input_names")
+diff --git a/tests/test_cli_voices.py b/tests/test_cli_voices.py
+index 551de5b..897ed8a 100644
+--- a/tests/test_cli_voices.py
++++ b/tests/test_cli_voices.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+
+ import json
++from typing import Any
+
+ import pytest
+
+@@ -11,8 +12,8 @@ from onnxvoice.types import CatalogItem, VoiceMetadata, VoiceRecord
+ class _Manager:
+     def __init__(self, record: VoiceRecord) -> None:
+         self.record = record
+-        self.list_args = None
+-        self.resolve_args = None
++        self.list_args: dict[str, Any] | None = None
++        self.resolve_args: tuple[str, dict[str, Any]] | None = None
+
+     def list_voices(self, **kwargs):
+         self.list_args = kwargs
+@@ -105,9 +106,9 @@ def test_voices_list_parser_accepts_exact_target_filter() -> None:
+     assert args.engine == "kokoro"
+     assert args.target == "v1.0"
+
+-    commands = next(action for action in parser._actions if action.dest == "command").choices
++    commands: Any = next(action for action in parser._actions if action.dest == "command").choices
+     voices = commands["voices"]
+-    subcommands = next(
++    subcommands: Any = next(
+         action for action in voices._actions if action.dest == "voices_command"
+     ).choices
+     list_parser = subcommands["list"]
+@@ -145,9 +146,9 @@ def test_voices_list_target_filter_does_not_require_engine(monkeypatch) -> None:
+
+ def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
+     parser = build_parser()
+-    commands = next(action for action in parser._actions if action.dest == "command").choices
++    commands: Any = next(action for action in parser._actions if action.dest == "command").choices
+     voices = commands["voices"]
+-    subcommands = next(
++    subcommands: Any = next(
+         action for action in voices._actions if action.dest == "voices_command"
+     ).choices
+     list_parser = subcommands["list"]
+diff --git a/tests/test_huggingface.py b/tests/test_huggingface.py
+index 0ae2e1c..7cf5dde 100644
+--- a/tests/test_huggingface.py
++++ b/tests/test_huggingface.py
+@@ -32,7 +32,7 @@ def _source() -> HuggingFaceSource:
+
+ def _install_hub(monkeypatch, download) -> ModuleType:
+     hub = ModuleType("huggingface_hub")
+-    hub.hf_hub_download = download
++    hub.__dict__["hf_hub_download"] = download
+     monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+     return hub
+
+diff --git a/tests/test_inflect_adapter.py b/tests/test_inflect_adapter.py
+index d5150b5..9bdc5e6 100644
+--- a/tests/test_inflect_adapter.py
++++ b/tests/test_inflect_adapter.py
+@@ -240,7 +240,7 @@ def test_inflect_adapter_validates_graph_names(
+     names: tuple[str, ...],
+     message: str,
+ ) -> None:
+-    options = {
++    options: dict[str, dict[str, Any]] = {
+         "duration_input": {"duration_input_names": names},
+         "duration_output": {"duration_output_names": names},
+         "decode_input": {"decode_input_names": names},
+@@ -337,9 +337,13 @@ def test_inflect_adapter_seed_is_deterministic(
+ ) -> None:
+     adapter, created = _adapter(tmp_path, monkeypatch)
+     adapter.infer([3, 4], seed=123)
+-    first = created[1].inputs_seen["zp_noise"].copy()
++    first_inputs = created[1].inputs_seen
++    assert first_inputs is not None
++    first = first_inputs["zp_noise"].copy()
+     adapter.infer([3, 4], seed=123)
+-    second = created[1].inputs_seen["zp_noise"].copy()
++    second_inputs = created[1].inputs_seen
++    assert second_inputs is not None
++    second = second_inputs["zp_noise"].copy()
+     np.testing.assert_array_equal(first, second)
+
+
+@@ -348,9 +352,13 @@ def test_inflect_adapter_different_seed_changes_noise(
+ ) -> None:
+     adapter, created = _adapter(tmp_path, monkeypatch)
+     adapter.infer([3, 4], seed=123)
+-    first = created[1].inputs_seen["zp_noise"].copy()
++    first_inputs = created[1].inputs_seen
++    assert first_inputs is not None
++    first = first_inputs["zp_noise"].copy()
+     adapter.infer([3, 4], seed=124)
+-    second = created[1].inputs_seen["zp_noise"].copy()
++    second_inputs = created[1].inputs_seen
++    assert second_inputs is not None
++    second = second_inputs["zp_noise"].copy()
+     assert not np.array_equal(first, second)
+
+
+@@ -457,7 +465,9 @@ def test_inflect_adapter_accepts_dynamic_one_element_scale_shape(
+     inputs["length_scale"] = TensorSpec("length_scale", "tensor(float)", ("scale",))
+     adapter, created = _adapter(tmp_path, monkeypatch, duration_input_specs=inputs)
+     adapter.infer([1], speed=2.0)
+-    scale = created[0].inputs_seen["length_scale"]
++    recorded_inputs = created[0].inputs_seen
++    assert recorded_inputs is not None
++    scale = recorded_inputs["length_scale"]
+     assert scale.shape == (1,)
+     assert scale.item() == pytest.approx(0.5)
+
+diff --git a/tests/test_kitten2_generation.py b/tests/test_kitten2_generation.py
+index dba9284..e8d2829 100644
+--- a/tests/test_kitten2_generation.py
++++ b/tests/test_kitten2_generation.py
+@@ -1,7 +1,7 @@
+ from __future__ import annotations
+
+ from pathlib import Path
+-from typing import Any
++from typing import Any, cast
+
+ import numpy as np
+ import pytest
+@@ -71,8 +71,8 @@ def test_native_language_model_generates_deterministically(
+         }
+     )
+     model = Kitten2LanguageModel(
+-        FakeLanguageSession(),
+-        FakeSpeakerSession(),
++        cast(Any, FakeLanguageSession()),
++        cast(Any, FakeSpeakerSession()),
+         metadata,
+         embeddings_path,
+     )
+@@ -164,7 +164,7 @@ def test_adapter_defers_sessions_and_propagates_runtime_options(
+         session_options=session_options,
+     )
+     assert created == []
+-    sessions = [
++    sessions: list[Any] = [
+         adapter._get_session(component) for component in ("lm", "speaker", "flow", "mel2wav")
+     ]
+     assert len(created) == 4
+diff --git a/tests/test_kitten2_integration.py b/tests/test_kitten2_integration.py
+index 6111fb9..bbf7fff 100644
+--- a/tests/test_kitten2_integration.py
++++ b/tests/test_kitten2_integration.py
+@@ -82,8 +82,9 @@ def test_local_open_uses_native_adapter_without_creating_sessions(
+         assert runtime.default_preset == "stable"
+         assert runtime.sample_rate == 24000
+         assert set(runtime.decode_presets) == {"stable", "expressive"}
++        decode_presets: Any = runtime.decode_presets
+         with pytest.raises(TypeError):
+-            runtime.decode_presets["stable"]["top_k"] = 1
++            decode_presets["stable"]["top_k"] = 1
+         assert runtime._sessions == {}
+         assert runtime.diagnostics().sessions == ()
+         with pytest.raises(ValueError, match="Unknown decode preset"):
+diff --git a/tests/test_kitten2_tokenizer.py b/tests/test_kitten2_tokenizer.py
+index 9c5caea..0c4fba5 100644
+--- a/tests/test_kitten2_tokenizer.py
++++ b/tests/test_kitten2_tokenizer.py
+@@ -71,7 +71,7 @@ def test_kitten2_runtime_has_no_semantic_text_dependencies() -> None:
+     }
+     for path in production.glob("kitten2*.py"):
+         tree = ast.parse(path.read_text(encoding="utf-8"))
+-        imported = set()
++        imported: set[str] = set()
+         for node in ast.walk(tree):
+             if isinstance(node, ast.Import):
+                 imported.update(alias.name.split(".")[0] for alias in node.names)
+diff --git a/tests/test_pocket_adapter.py b/tests/test_pocket_adapter.py
+index 05b50b5..dc06334 100644
+--- a/tests/test_pocket_adapter.py
++++ b/tests/test_pocket_adapter.py
+@@ -729,13 +729,15 @@ def test_generate_latents_matches_rank_two_flow_inputs() -> None:
+     main = MagicMock()
+     main.output_names = ("conditioning", "eos_logit")
+     main_inputs: list[dict[str, np.ndarray]] = []
+-    main.run.side_effect = lambda inputs: (
++
++    def record_main(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
+         main_inputs.append(inputs)
+-        or [
++        return [
+             np.ones((1, 4), dtype=np.float32),
+             np.zeros((1, 1), dtype=np.float32),
+         ]
+-    )
++
++    main.run.side_effect = record_main
+     flow = MagicMock()
+     flow.input_specs = tuple(
+         SimpleNamespace(name=name, shape=shape)
+@@ -748,9 +750,12 @@ def test_generate_latents_matches_rank_two_flow_inputs() -> None:
+     )
+     flow.output_names = ("flow_dir",)
+     flow_inputs: list[dict[str, np.ndarray]] = []
+-    flow.run.side_effect = lambda inputs: (
+-        flow_inputs.append(inputs) or [np.zeros((1, 3), dtype=np.float32)]
+-    )
++
++    def record_flow(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
++        flow_inputs.append(inputs)
++        return [np.zeros((1, 3), dtype=np.float32)]
++
++    flow.run.side_effect = record_flow
+
+     generation = adapter._generate_latents(
+         main,
+@@ -794,10 +799,12 @@ def _generate_latents_for_eos_pattern(
+     flow = MagicMock()
+     flow.output_names = ("velocity",)
+     flow_inputs: list[dict[str, np.ndarray]] = []
+-    flow.run.side_effect = lambda inputs: (
++
++    def record_flow(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
+         flow_inputs.append({name: np.array(value, copy=True) for name, value in inputs.items()})
+-        or [np.zeros((1, 1, 3), dtype=np.float32)]
+-    )
++        return [np.zeros((1, 1, 3), dtype=np.float32)]
++
++    flow.run.side_effect = record_flow
+
+     generation = adapter._generate_latents(
+         main,
+@@ -1102,7 +1109,7 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
+     payload = b"fake safetensors payload"
+     remote_file.write_bytes(payload)
+     adapter = _predefined_adapter(tmp_path)
+-    source_record = {
++    source_record: dict[str, Any] = {
+         "name": "alba",
+         "compatible_bundle": "english_2026-04",
+         "source": {
+diff --git a/tests/test_pocket_catalog.py b/tests/test_pocket_catalog.py
+index cc30789..1f2c2fb 100644
+--- a/tests/test_pocket_catalog.py
++++ b/tests/test_pocket_catalog.py
+@@ -3,6 +3,7 @@
+ from __future__ import annotations
+
+ import copy
++from typing import Any
+
+ import pytest
+
+@@ -15,7 +16,7 @@ from onnxvoice.catalog import (
+ from onnxvoice.catalog_tools.pocket import huggingface_resolve_url
+ from onnxvoice.errors import CatalogError
+
+-SAMPLE_CATALOG = {
++SAMPLE_CATALOG: dict[str, Any] = {
+     "source": {
+         "repository": "KevinAHM/pocket-tts-onnx",
+         "revision": "abc123def456abc123def456abc123def456abc1",
+diff --git a/tests/test_qwen3_catalog.py b/tests/test_qwen3_catalog.py
+index 2c449c3..6f7ea4a 100644
+--- a/tests/test_qwen3_catalog.py
++++ b/tests/test_qwen3_catalog.py
+@@ -67,7 +67,7 @@ def _catalog() -> dict[str, Any]:
+         revision = "a" * 40 if bundle_id == "base-0.6b" else "b" * 40
+         aliases = ["base", "clone"] if model_type == "base" else ["design", "voicedesign"]
+         models = list(GENERATION) + (list(ENCODERS) if model_type == "base" else [])
+-        artifacts = []
++        artifacts: list[dict[str, Any]] = []
+
+         def add(
+             role: str,
+diff --git a/tests/test_qwen3_contract.py b/tests/test_qwen3_contract.py
+index a38a8e8..3daa679 100644
+--- a/tests/test_qwen3_contract.py
++++ b/tests/test_qwen3_contract.py
+@@ -98,6 +98,8 @@ def _graph_specs(
+     component: str, config: Qwen3Config
+ ) -> tuple[tuple[TensorSpec, ...], tuple[TensorSpec, ...]]:
+     f32, i64 = "tensor(float)", "tensor(int64)"
++    inputs: tuple[TensorSpec, ...]
++    outputs: tuple[TensorSpec, ...]
+     hidden = config.talker_hidden_size
+     if component == "talker_prefill":
+         inputs = (
+@@ -105,12 +107,12 @@ def _graph_specs(
+             _tensor("attention_mask", i64, 1, "sequence"),
+             _tensor("position_ids", i64, 3, 1, "sequence"),
+         )
+-        outputs = [
++        prefill_outputs = [
+             _tensor("logits", f32, 1, "sequence", config.talker_vocab_size),
+             _tensor("hidden_states", f32, 1, "sequence", hidden),
+         ]
+         for index in range(config.talker_num_layers * 2):
+-            outputs.append(
++            prefill_outputs.append(
+                 _tensor(
+                     f"present_key_values.{index // 2}.{'key' if index % 2 == 0 else 'value'}",
+                     f32,
+@@ -120,7 +122,7 @@ def _graph_specs(
+                     config.talker_head_dim,
+                 )
+             )
+-        return inputs, tuple(outputs)
++        return inputs, tuple(prefill_outputs)
+     if component == "talker_decode":
+         cache = (
+             config.talker_num_layers,
+diff --git a/tests/test_sopro_local_open.py b/tests/test_sopro_local_open.py
+index 6632c13..ec337fe 100644
+--- a/tests/test_sopro_local_open.py
++++ b/tests/test_sopro_local_open.py
+@@ -7,7 +7,7 @@ import math
+ import os
+ import shutil
+ from pathlib import Path
+-from typing import Any
++from typing import Any, cast
+
+ import numpy as np
+ import pytest
+@@ -933,7 +933,7 @@ class _FakeVocoderSession:
+     def run(self, inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
+         self.calls.append({name: value.copy() for name, value in inputs.items()})
+         frames = inputs["mel"].shape[-1] or 3
+-        features = np.full((1, frames, 1026), -100.0, dtype=np.float32)
++        features: Any = np.full((1, frames, 1026), -100.0, dtype=np.float32)
+         features[:, :, 0] = -2.0
+         features[:, :, 513:] = 0.0
+         if self.mode == "bad-vocoder":
+@@ -958,6 +958,7 @@ def _install_semantic_fake_sessions(monkeypatch: pytest.MonkeyPatch, mode: str)
+
+     def create_session(path: Path, **kwargs: Any) -> Any:
+         component = kwargs["component"]
++        session: Any
+         if component == "semantic_prefix":
+             session = _FakeSemanticPrefixSession(path, **kwargs)
+         elif component == "semantic_core":
+@@ -1339,7 +1340,7 @@ def test_infer_validates_tokens_options_voice_and_profile(tmp_path: Path) -> Non
+         with pytest.raises(RuntimeContractError, match="Unsupported Sopro inference option"):
+             runtime.infer([1], voice_state=voice, unexpected=True)
+         with pytest.raises(RuntimeContractError, match="token_ids"):
+-            runtime.infer(np.asarray([1.0]), voice_state=voice)
++            runtime.infer(cast(Any, np.asarray([1.0])), voice_state=voice)
+         with pytest.raises(RuntimeContractError, match="token_ids"):
+             runtime.infer([100000], voice_state=voice)
+         prompt_length = manifest["config"]["generation"]["prompt_tokens"]
+diff --git a/tests/test_store.py b/tests/test_store.py
+index 0055ed8..7ef3eb8 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import hashlib
+ import json
+ import os
++from typing import Any
+
+ import pytest
+
+@@ -278,7 +279,7 @@ def test_pocket_huggingface_artifact_uses_structured_source_and_integrity(
+
+     monkeypatch.setattr(store_module, "download_huggingface_file", download)
+     monkeypatch.setattr(store, "_download", lambda *_args, **_kwargs: pytest.fail("used urllib"))
+-    events = []
++    events: list[Any] = []
+     installed = store.install(item, progress=events.append)
+
+     assert installed.artifact("flow_lm_main").path.read_bytes() == payload
+diff --git a/tests/test_supertonic_adapter.py b/tests/test_supertonic_adapter.py
+index b29aceb..cf3c7aa 100644
+--- a/tests/test_supertonic_adapter.py
++++ b/tests/test_supertonic_adapter.py
+@@ -144,7 +144,7 @@ def _patch_sessions(
+
+
+ def _infer(adapter: SupertonicAdapter, **kwargs: Any):
+-    arguments = {
++    arguments: dict[str, Any] = {
+         "token_ids": [7, 11, 13],
+         "text_mask": np.ones((1, 1, 3), dtype=np.float32),
+         "style_ttl": np.ones((1, 4, 5), dtype=np.float64),
+diff --git a/tests/test_supertonic_catalog.py b/tests/test_supertonic_catalog.py
+index 2437dd3..232d405 100644
+--- a/tests/test_supertonic_catalog.py
++++ b/tests/test_supertonic_catalog.py
+@@ -367,6 +367,7 @@ def test_install_open_offline_reopen_and_inventory_use_standard_bundle_flow(
+     monkeypatch.setattr(store_module, "download_huggingface_file", download)
+     manager = OnnxVoice(cache_dir=cache_dir, catalog_sources={"supertonic": str(catalog_path)})
+     installation = manager.install("supertonic:supertonic-3")
++    assert installation is not None
+     manager.store.verify(installation)
+
+     assert len(downloads) == 16
+@@ -381,6 +382,7 @@ def test_install_open_offline_reopen_and_inventory_use_standard_bundle_flow(
+     assert len(inventory) == 1
+     record = inventory[0]
+     assert record.language_codes == languages
++    assert record.installation is not None
+     assert record.catalog_item is not None
+     assert record.catalog_item.voices == STYLE_COMPONENTS
+     assert {
+diff --git a/tests/test_voices.py b/tests/test_voices.py
+index be797db..6c48070 100644
+--- a/tests/test_voices.py
++++ b/tests/test_voices.py
+@@ -1,5 +1,7 @@
+ from __future__ import annotations
+
++from typing import Any
++
+ import pytest
+
+ from onnxvoice.errors import AssetNotFoundError, VoiceNotFoundError
+@@ -120,7 +122,7 @@ def test_catalog_voice_iteration_is_system_neutral() -> None:
+
+ def test_list_voices_flattens_all_catalogs_and_filters_descriptive_language() -> None:
+     items = (_supertonic_bundle(), _pocket_bundle(), _kokoro_model(), _piper_voice())
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = _Catalog(items)
+
+     records = manager.list_voices()
+@@ -161,7 +163,7 @@ def test_list_voices_filters_exact_asset_id_and_composes_filters() -> None:
+         voices=("other_voice",),
+         metadata={"language_codes": ["ja"]},
+     )
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = _Catalog((_kokoro_model(), kokoro_v11, other_v10))
+
+     all_kokoro = manager.list_voices("kokoro")
+@@ -196,7 +198,7 @@ def test_multilingual_bundle_capabilities_filter_list_and_resolve() -> None:
+         voices=("F1", "M1"),
+         metadata={"language_codes": languages},
+     )
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = _Catalog((item,))
+
+     for language in ("de", "ja"):
+@@ -225,7 +227,7 @@ def test_per_voice_language_capabilities_restrict_generic_bundle_filtering() ->
+             },
+         },
+     )
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = _Catalog((item,))
+
+     records = {record.voice_id: record for record in manager.list_voices("generic")}
+@@ -239,7 +241,7 @@ def test_per_voice_language_capabilities_restrict_generic_bundle_filtering() ->
+
+
+ def test_list_voices_passes_catalog_options_and_uses_requested_system() -> None:
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = _Catalog((_piper_voice(), _supertonic_bundle()))
+     progress = object()
+
+@@ -251,7 +253,7 @@ def test_list_voices_passes_catalog_options_and_uses_requested_system() -> None:
+
+ def test_resolve_voice_supports_asset_voices_and_named_child_voices() -> None:
+     items = (_piper_voice(), _kokoro_model(), _pocket_bundle(), _supertonic_bundle())
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = _Catalog(items)
+     progress = object()
+
+@@ -275,7 +277,7 @@ def test_resolve_voice_supports_asset_voices_and_named_child_voices() -> None:
+
+
+ def test_resolve_voice_requires_catalog_declared_child_voice() -> None:
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = _Catalog((_kokoro_model(), _piper_voice()))
+
+     with pytest.raises(VoiceNotFoundError, match="required"):
+@@ -291,7 +293,7 @@ def test_resolve_voice_propagates_missing_catalog_asset() -> None:
+         def resolve(self, ref: str, *, refresh: bool = False, progress=None):
+             raise AssetNotFoundError(f"Unknown catalog item: {ref}")
+
+-    manager = object.__new__(OnnxVoice)
++    manager: Any = object.__new__(OnnxVoice)
+     manager.catalog = MissingCatalog(())
+
+     with pytest.raises(AssetNotFoundError, match="Unknown catalog item"):

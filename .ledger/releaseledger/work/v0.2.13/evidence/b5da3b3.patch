@@ -1,0 +1,279 @@
+ docs/cli.md                 | 24 +++++++++----------
+ docs/systems/inflect.md     |  2 +-
+ docs/systems/kitten.md      |  2 +-
+ docs/systems/supertonic.md  |  2 +-
+ docs/voices.md              |  2 +-
+ onnxvoice/cli.py            | 16 +++++++------
+ tests/test_cli_voices.py    | 58 ++++++++++++++++++++++++++++++++-------------
+ tests/test_kitten_voices.py |  4 ++--
+ 8 files changed, 69 insertions(+), 41 deletions(-)
+
+diff --git a/docs/cli.md b/docs/cli.md
+index f650e83..c127303 100644
+--- a/docs/cli.md
++++ b/docs/cli.md
+@@ -167,34 +167,34 @@ Cache reports distinguish installation logical bytes, blob bytes, unique file by
+ ```bash
+ onnxvoice voices list
+ onnxvoice voices list --lang en-US
+-onnxvoice voices list --system kokoro
++onnxvoice voices list --engine kokoro
+ onnxvoice voices show piper:en_US-lessac-medium
+ onnxvoice voices show kokoro:v1.0/af_heart
+-onnxvoice voices list --system supertonic --lang de
++onnxvoice voices list --engine supertonic --lang de
+ onnxvoice voices show supertonic:supertonic-3/F1
+-onnxvoice voices list --system kitten --lang en-US
++onnxvoice voices list --engine kitten --lang en-US
+ onnxvoice voices show kitten:nano-0.8-int8/Bella
+-onnxvoice voices list --system inflect
++onnxvoice voices list --engine inflect
+ onnxvoice voices show inflect:nano-v2/default
+ ```
+
+ ```bash
+ # All Kokoro voices
+-onnxvoice voices list --system kokoro
++onnxvoice voices list --engine kokoro
+
+-# Voices backed by the exact asset ID v1.0
+-onnxvoice voices list --system kokoro --asset v1.0
++# Voices backed by the exact catalog target ID v1.0
++onnxvoice voices list --engine kokoro --target v1.0
+
+-# Combine asset and language filters
+-onnxvoice voices list --system kokoro --asset v1.0 --lang en-US
++# Combine target and language filters
++onnxvoice voices list --engine kokoro --target v1.0 --lang en-US
+
+ # Request JSON output
+-onnxvoice voices list --system kokoro --asset v1.0 --format json
++onnxvoice voices list --engine kokoro --target v1.0 --format json
+ ```
+
+-`--asset` matches the backing catalog asset ID exactly. It is a selection filter, not a voice ID or a complete semantic voice reference, and it can be used without `--system`.
++`--target` matches the exact canonical catalog item ID. It is a selection filter, not a voice ID or a complete semantic voice reference, and it can be used without `--engine`.
+
+-`voices list` accepts language and system filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`; Inflect models expose a fixed `default` voice such as `inflect:nano-v2/default`. See [Inflect v2](systems/inflect.md) for its token-ID runtime boundary and [KittenTTS](systems/kitten.md) for the Kitten boundary. See [Catalog voices](voices.md) for reference forms and record fields.
++`voices list` accepts language and engine filters, `--refresh`, and `--format`. Language filters match the voice's supported synthesis-language capabilities, not only its primary display locale. Each result identifies a normalized catalog voice. `show` resolves a semantic voice reference. Supertonic and Kitten child voices use refs such as `supertonic:supertonic-3/F1` and `kitten:nano-0.8-int8/Bella`; Inflect models expose a fixed `default` voice such as `inflect:nano-v2/default`. See [Inflect v2](systems/inflect.md) for its token-ID runtime boundary and [KittenTTS](systems/kitten.md) for the Kitten boundary. See [Catalog voices](voices.md) for reference forms and record fields.
+
+ ## Runtime selection
+
+diff --git a/docs/systems/inflect.md b/docs/systems/inflect.md
+index 1fc209a..5758880 100644
+--- a/docs/systems/inflect.md
++++ b/docs/systems/inflect.md
+@@ -32,7 +32,7 @@ A repeated request with the same tokens, controls, model, runtime stack, and see
+ ```bash
+ onnxvoice list --system inflect
+ onnxvoice install inflect:nano-v2
+-onnxvoice voices list --system inflect
++onnxvoice voices list --engine inflect
+ onnxvoice voices show inflect:nano-v2/default
+ ```
+
+diff --git a/docs/systems/kitten.md b/docs/systems/kitten.md
+index d326b1b..f25bd5f 100644
+--- a/docs/systems/kitten.md
++++ b/docs/systems/kitten.md
+@@ -8,7 +8,7 @@ The default catalog currently includes `nano-0.8-int8`, `nano-0.8-fp32`, `micro-
+
+ ```bash
+ onnxvoice list --system kitten
+-onnxvoice voices list --system kitten --lang en-US
++onnxvoice voices list --engine kitten --lang en-US
+ onnxvoice voices show kitten:nano-0.8-int8/Bella
+ ```
+
+diff --git a/docs/systems/supertonic.md b/docs/systems/supertonic.md
+index 4ba9d88..413a202 100644
+--- a/docs/systems/supertonic.md
++++ b/docs/systems/supertonic.md
+@@ -8,7 +8,7 @@ Supertonic has a built-in adapter and catalog support. The runtime is a multi-co
+
+ Supertonic catalog children use the semantic ref `<system>:<asset-id>/<voice-id>`. The ten current styles in `supertonic-3` therefore use refs from `supertonic:supertonic-3/F1` through `supertonic:supertonic-3/M5`. The backing asset ref is `supertonic:supertonic-3`, and a style ID such as `F1` is only unique within that bundle.
+
+-The `VoiceRecord.languages` field lists the bundle-declared synthesis-language capabilities inherited by each style. For example, `onnxvoice voices list --system supertonic --lang de` returns all styles while German remains declared by the catalog. Language capability does not form part of the voice ref, and descriptive `language`/`locale` metadata does not replace the full capability list. Gender is not inferred from style names, so it remains `unknown` unless supplied by authoritative metadata.
++The `VoiceRecord.languages` field lists the bundle-declared synthesis-language capabilities inherited by each style. For example, `onnxvoice voices list --engine supertonic --lang de` returns all styles while German remains declared by the catalog. Language capability does not form part of the voice ref, and descriptive `language`/`locale` metadata does not replace the full capability list. Gender is not inferred from style names, so it remains `unknown` unless supplied by authoritative metadata.
+
+ ## Runtime components
+
+diff --git a/docs/voices.md b/docs/voices.md
+index 0f74824..a31a8ca 100644
+--- a/docs/voices.md
++++ b/docs/voices.md
+@@ -33,7 +33,7 @@ for record in voice.list_voices(language="en-US"):
+     print(record.ref, record.system, record.asset_id, record.voice_id)
+ ```
+
+-To filter voice discovery by its backing catalog asset, pass the exact catalog item ID as `asset_id`. The CLI spelling is `--asset`; the Python API keyword is `asset_id`:
++To filter voice discovery in the CLI, use `--engine` for the engine (the Python API uses `system`) and `--target` for an exact canonical catalog item ID (the Python API keyword is `asset_id`). `--target` is not a voice ID or semantic voice reference and works without `--engine`:
+
+ ```python
+ from onnxvoice import OnnxVoice
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 9fd4ffd..4a39477 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -84,12 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
+     voices_list_parser = voices_sub.add_parser(
+         "list", help="List voices exposed by normalized catalogs"
+     )
+-    voices_list_parser.add_argument("--system", choices=registered_systems())
+     voices_list_parser.add_argument(
+-        "--asset",
+-        dest="asset_id",
+-        metavar="ASSET_ID",
+-        help="Filter by exact backing catalog asset ID (e.g. v1.0)",
++        "--engine", choices=registered_systems(), help="Filter by engine"
++    )
++    voices_list_parser.add_argument(
++        "--target",
++        dest="target",
++        metavar="TARGET_ID",
++        help="Filter by exact catalog target ID (e.g. v1.0)",
+     )
+     voices_list_parser.add_argument("--lang", "--language", dest="language")
+     voices_list_parser.add_argument("--refresh", action="store_true")
+@@ -425,8 +427,8 @@ def _render_voice_records(records, output_format: str) -> None:
+ def _cmd_voices_list(args: argparse.Namespace) -> int:
+     manager = _manager(args)
+     records = manager.list_voices(
+-        system=args.system,
+-        asset_id=args.asset_id,
++        system=args.engine,
++        asset_id=args.target,
+         language=args.language,
+         refresh=args.refresh,
+     )
+diff --git a/tests/test_cli_voices.py b/tests/test_cli_voices.py
+index 9c35515..551de5b 100644
+--- a/tests/test_cli_voices.py
++++ b/tests/test_cli_voices.py
+@@ -2,6 +2,8 @@ from __future__ import annotations
+
+ import json
+
++import pytest
++
+ from onnxvoice.cli import build_parser, main
+ from onnxvoice.types import CatalogItem, VoiceMetadata, VoiceRecord
+
+@@ -91,17 +93,17 @@ def _supertonic_record() -> VoiceRecord:
+
+
+ def test_voices_list_parser_accepts_supertonic() -> None:
+-    args = build_parser().parse_args(["voices", "list", "--system", "supertonic"])
++    args = build_parser().parse_args(["voices", "list", "--engine", "supertonic"])
+
+-    assert args.system == "supertonic"
++    assert args.engine == "supertonic"
+
+
+-def test_voices_list_parser_accepts_exact_asset_filter() -> None:
++def test_voices_list_parser_accepts_exact_target_filter() -> None:
+     parser = build_parser()
+-    args = parser.parse_args(["voices", "list", "--system", "kokoro", "--asset", "v1.0"])
++    args = parser.parse_args(["voices", "list", "--engine", "kokoro", "--target", "v1.0"])
+
+-    assert args.system == "kokoro"
+-    assert args.asset_id == "v1.0"
++    assert args.engine == "kokoro"
++    assert args.target == "v1.0"
+
+     commands = next(action for action in parser._actions if action.dest == "command").choices
+     voices = commands["voices"]
+@@ -109,12 +111,36 @@ def test_voices_list_parser_accepts_exact_asset_filter() -> None:
+         action for action in voices._actions if action.dest == "voices_command"
+     ).choices
+     list_parser = subcommands["list"]
+-    asset_action = next(
+-        action for action in list_parser._actions if "--asset" in action.option_strings
++    target_action = next(
++        action for action in list_parser._actions if "--target" in action.option_strings
+     )
+-    assert asset_action.option_strings == ["--asset"]
+-    assert asset_action.dest == "asset_id"
+-    assert "exact backing catalog asset ID" in list_parser.format_help()
++    assert target_action.option_strings == ["--target"]
++    assert target_action.dest == "target"
++    assert "exact catalog target ID" in list_parser.format_help()
++
++
++@pytest.mark.parametrize("legacy_option", ["--system", "--asset"])
++def test_voices_list_parser_rejects_legacy_filter_options(legacy_option: str) -> None:
++    with pytest.raises(SystemExit):
++        build_parser().parse_args(["voices", "list", legacy_option, "kokoro"])
++
++
++def test_voices_list_parser_rejects_unregistered_engine() -> None:
++    with pytest.raises(SystemExit):
++        build_parser().parse_args(["voices", "list", "--engine", "not-registered"])
++
++
++def test_voices_list_target_filter_does_not_require_engine(monkeypatch) -> None:
++    manager = _Manager(_record())
++    monkeypatch.setattr("onnxvoice.cli._manager", lambda _args: manager)
++
++    assert main(["voices", "list", "--target", "v1.0"]) == 0
++    assert manager.list_args == {
++        "system": None,
++        "asset_id": "v1.0",
++        "language": None,
++        "refresh": False,
++    }
+
+
+ def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
+@@ -130,8 +156,8 @@ def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
+     list_options = {option for action in list_parser._actions for option in action.option_strings}
+     show_options = {option for action in show_parser._actions for option in action.option_strings}
+     assert list_options - {"-h", "--help"} == {
+-        "--system",
+-        "--asset",
++        "--engine",
++        "--target",
+         "--lang",
+         "--language",
+         "--refresh",
+@@ -150,9 +176,9 @@ def test_voices_list_renders_semantic_refs_as_json(monkeypatch, capsys) -> None:
+             [
+                 "voices",
+                 "list",
+-                "--system",
++                "--engine",
+                 "kokoro",
+-                "--asset",
++                "--target",
+                 "v1.0",
+                 "--lang",
+                 "en-US",
+@@ -189,7 +215,7 @@ def test_supertonic_list_and_show_json_keep_canonical_identity(monkeypatch, caps
+     monkeypatch.setattr("onnxvoice.cli._manager", lambda _args: manager)
+
+     assert (
+-        main(["voices", "list", "--system", "supertonic", "--lang", "de", "--format", "json"]) == 0
++        main(["voices", "list", "--engine", "supertonic", "--lang", "de", "--format", "json"]) == 0
+     )
+     assert manager.list_args == {
+         "system": "supertonic",
+diff --git a/tests/test_kitten_voices.py b/tests/test_kitten_voices.py
+index 69213ad..1c06b74 100644
+--- a/tests/test_kitten_voices.py
++++ b/tests/test_kitten_voices.py
+@@ -169,13 +169,13 @@ def test_manager_and_cli_list_filter_show_public_kitten_voice_aliases(
+
+     monkeypatch.setenv("ONNXVOICE_KITTEN_CATALOG", str(catalog_path))
+     args = ["--cache-dir", str(cache), "voices"]
+-    assert main([*args, "list", "--system", "kitten"]) == 0
++    assert main([*args, "list", "--engine", "kitten"]) == 0
+     table = capsys.readouterr().out
+     assert "kitten:nano-0.8-int8/Bella" in table
+     assert "Bella" in table
+     assert "expr-voice-2-f" not in table
+
+-    assert main([*args, "list", "--system", "kitten", "--lang", "en-US", "--format", "json"]) == 0
++    assert main([*args, "list", "--engine", "kitten", "--lang", "en-US", "--format", "json"]) == 0
+     payload = json.loads(capsys.readouterr().out)
+     assert [item["voice_id"] for item in payload["items"]] == ["Bella", "Jasper"]
+     assert all(item["gender"] == "unknown" for item in payload["items"])

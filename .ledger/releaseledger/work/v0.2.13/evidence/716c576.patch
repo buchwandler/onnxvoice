@@ -1,0 +1,3781 @@
+ docs/cli.md                     |   18 +
+ docs/systems/chatterbox.md      |    2 +
+ docs/systems/index.md           |    2 +
+ docs/systems/inflect.md         |    2 +
+ docs/systems/kitten.md          |    2 +
+ docs/systems/kitten2.md         |    2 +
+ docs/systems/kokoro.md          |    9 +
+ docs/systems/piper.md           |    2 +
+ docs/systems/pocket.md          |    2 +
+ docs/systems/qwen3.md           |    2 +
+ docs/systems/sopro.md           |    2 +
+ docs/systems/supertonic.md      |    2 +
+ onnxvoice/cli.py                |  296 ++++-
+ onnxvoice/engine_options.py     | 2523 +++++++++++++++++++++++++++++++++++++++
+ onnxvoice/systems/pocket.py     |   70 +-
+ tests/test_cli_engines.py       |  182 +++
+ tests/test_docs_cli_coverage.py |    1 +
+ tests/test_engine_options.py    |  375 ++++++
+ tests/test_pocket_adapter.py    |   29 +
+ 19 files changed, 3510 insertions(+), 13 deletions(-)
+
+diff --git a/docs/cli.md b/docs/cli.md
+index fdc876a..f650e83 100644
+--- a/docs/cli.md
++++ b/docs/cli.md
+@@ -22,6 +22,24 @@ The CLI is organized around catalog discovery, local inventory, installation lif
+ | `onnxvoice cache`     | Report usage or garbage-collect unreachable cache data                |
+ | `onnxvoice import`    | Import a model and optional config or voices file into the store      |
+ | `onnxvoice catalog`   | Maintainer commands to build and verify catalogs                      |
++| `onnxvoice engines`   | Discover target-specific controls, capabilities, and limits           |
++
++## Engine option and capability discovery
++
++The `engines` commands describe registered adapter contracts alongside catalog targets, selected profiles, installed manifests, and target-specific capability variants. Discovery is read-only: it does not install artifacts, create ONNX sessions, benchmark models, or generate audio. Use `--offline` to prevent catalog network access; static contracts and locally installed metadata remain available, while missing catalog facts are reported as unavailable.
++
++```bash
++onnxvoice engines list
++onnxvoice engines list --engine qwen3 --capability voice-cloning --format json
++onnxvoice engines options --engine piper
++onnxvoice engines options --engine kokoro --target v1.0 --format json
++onnxvoice engines options --engine qwen3 --target base-0.6b
++onnxvoice --offline engines options --engine kokoro --target v1.0
++```
++
++`engines list` reports target/variant rows and accepts `--engine`, `--capability voice-cloning`, `--refresh`, and `--format`. `engines options` accepts an engine plus optional target ID or alias, `--quality`, `--distribution`, `--refresh`, and `--format`. Quality and distribution selectors require `--target`; valid values come from that target's catalog metadata. Without a target, the command reports the static adapter contract and known catalog targets. With a target, it resolves that target's parameter, input, capability, quality/distribution, and limit details. The supported output formats are `table`, `plain`, `json`, and `tsv`.
++
++Capability and limit rows are target-specific where metadata varies by model type, profile, distribution, or installed manifest. A `null` value with `not_declared`, `unknown`, or `unavailable` status is intentional: ONNXVoice does not infer undocumented limits. For example, Qwen3 Base supports reference-conditioned cloning, while VoiceDesign is instruction-conditioned voice design, not cloning. Kokoro cloning distributions require reference audio and transcript token IDs; stock voice styles and optional Inno enrollment on ordinary layouts are separate capabilities. Piper's numeric `speaker_id` selects an existing speaker and is not cloning. See the relevant [system pages](systems/index.md) for adapter boundaries and [voice records](voices.md) for catalog voice selection.
+
+ ## Inventory and filters
+
+diff --git a/docs/systems/chatterbox.md b/docs/systems/chatterbox.md
+index 4a0a8f9..4901ddf 100644
+--- a/docs/systems/chatterbox.md
++++ b/docs/systems/chatterbox.md
+@@ -2,6 +2,8 @@
+
+ OnnxVoice provides catalog-backed installation and a cleanroom ONNX runtime adapter for the supported Chatterbox bundles. It is the graph/runtime layer, not a complete user-facing text-to-speech package: ChatterboxSynth owns the tokenizer frontend, reference-audio workflow, and public synthesis result/API.
+
++Use `onnxvoice engines options --engine chatterbox --target nano-v2` or `--target turbo` to inspect each bundle's profile, generation controls, and reference-audio capability without installing artifacts or opening graph sessions. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
++
+ ## Supported bundles and profiles
+
+ | Bundle reference     | Aliases             | Profiles        |
+diff --git a/docs/systems/index.md b/docs/systems/index.md
+index 4d478b6..30c6e37 100644
+--- a/docs/systems/index.md
++++ b/docs/systems/index.md
+@@ -18,6 +18,8 @@ Sopro native offline inference is currently enabled only for the parity-tested `
+ `OnnxVoice` discovers voices from the normalized catalog data shown above. A catalog item whose kind is `voice` contributes its own ID; items with child voices contribute the IDs already present in `CatalogItem.voices`. The catalog determines which voices are available.
+ Adapter registration and catalog availability are distinct. A built-in adapter does not guarantee that external catalog data is available.
+
++`onnxvoice engines list` and `onnxvoice engines options` expose the same distinction at discovery time: static adapter controls are separate from target-, quality-, distribution-, and installed-manifest facts. These commands are read-only and do not create model sessions. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery) for selectors and status semantics.
++
+ ```{toctree}
+ :maxdepth: 1
+
+diff --git a/docs/systems/inflect.md b/docs/systems/inflect.md
+index 4497436..1fc209a 100644
+--- a/docs/systems/inflect.md
++++ b/docs/systems/inflect.md
+@@ -2,6 +2,8 @@
+
+ ONNXVoice provides a low-level runtime adapter for Inflect Nano v2 and Inflect Micro v2. Both models use a fixed `default` voice and produce 24 kHz audio. The catalog carries the voice description (including locale and gender); the adapter does not infer or invent voice metadata.
+
++`onnxvoice engines options --engine inflect --target nano-v2` describes the fixed `default` voice and declared generation controls; it does not invent selectable speakers or cloning support. Discovery uses catalog metadata without installing ONNX files or creating sessions. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
++
+ Inflect v2 is a two-graph runtime:
+
+ | Artifact role | File            |
+diff --git a/docs/systems/kitten.md b/docs/systems/kitten.md
+index 9190e1c..d326b1b 100644
+--- a/docs/systems/kitten.md
++++ b/docs/systems/kitten.md
+@@ -14,6 +14,8 @@ onnxvoice voices show kitten:nano-0.8-int8/Bella
+
+ A voice reference identifies the catalog voice, not an ONNX style tensor. The backing asset reference, such as `kitten:nano-0.8-int8`, is the model to install or open. The current catalog has no authoritative per-voice gender metadata, so discovered Kitten voices report `unknown` rather than inferring gender from names or style IDs.
+
++For model-level controls and explicit unknown-limit reporting, use `onnxvoice engines options --engine kitten --target nano-0.8-int8`. This does not load the model; named voices remain separate catalog voice records selected through `onnxvoice voices`.
++
+ ## Managed model use
+
+ ```python
+diff --git a/docs/systems/kitten2.md b/docs/systems/kitten2.md
+index 87f3475..08efb6e 100644
+--- a/docs/systems/kitten2.md
++++ b/docs/systems/kitten2.md
+@@ -2,6 +2,8 @@
+
+ ONNXVoice provides a native `kitten2` system for the `kitten2-onnx-bundle-v1` layout. It is separate from the existing Kitten v0.8 `kitten` system and does not import or depend on the sibling `kitten2-onnx` runtime package.
+
++`onnxvoice engines options --engine kitten2 --target kitten-tts-v2` reports the installed bundle's named voices, presets, and declared generation controls without executing text synthesis. The bundle manifest provides target-specific details after installation; metadata not available to discovery remains unavailable. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
++
+ The adapter owns bundle validation, local tokenizer loading, text and voice preparation, seeded generation, ONNX session lifecycle, and waveform decoding. It does not own application-specific text policy or voice selection.
+
+ ## Install
+diff --git a/docs/systems/kokoro.md b/docs/systems/kokoro.md
+index 497c20f..d01064c 100644
+--- a/docs/systems/kokoro.md
++++ b/docs/systems/kokoro.md
+@@ -2,6 +2,15 @@
+
+ Kokoro supports a single ONNX model, the `split-onnx-v1` multi-component layout, and the reference-conditioned `cloning-onnx-v1` layout. Single and split inference accept caller-prepared model-ready style tensors. Ordinary single and split installations may also advertise optional Inno voice enrollment through `runtime.voice_enrollers`; Inno adds components without changing the Kokoro layout. Cloning remains separate and uses a reusable `KokoroReferenceState` instead of stock voices.
+
++Inspect the target-specific controls and limits without installing a model or creating sessions:
++
++```bash
++onnxvoice engines options --engine kokoro --target v1.0 --format json
++onnxvoice engines list --engine kokoro --capability voice-cloning
++```
++
++The options response keeps single, split, and cloning layouts separate. Cloning requires reference audio plus reference transcript token IDs; optional Inno enrollment on ordinary layouts is a different capability and does not imply cloning. Unknown limits remain explicitly unknown. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery) for output formats and status meanings.
++
+ ## Quality and distribution
+
+ A quality selection chooses a base Kokoro model variant within a distribution. It does not install every quality variant. Required runtime artifacts are installed with the selected model. An Inno distribution keeps its shared `model:inno_voicepack` and `metadata:inno_tuner` artifacts when selecting a base-model quality. Explicit quality and distribution selections can have separate installation identities. A cloning distribution includes its enrollment graphs, synthesis graphs, source parameters, and config together for each supported quality.
+diff --git a/docs/systems/piper.md b/docs/systems/piper.md
+index 3c85a08..af64e87 100644
+--- a/docs/systems/piper.md
++++ b/docs/systems/piper.md
+@@ -2,6 +2,8 @@
+
+ Piper runs an installed Piper ONNX model and optional JSON config. `onnxvoice` does not phonemize text or choose a speaker by name. The caller supplies model-ready token IDs and, when the graph has a `sid` input, the numeric speaker ID.
+
++`onnxvoice engines options --engine piper --target <voice-id>` reports the target's numeric speaker controls when known. `speaker_id` selects an existing graph speaker; it is not reference-audio cloning. Unknown model limits remain unasserted. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
++
+ ## Managed installation and inference
+
+ ```python
+diff --git a/docs/systems/pocket.md b/docs/systems/pocket.md
+index 2e834fb..9412cd5 100644
+--- a/docs/systems/pocket.md
++++ b/docs/systems/pocket.md
+@@ -2,6 +2,8 @@
+
+ Pocket is a bundle runtime with explicit graph contracts and recurrent state. Catalog assets and predefined voice-state downloads are separate concerns. A public ONNX bundle does not necessarily make every predefined voice state public.
+
++Use `onnxvoice engines options --engine pocket --target <catalog-target>` to inspect bundle-specific controls and facts. Catalog metadata may declare voice-cloning support and frame limits; absent declarations remain unknown rather than being presented as token limits. Discovery does not download voice state or create a model session. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
++
+ For direct Hugging Face downloads, optional dependencies, credentials, and offline caching, see [Pocket downloads](../pocket-downloads.md). The `doctor` command reports local, non-secret configuration and does not test access to a gated repository over the network.
+
+ ## Managed bundle and voice preparation
+diff --git a/docs/systems/qwen3.md b/docs/systems/qwen3.md
+index 5940aee..4abcb8d 100644
+--- a/docs/systems/qwen3.md
++++ b/docs/systems/qwen3.md
+@@ -9,6 +9,8 @@ OnnxVoice supports two WaveKat Qwen3-TTS ONNX bundles through the explicit `qwen
+
+ The catalog also accepts the short aliases `voice-design-1.7b` and `base-0.6b`. These entries refer to immutable source revisions in the [qwen3-onnx-bundles catalog](https://github.com/buchwandler/qwen3-onnx-bundles). Other Qwen3 exporters or graph layouts are not compatible by implication; they require a separately versioned ABI and their own validation/parity evidence.
+
++`onnxvoice engines options --engine qwen3 --target base-0.6b` reports the selected bundle's typed controls and capabilities; `--target voice-design-1.7b` describes the instruction-conditioned design model instead. Base cloning and VoiceDesign are deliberately reported as different modes. This is metadata-only discovery and does not install either profile or create sessions; see [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
++
+ ## Ownership boundary
+
+ OnnxVoice owns Qwen3 catalog parsing and selection, asset acquisition and integrity checks, installation layout, config/embedding/graph validation, provider/session lifecycle, generation, codec prediction, vocoding, and non-sensitive runtime diagnostics.
+diff --git a/docs/systems/sopro.md b/docs/systems/sopro.md
+index aaa8a7f..08647cc 100644
+--- a/docs/systems/sopro.md
++++ b/docs/systems/sopro.md
+@@ -2,6 +2,8 @@
+
+ Sopro is a manifest-backed, zero-shot voice-cloning system. The pinned `sopro:v2-turbo` catalog bundle declares a 24 kHz output rate and English (`en`), European Portuguese (`pt`), French (`fr`), and German (`de`) language tags. It does not provide predefined named voices; reference audio supplies the reusable voice state.
+
++`onnxvoice engines options --engine sopro --target v2-turbo` reports catalog-declared limits and controls; after installation, the small local bundle manifest may fill otherwise unavailable fields. The response identifies each fact's source. Discovery does not download the bundle or create an inference session, and unsupported profile/provider combinations are not presented as available native inference. See [CLI engine discovery](../cli.md#engine-option-and-capability-discovery).
++
+ ## Current implementation status
+
+ The adapter supports catalog-managed/local opening, graph inspection, token preparation, reusable reference preparation, one-segment offline synthesis, and stateful sequential `SoproRun` segment generation with automatic semantic carry. `SoproRun.stream_segment()` performs synchronous incremental inference on installed split acoustic ODE graphs, keeps acoustic/vocoder/ISTFT state, and yields raw mono float32 chunks; references too short for the streaming prompt safely fall back to one offline chunk. Bounded prompt/vocoder caches, synchronous `prepare_streaming()`, and final-chunk stream timings are available. The gated `wasm-uint8`/CPU real-bundle integration verifies incremental output, exact generated sample count, streaming graph use, and recovery after an early consumer stop.
+diff --git a/docs/systems/supertonic.md b/docs/systems/supertonic.md
+index ad64ec9..4ba9d88 100644
+--- a/docs/systems/supertonic.md
++++ b/docs/systems/supertonic.md
+@@ -2,6 +2,8 @@
+
+ Supertonic has a built-in adapter and catalog support. The runtime is a multi-component bundle rather than a single ONNX file. `onnxvoice` executes the model contract; the caller supplies the prepared token IDs, text mask, and style tensors. It does not add text normalization or phonemization.
+
++`onnxvoice engines options --engine supertonic --target supertonic-3` describes the bundle's runtime contract without creating sessions. Its catalog child styles are named voices, not cloning capability; resolve a style through `onnxvoice voices show`.
++
+ ## Catalog voice identity and languages
+
+ Supertonic catalog children use the semantic ref `<system>:<asset-id>/<voice-id>`. The ten current styles in `supertonic-3` therefore use refs from `supertonic:supertonic-3/F1` through `supertonic:supertonic-3/M5`. The backing asset ref is `supertonic:supertonic-3`, and a style ID such as `F1` is only unique within that bundle.
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index f000a30..9fd4ffd 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -103,6 +103,36 @@ def build_parser() -> argparse.ArgumentParser:
+     voices_show_parser.add_argument(
+         "--format", choices=["table", "plain", "json", "tsv"], default="table"
+     )
++    # --- engine option and capability discovery ---
++    engines_parser = sub.add_parser(
++        "engines", help="Discover engine targets, options, and capabilities"
++    )
++    engines_sub = engines_parser.add_subparsers(dest="engines_command", required=True)
++
++    engines_list_parser = engines_sub.add_parser(
++        "list", help="List target-level engine capability variants"
++    )
++    engines_list_parser.add_argument("--engine", help="Filter by engine name")
++    engines_list_parser.add_argument(
++        "--capability", choices=["voice-cloning"], help="Filter by capability"
++    )
++    engines_list_parser.add_argument("--refresh", action="store_true", help="Refresh catalogs")
++    engines_list_parser.add_argument(
++        "--format", choices=["table", "plain", "json", "tsv"], default="table"
++    )
++
++    engines_options_parser = engines_sub.add_parser(
++        "options", help="Show typed inputs, controls, capabilities, and limits"
++    )
++    engines_options_parser.add_argument("--engine", required=True, help="Engine name")
++    engines_options_parser.add_argument("--target", help="Catalog target ID or alias")
++    engines_options_parser.add_argument("--quality", help="Select a quality/profile")
++    engines_options_parser.add_argument("--distribution", help="Select a distribution variant")
++    engines_options_parser.add_argument("--refresh", action="store_true", help="Refresh catalogs")
++    engines_options_parser.add_argument(
++        "--format", choices=["table", "plain", "json", "tsv"], default="table"
++    )
++
+     # --- installed ---
+     installed_parser = sub.add_parser(
+         "installed", help="List installed entries (local-only, no network)"
+@@ -422,6 +452,268 @@ def _cmd_voices(args: argparse.Namespace) -> int:
+     raise ValueError(f"unknown voices command: {args.voices_command}")
+
+
++def _engine_display_value(value: Any) -> str:
++    if value is None:
++        return "-"
++    if isinstance(value, bool):
++        return "true" if value else "false"
++    if isinstance(value, (dict, list, tuple)):
++        return json.dumps(value, ensure_ascii=False, sort_keys=True)
++    return str(value)
++
++
++def _engine_detail(parts: list[Any]) -> str:
++    return "; ".join(_engine_display_value(part) for part in parts if part not in (None, ""))
++
++
++def _append_engine_summary(rows: list[list[str]], data: dict[str, Any], prefix: str = "") -> None:
++    label = f"{prefix} / " if prefix else ""
++    for name, value in (
++        ("engine", data.get("engine")),
++        ("target", data.get("target")),
++        ("reference", data.get("ref")),
++        ("quality", data.get("quality")),
++        ("distribution", data.get("distribution")),
++        ("layout", data.get("layout")),
++        ("sample_rate", data.get("sample_rate")),
++        ("contract_status", data.get("contract_status")),
++    ):
++        status = data.get("field_status", {}).get(name, "")
++        rows.append(
++            [
++                f"{label}metadata",
++                name,
++                "",
++                _engine_display_value(value),
++                _engine_detail([f"status={status}" if status else None]),
++            ]
++        )
++    discovery = data.get("target_discovery")
++    if isinstance(discovery, dict):
++        rows.append(
++            [
++                f"{label}metadata",
++                "target_discovery",
++                "",
++                discovery.get("status", "unknown"),
++                _engine_display_value(discovery.get("reason")),
++            ]
++        )
++
++
++def _append_engine_contract_rows(
++    rows: list[list[str]], data: dict[str, Any], prefix: str = ""
++) -> None:
++    label = f"{prefix} / " if prefix else ""
++    for name, capability in sorted(data.get("capabilities", {}).items()):
++        supported = capability.get("supported")
++        value = (
++            "supported"
++            if supported is True
++            else "not supported"
++            if supported is False
++            else capability.get("status", "unknown")
++        )
++        detail = _engine_detail(
++            [
++                f"mode={capability.get('mode')}" if capability.get("mode") else None,
++                f"requires={_engine_display_value(capability.get('requires', []))}"
++                if capability.get("requires")
++                else None,
++                f"requires_reference_transcript={capability.get('requires_reference_transcript')}"
++                if capability.get("requires_reference_transcript") is not None
++                else None,
++                f"source={capability.get('source')}" if capability.get("source") else None,
++                capability.get("reason"),
++                *capability.get("constraints", []),
++            ]
++        )
++        rows.append([f"{label}capability", name, "boolean", value, detail])
++
++    for group, key in (("input", "inputs"), ("parameter", "parameters")):
++        for option in sorted(data.get(key, []), key=lambda item: item.get("name", "")):
++            if option.get("required"):
++                value = "required"
++            else:
++                value = _engine_display_value(option.get("default"))
++                if option.get("default_status") not in {None, "known", "not_applicable"}:
++                    value = f"{value} ({option.get('default_status')})"
++            details: list[Any] = [option.get("description")]
++            if option.get("minimum") is not None or option.get("maximum") is not None:
++                low = (
++                    "-∞"
++                    if option.get("minimum") is None
++                    else _engine_display_value(option.get("minimum"))
++                )
++                high = (
++                    "+∞"
++                    if option.get("maximum") is None
++                    else _engine_display_value(option.get("maximum"))
++                )
++                left = "[" if option.get("minimum_inclusive") is not False else "("
++                right = "]" if option.get("maximum_inclusive") is not False else ")"
++                details.append(f"range={left}{low}, {high}{right}")
++            if option.get("choices"):
++                details.append(f"choices={_engine_display_value(option['choices'])}")
++            if option.get("supported") is False:
++                details.append("supported=false")
++            elif option.get("supported") is None:
++                details.append("supported=unknown")
++            for key_name in ("status", "availability", "constraint_status", "source"):
++                if option.get(key_name):
++                    details.append(f"{key_name}={option[key_name]}")
++            details.extend(option.get("notes", []))
++            rows.append(
++                [
++                    f"{label}{group}",
++                    option.get("name", ""),
++                    option.get("type", ""),
++                    value,
++                    _engine_detail(details),
++                ]
++            )
++
++    for limit in sorted(data.get("limits", []), key=lambda item: item.get("name", "")):
++        value = _engine_display_value(limit.get("value"))
++        if limit.get("value") is None:
++            value = limit.get("status", "unknown")
++        detail = _engine_detail(
++            [
++                f"unit={limit.get('unit')}" if limit.get("unit") else None,
++                f"source={limit.get('source')}" if limit.get("source") else None,
++                f"constraint_status={limit.get('constraint_status')}"
++                if limit.get("constraint_status")
++                else None,
++                limit.get("description"),
++                *limit.get("notes", []),
++            ]
++        )
++        rows.append([f"{label}limit", limit.get("name", ""), limit.get("unit", ""), value, detail])
++
++    for selection in sorted(
++        data.get("selection_metadata", []), key=lambda item: item.get("name", "")
++    ):
++        detail = _engine_detail(
++            [
++                f"status={selection.get('status')}" if selection.get("status") else None,
++                f"source={selection.get('source')}" if selection.get("source") else None,
++                selection.get("description"),
++            ]
++        )
++        rows.append(
++            [
++                f"{label}selection",
++                selection.get("name", ""),
++                "metadata",
++                _engine_display_value(selection.get("value")),
++                detail,
++            ]
++        )
++
++    for target in sorted(data.get("known_targets", []), key=lambda item: item.get("target", "")):
++        details = [
++            f"ref={target.get('ref')}",
++            f"quality={_engine_display_value(target.get('quality'))}",
++            f"qualities={_engine_display_value(target.get('qualities', []))}",
++            f"distributions={_engine_display_value(target.get('distributions', []))}",
++            f"layout={_engine_display_value(target.get('layout'))}",
++            f"sample_rate={_engine_display_value(target.get('sample_rate'))}",
++        ]
++        rows.append(
++            [
++                f"{label}target",
++                target.get("target", ""),
++                "catalog",
++                "available",
++                _engine_detail(details),
++            ]
++        )
++
++
++def _render_engine_options(data: dict[str, Any], output_format: str) -> None:
++    if output_format == "json":
++        print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
++        return
++    rows: list[list[str]] = []
++    _append_engine_summary(rows, data)
++    variants = data.get("variants")
++    if isinstance(variants, list):
++        for variant in variants:
++            label = (
++                variant.get("distribution")
++                or variant.get("quality")
++                or variant.get("layout")
++                or variant.get("target")
++                or "variant"
++            )
++            _append_engine_summary(rows, variant, prefix=str(label))
++            _append_engine_contract_rows(rows, variant, prefix=str(label))
++    else:
++        _append_engine_contract_rows(rows, data)
++    from ._table import render_inventory
++
++    render_inventory(["SECTION", "NAME", "TYPE", "VALUE", "DETAIL"], rows, format=output_format)
++
++
++def _cmd_engines(args: argparse.Namespace) -> int:
++    from .engine_options import list_engine_targets, resolve_engine_options
++
++    manager = _manager(args)
++    if args.engines_command == "list":
++        data = list_engine_targets(
++            manager,
++            engine=args.engine,
++            capability=args.capability,
++            refresh=args.refresh,
++        )
++        if args.format == "json":
++            print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
++        else:
++            columns = [
++                "ENGINE",
++                "TARGET",
++                "REF",
++                "QUALITY",
++                "DISTRIBUTION",
++                "LAYOUT",
++                "SAMPLE_RATE",
++                "VOICE_CLONING",
++                "MODE",
++                "DISCOVERY",
++            ]
++            rows = [
++                [
++                    _engine_display_value(row.get("engine")),
++                    _engine_display_value(row.get("target")),
++                    _engine_display_value(row.get("ref")),
++                    _engine_display_value(row.get("quality")),
++                    _engine_display_value(row.get("distribution")),
++                    _engine_display_value(row.get("layout")),
++                    _engine_display_value(row.get("sample_rate")),
++                    _engine_display_value(row.get("voice_cloning")),
++                    _engine_display_value(row.get("cloning_mode")),
++                    _engine_display_value(row.get("target_discovery")),
++                ]
++                for row in data["rows"]
++            ]
++            from ._table import render_inventory
++
++            render_inventory(columns, rows, format=args.format)
++        return 0
++    if args.engines_command == "options":
++        data = resolve_engine_options(
++            manager,
++            args.engine,
++            target=args.target,
++            quality=args.quality,
++            distribution=args.distribution,
++            refresh=args.refresh,
++        )
++        _render_engine_options(data, args.format)
++        return 0
++    raise ValueError(f"unknown engines command: {args.engines_command}")
++
++
+ def _cmd_list(args: argparse.Namespace) -> int:
+     from ._table import format_bytes, render_inventory
+
+@@ -643,7 +935,7 @@ _PROVIDER_LIST_ALIASES = (
+ def _jsonable(value: Any) -> Any:
+     from dataclasses import asdict, is_dataclass
+
+-    if is_dataclass(value):
++    if is_dataclass(value) and not isinstance(value, type):
+         return _jsonable(asdict(value))
+     if isinstance(value, Path):
+         return value.as_posix()
+@@ -1356,6 +1648,8 @@ def main(argv: list[str] | None = None) -> int:
+
+         if args.command == "voices":
+             return _cmd_voices(args)
++        if args.command == "engines":
++            return _cmd_engines(args)
+
+         handlers = {
+             "list": _cmd_list,
+diff --git a/onnxvoice/engine_options.py b/onnxvoice/engine_options.py
+new file mode 100644
+index 0000000..00d8ba7
+--- /dev/null
++++ b/onnxvoice/engine_options.py
+@@ -0,0 +1,2523 @@
++"""Static, machine-readable inference contracts for registered ONNXVoice engines.
++
++Catalog- and installation-specific facts are resolved by the service layer added
++alongside these descriptors. This module deliberately imports no ONNX Runtime
++code and never opens model artifacts.
++"""
++
++from __future__ import annotations
++
++import math
++from collections.abc import Mapping
++from dataclasses import asdict, dataclass
++from types import MappingProxyType
++from typing import Any
++
++from .errors import OnnxVoiceError
++
++
++@dataclass(frozen=True, slots=True)
++class OptionDescriptor:
++    """One API input, inference control, or selection metadata field."""
++
++    name: str
++    type: str
++    group: str
++    description: str
++    required: bool = False
++    default: Any = None
++    default_status: str = "not_applicable"
++    minimum: int | float | None = None
++    maximum: int | float | None = None
++    minimum_inclusive: bool | None = None
++    maximum_inclusive: bool | None = None
++    choices: tuple[Any, ...] = ()
++    unit: str | None = None
++    supported: bool | None = True
++    status: str = "supported"
++    availability: str | None = None
++    constraint_status: str = "enforced"
++    source: str = "adapter_contract"
++    notes: tuple[str, ...] = ()
++
++    def to_dict(self) -> dict[str, Any]:
++        """Return a JSON-friendly copy with tuple-valued fields as lists."""
++        result = asdict(self)
++        result["choices"] = list(self.choices)
++        result["notes"] = list(self.notes)
++        return result
++
++
++@dataclass(frozen=True, slots=True)
++class LimitDescriptor:
++    """One input, output, reference-audio, or runtime limit."""
++
++    name: str
++    value: Any
++    status: str
++    unit: str
++    source: str
++    description: str
++    constraint_status: str = "unknown"
++    notes: tuple[str, ...] = ()
++
++    def to_dict(self) -> dict[str, Any]:
++        result = asdict(self)
++        if isinstance(self.value, tuple):
++            result["value"] = list(self.value)
++        result["notes"] = list(self.notes)
++        return result
++
++
++@dataclass(frozen=True, slots=True)
++class CapabilityDescriptor:
++    """A target-sensitive capability; ``None`` means evidence is insufficient."""
++
++    name: str
++    supported: bool | None
++    status: str
++    mode: str | None = None
++    requires: tuple[str, ...] = ()
++    requires_reference_transcript: bool | None = None
++    reason: str | None = None
++    constraints: tuple[str, ...] = ()
++    source: str = "adapter_contract"
++
++    def to_dict(self) -> dict[str, Any]:
++        result = asdict(self)
++        result["requires"] = list(self.requires)
++        result["constraints"] = list(self.constraints)
++        return result
++
++
++@dataclass(frozen=True, slots=True)
++class EngineContract:
++    """Immutable static contract for one engine adapter."""
++
++    engine: str
++    inputs: tuple[OptionDescriptor, ...] = ()
++    parameters: tuple[OptionDescriptor, ...] = ()
++    limits: tuple[LimitDescriptor, ...] = ()
++    capabilities: tuple[CapabilityDescriptor, ...] = ()
++    selection_metadata: tuple[OptionDescriptor, ...] = ()
++    contract_status: str = "available"
++    contract_reason: str | None = None
++    notes: tuple[str, ...] = ()
++
++    def to_dict(self) -> dict[str, Any]:
++        """Return a deterministic JSON-friendly static contract."""
++        return {
++            "engine": self.engine,
++            "contract_status": self.contract_status,
++            "contract_reason": self.contract_reason,
++            "inputs": [item.to_dict() for item in self.inputs],
++            "parameters": [item.to_dict() for item in self.parameters],
++            "limits": [item.to_dict() for item in self.limits],
++            "capabilities": {
++                item.name: item.to_dict()
++                for item in sorted(self.capabilities, key=lambda x: x.name)
++            },
++            "selection_metadata": [item.to_dict() for item in self.selection_metadata],
++            "notes": list(self.notes),
++        }
++
++
++def _input(
++    name: str,
++    type_name: str,
++    description: str,
++    *,
++    required: bool = True,
++    group: str = "required_inference_inputs",
++    availability: str | None = None,
++    status: str = "supported",
++    supported: bool | None = True,
++    notes: tuple[str, ...] = (),
++) -> OptionDescriptor:
++    return OptionDescriptor(
++        name=name,
++        type=type_name,
++        group=group,
++        description=description,
++        required=required,
++        default_status="not_applicable" if required else "known",
++        availability=availability,
++        status=status,
++        supported=supported,
++        notes=notes,
++    )
++
++
++def _control(
++    name: str,
++    type_name: str,
++    description: str,
++    *,
++    default: Any = None,
++    default_status: str = "known",
++    minimum: int | float | None = None,
++    maximum: int | float | None = None,
++    minimum_inclusive: bool | None = None,
++    maximum_inclusive: bool | None = None,
++    choices: tuple[Any, ...] = (),
++    unit: str | None = None,
++    availability: str | None = None,
++    supported: bool | None = True,
++    status: str = "supported",
++    constraint_status: str = "enforced",
++    notes: tuple[str, ...] = (),
++) -> OptionDescriptor:
++    return OptionDescriptor(
++        name=name,
++        type=type_name,
++        group="optional_inference_controls",
++        description=description,
++        required=False,
++        default=default,
++        default_status=default_status,
++        minimum=minimum,
++        maximum=maximum,
++        minimum_inclusive=minimum_inclusive,
++        maximum_inclusive=maximum_inclusive,
++        choices=choices,
++        unit=unit,
++        availability=availability,
++        supported=supported,
++        status=status,
++        constraint_status=constraint_status,
++        notes=notes,
++    )
++
++
++def _limit(
++    name: str,
++    value: Any,
++    status: str,
++    unit: str,
++    source: str,
++    description: str,
++    *,
++    constraint_status: str = "unknown",
++    notes: tuple[str, ...] = (),
++) -> LimitDescriptor:
++    return LimitDescriptor(
++        name=name,
++        value=value,
++        status=status,
++        unit=unit,
++        source=source,
++        description=description,
++        constraint_status=constraint_status,
++        notes=notes,
++    )
++
++
++def _capability(
++    name: str,
++    supported: bool | None,
++    status: str,
++    *,
++    mode: str | None = None,
++    requires: tuple[str, ...] = (),
++    requires_reference_transcript: bool | None = None,
++    reason: str | None = None,
++    constraints: tuple[str, ...] = (),
++    source: str = "adapter_contract",
++) -> CapabilityDescriptor:
++    return CapabilityDescriptor(
++        name=name,
++        supported=supported,
++        status=status,
++        mode=mode,
++        requires=requires,
++        requires_reference_transcript=requires_reference_transcript,
++        reason=reason,
++        constraints=constraints,
++        source=source,
++    )
++
++
++_TOKEN_IDS = _input("token_ids", "integer[]", "Caller-prepared model-ready token IDs.")
++_NO_CLONING = _capability(
++    "voice_cloning",
++    False,
++    "not_supported",
++    reason="This adapter does not condition synthesis on reference audio or a voice state prepared from it.",
++)
++
++# Contract details here follow public adapter validation. Catalog-dependent
++# values (for example target layouts and model manifest limits) are resolved
++# separately and take precedence over these static fallbacks.
++ENGINE_CONTRACTS: Mapping[str, EngineContract] = MappingProxyType(
++    {
++        "chatterbox": EngineContract(
++            engine="chatterbox",
++            inputs=(
++                _TOKEN_IDS,
++                _input(
++                    "voice_state",
++                    "ChatterboxVoiceState",
++                    "Prepared reference-audio conditioning state.",
++                ),
++            ),
++            parameters=(
++                _control(
++                    "max_new_tokens",
++                    "integer",
++                    "Maximum generated speech-token count.",
++                    default=1024,
++                    minimum=1,
++                    minimum_inclusive=True,
++                    availability="May be overridden by target runtime metadata.",
++                ),
++                _control(
++                    "repetition_penalty",
++                    "number",
++                    "Greedy decoding repetition penalty.",
++                    default=1.2,
++                    minimum=0,
++                    minimum_inclusive=False,
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_new_tokens",
++                    None,
++                    "unknown",
++                    "tokens",
++                    "catalog_metadata_or_runtime_fallback",
++                    "Effective default and any cap may be target-runtime metadata dependent.",
++                    constraint_status="model_declared",
++                ),
++            ),
++            capabilities=(
++                _capability(
++                    "voice_cloning",
++                    True,
++                    "supported",
++                    mode="reference_audio",
++                    requires=("reference_audio", "voice_state"),
++                    requires_reference_transcript=False,
++                    reason="prepare_voice encodes reference audio into reusable ChatterboxVoiceState.",
++                ),
++            ),
++            notes=("The adapter requires prepared voice state for inference.",),
++        ),
++        "inflect": EngineContract(
++            engine="inflect",
++            inputs=(
++                _input(
++                    "token_ids",
++                    "integer[]",
++                    "Non-empty caller-prepared model-ready integer IDs.",
++                    notes=("The adapter validates a non-empty integer sequence.",),
++                ),
++            ),
++            parameters=(
++                _control(
++                    "speed",
++                    "number",
++                    "Duration scales as 1 / speed.",
++                    default=1.0,
++                    minimum=0.5,
++                    maximum=2.0,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "variation",
++                    "number",
++                    "Decoder noise scale.",
++                    default=0.667,
++                    minimum=0.0,
++                    maximum=1.0,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "seed",
++                    "integer",
++                    "Non-negative NumPy random-generator seed.",
++                    default=0,
++                    minimum=0,
++                    minimum_inclusive=True,
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "not_declared",
++                    "tokens",
++                    "adapter_contract",
++                    "No authoritative hard token maximum is declared.",
++                    constraint_status="not_enforced_by_adapter",
++                ),
++            ),
++            capabilities=(_NO_CLONING,),
++            selection_metadata=(
++                _input(
++                    "voice",
++                    "string",
++                    "Fixed adapter voice.",
++                    required=False,
++                    group="selection_metadata",
++                    status="fixed",
++                    availability="default",
++                    notes=("Do not infer a token limit from the fixed voice.",),
++                ),
++            ),
++        ),
++        "kitten": EngineContract(
++            engine="kitten",
++            inputs=(
++                _input("style", "tensor", "Required model-ready style tensor."),
++                _TOKEN_IDS,
++            ),
++            parameters=(
++                _control(
++                    "speed",
++                    "number",
++                    "Finite, strictly positive speed multiplier; no adapter upper bound is declared.",
++                    default=1.0,
++                    minimum=0.0,
++                    minimum_inclusive=False,
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "unknown",
++                    "tokens",
++                    "onnx_graph_or_manifest",
++                    "Only report a fixed graph sequence dimension when adapter enforcement makes it a real limit.",
++                    constraint_status="unknown",
++                ),
++            ),
++            capabilities=(_NO_CLONING,),
++        ),
++        "kitten2": EngineContract(
++            engine="kitten2",
++            inputs=(_input("text", "string", "Text passed to the high-level infer_text API."),),
++            parameters=(
++                _control(
++                    "voice",
++                    "string",
++                    "Named voice in the installed bundle.",
++                    default_status="unknown",
++                ),
++                _control(
++                    "preset",
++                    "string",
++                    "Named decoder preset in the installed bundle.",
++                    default_status="unknown",
++                ),
++                _control(
++                    "seed",
++                    "integer",
++                    "Random seed; null delegates to the library RNG behavior.",
++                    default=None,
++                    default_status="known",
++                ),
++                _control(
++                    "max_new_tokens",
++                    "integer",
++                    "Maximum generated language-model tokens per chunk.",
++                    default=512,
++                    minimum=1,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "use_emotion",
++                    "boolean",
++                    "Enable expression/emotion conditioning; null follows text markup.",
++                    default=None,
++                    default_status="known",
++                ),
++                _control(
++                    "use_reference_prompt",
++                    "boolean",
++                    "Use the selected named voice's reference prompt; null follows bundle configuration.",
++                    default=None,
++                    default_status="known",
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_text_len",
++                    None,
++                    "not_declared",
++                    "characters",
++                    "adapter_contract",
++                    "Kitten2 chunks input text using bundle settings and declares no hard overall text length.",
++                    constraint_status="not_enforced_by_adapter",
++                ),
++            ),
++            capabilities=(_NO_CLONING,),
++            selection_metadata=(
++                _input(
++                    "voices",
++                    "string[]",
++                    "Named voices declared by the installed bundle.",
++                    required=False,
++                    group="selection_metadata",
++                    status="target_dependent",
++                    availability="installed manifest",
++                ),
++                _input(
++                    "presets",
++                    "string[]",
++                    "Decode presets declared by the installed bundle.",
++                    required=False,
++                    group="selection_metadata",
++                    status="target_dependent",
++                    availability="installed manifest",
++                ),
++            ),
++            notes=(
++                "Kitten2 exposes infer_text; its adapter infer method intentionally rejects token-level calls.",
++            ),
++        ),
++        "kokoro": EngineContract(
++            engine="kokoro",
++            inputs=(
++                _input(
++                    "style",
++                    "tensor",
++                    "Required model-ready style tensor.",
++                    required=False,
++                    availability="ordinary single-model or split layout",
++                ),
++                _TOKEN_IDS,
++                _input(
++                    "reference",
++                    "KokoroReferenceState",
++                    "Prepared reference voice state.",
++                    required=False,
++                    group="capability_specific_inputs",
++                    availability="cloning-onnx-v1 layout only",
++                    status="conditional",
++                ),
++            ),
++            parameters=(
++                _control(
++                    "speed",
++                    "number",
++                    "Ordinary speed control; the cloning layout supports only exactly 1.0.",
++                    default=1.0,
++                    constraint_status="not_enforced_by_adapter",
++                    availability="split runtime; graph-dependent for ordinary single-model; cloning layout accepts only 1.0",
++                    notes=("Do not infer an upper or lower bound for ordinary layouts.",),
++                ),
++                _control(
++                    "seed",
++                    "integer",
++                    "Seed used by split and cloning runtimes; ordinary single-model output is not claimed to change.",
++                    default=1234,
++                    availability="split and cloning layouts; ordinary single-model output does not use the seed",
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "unknown",
++                    "tokens",
++                    "runtime_manifest_or_graph_contract",
++                    "Selected layout determines whether the limit counts caller tokens or model-ready tokens.",
++                    constraint_status="model_declared",
++                ),
++                _limit(
++                    "max_content_tokens",
++                    508,
++                    "conditional",
++                    "tokens",
++                    "adapter_contract",
++                    "Cloning default of 510 includes two adapter-added boundary tokens; split counts caller tokens directly.",
++                    constraint_status="enforced",
++                    notes=(
++                        "The value is applicable only to cloning layout when its effective max_tokens is 510.",
++                    ),
++                ),
++                _limit(
++                    "min_reference_seconds",
++                    3,
++                    "conditional",
++                    "seconds",
++                    "adapter_contract",
++                    "Minimum cloning reference-audio duration.",
++                    constraint_status="enforced",
++                ),
++                _limit(
++                    "max_reference_seconds",
++                    30,
++                    "conditional",
++                    "seconds",
++                    "adapter_contract",
++                    "Maximum cloning reference-audio duration at 24 kHz.",
++                    constraint_status="enforced",
++                ),
++                _limit(
++                    "reference_sample_rates",
++                    (24000, 16000),
++                    "conditional",
++                    "Hz",
++                    "adapter_contract",
++                    "Reference preparation requires matching mono 24 kHz and 16 kHz audio inputs.",
++                    constraint_status="enforced",
++                ),
++            ),
++            capabilities=(
++                _capability(
++                    "voice_cloning",
++                    None,
++                    "conditional",
++                    mode="reference_audio",
++                    requires=("reference_audio", "reference_transcript_token_ids", "reference"),
++                    requires_reference_transcript=True,
++                    reason="Supported only when the selected target distribution uses cloning-onnx-v1.",
++                ),
++                _capability(
++                    "reference_voice_enrollment",
++                    None,
++                    "conditional",
++                    mode="inno_enrollment",
++                    requires=("reference_audio",),
++                    reason="Optional Inno voice enrollment is separate from cloning-onnx-v1.",
++                ),
++            ),
++        ),
++        "piper": EngineContract(
++            engine="piper",
++            inputs=(_TOKEN_IDS,),
++            parameters=(
++                _control(
++                    "speaker_id",
++                    "integer",
++                    "Numeric speaker selector; this is not reference-audio cloning.",
++                    default=None,
++                    availability="required only for graphs with a sid input; rejected by graphs without sid",
++                    constraint_status="model_declared",
++                ),
++                _control(
++                    "noise_scale",
++                    "number",
++                    "Noise scale; no adapter bounds are declared.",
++                    default=0.667,
++                    constraint_status="not_enforced_by_adapter",
++                ),
++                _control(
++                    "length_scale",
++                    "number",
++                    "Length scale; no adapter bounds are declared.",
++                    default=1.0,
++                    constraint_status="not_enforced_by_adapter",
++                ),
++                _control(
++                    "noise_w",
++                    "number",
++                    "Noise width; no adapter bounds are declared.",
++                    default=0.8,
++                    constraint_status="not_enforced_by_adapter",
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "not_declared",
++                    "tokens",
++                    "adapter_contract",
++                    "The adapter does not claim a hard maximum phoneme/token count.",
++                    constraint_status="not_enforced_by_adapter",
++                ),
++            ),
++            capabilities=(
++                _capability(
++                    "voice_cloning",
++                    False,
++                    "not_supported",
++                    reason="speaker_id selects a graph speaker and does not condition on reference audio.",
++                ),
++            ),
++        ),
++        "pocket": EngineContract(
++            engine="pocket",
++            inputs=(
++                _TOKEN_IDS,
++                _input(
++                    "voice_state",
++                    "PocketVoiceState",
++                    "Optional prepared voice state; omission uses bundle default/BOS conditioning.",
++                    required=False,
++                    group="capability_specific_inputs",
++                ),
++            ),
++            parameters=(
++                _control(
++                    "temperature",
++                    "number",
++                    "Sampling temperature.",
++                    default=0.7,
++                    minimum=0.0,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "lsd_steps",
++                    "integer",
++                    "Langevin dynamics sampling steps.",
++                    default=1,
++                    minimum=1,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "max_frames",
++                    "integer",
++                    "Maximum generated frames, not text tokens or samples.",
++                    default=None,
++                    default_status="known",
++                    minimum=1,
++                    minimum_inclusive=True,
++                    unit="frames",
++                    notes=(
++                        "Effective fallback is 200 frames unless bundle metadata overrides it.",
++                    ),
++                ),
++                _control(
++                    "frames_after_eos",
++                    "integer",
++                    "Number of frames appended after EOS.",
++                    default=None,
++                    default_status="known",
++                    minimum=0,
++                    minimum_inclusive=True,
++                    unit="frames",
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_frames",
++                    200,
++                    "known",
++                    "frames",
++                    "adapter_contract",
++                    "Adapter fallback; bundle metadata may declare the effective default.",
++                    constraint_status="enforced",
++                ),
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "not_declared",
++                    "tokens",
++                    "adapter_contract",
++                    "The adapter does not impose a hard text-token limit; catalog chunk metadata is producer guidance only.",
++                    constraint_status="not_enforced_by_adapter",
++                ),
++            ),
++            capabilities=(
++                _capability(
++                    "voice_cloning",
++                    None,
++                    "conditional",
++                    mode="reference_audio",
++                    requires=("reference_audio", "voice_state"),
++                    reason="Use the selected target's normalized supports_voice_cloning metadata.",
++                    source="catalog_metadata",
++                ),
++            ),
++        ),
++        "qwen3": EngineContract(
++            engine="qwen3",
++            inputs=(
++                _TOKEN_IDS,
++                _input(
++                    "voice_state",
++                    "Qwen3VoiceState",
++                    "Prepared reference voice state; required for Base targets.",
++                    required=False,
++                    group="capability_specific_inputs",
++                    availability="model_type == base",
++                    status="conditional",
++                ),
++                _input(
++                    "instruction_token_ids",
++                    "integer[]",
++                    "Voice-description instruction tokens; required for VoiceDesign targets.",
++                    required=False,
++                    group="capability_specific_inputs",
++                    availability="model_type == voice_design",
++                    status="conditional",
++                ),
++            ),
++            parameters=(
++                _control(
++                    "language",
++                    "string",
++                    "Non-empty codec language label; valid choices are model-config dependent.",
++                    default="english",
++                    constraint_status="model_declared",
++                ),
++                _control(
++                    "temperature",
++                    "number",
++                    "Sampling temperature.",
++                    default=0.9,
++                    minimum=0.0,
++                    maximum=5.0,
++                    minimum_inclusive=False,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "top_k",
++                    "integer",
++                    "Top-k sampling; zero disables top-k filtering.",
++                    default=50,
++                    minimum=0,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "repetition_penalty",
++                    "number",
++                    "Finite positive repetition penalty.",
++                    default=1.05,
++                    minimum=0.0,
++                    minimum_inclusive=False,
++                ),
++                _control(
++                    "max_new_tokens",
++                    "integer",
++                    "Generated token limit.",
++                    default=2048,
++                    minimum=1,
++                    maximum=8192,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "seed",
++                    "integer",
++                    "Optional reproducibility seed.",
++                    default=None,
++                    minimum=0,
++                    maximum=4294967295,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_reference_samples",
++                    240000,
++                    "conditional",
++                    "samples",
++                    "adapter_contract",
++                    "Qwen3 Base reference audio maximum.",
++                    constraint_status="enforced",
++                ),
++                _limit(
++                    "min_reference_samples",
++                    1024,
++                    "conditional",
++                    "samples",
++                    "adapter_contract",
++                    "Qwen3 Base reference audio minimum.",
++                    constraint_status="enforced",
++                ),
++                _limit(
++                    "max_reference_seconds",
++                    10,
++                    "conditional",
++                    "seconds",
++                    "adapter_contract",
++                    "Qwen3 Base reference audio maximum at 24 kHz.",
++                    constraint_status="enforced",
++                ),
++                _limit(
++                    "reference_sample_rate",
++                    24000,
++                    "conditional",
++                    "Hz",
++                    "adapter_contract",
++                    "Qwen3 Base reference audio must be at 24 kHz.",
++                    constraint_status="enforced",
++                ),
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "unknown",
++                    "tokens",
++                    "installed_manifest",
++                    "Model context capacity is not a raw text-token limit; wrapper/chat-template tokens also consume context.",
++                    constraint_status="model_declared",
++                ),
++            ),
++            capabilities=(
++                _capability(
++                    "voice_cloning",
++                    None,
++                    "conditional",
++                    mode="reference_audio",
++                    requires=("reference_audio", "reference_transcript_token_ids", "voice_state"),
++                    requires_reference_transcript=True,
++                    reason="Supported for Base targets, not VoiceDesign targets.",
++                ),
++                _capability(
++                    "voice_design",
++                    None,
++                    "conditional",
++                    mode="instruction_tokens",
++                    requires=("instruction_token_ids",),
++                    reason="Supported for VoiceDesign targets only.",
++                ),
++            ),
++        ),
++        "sopro": EngineContract(
++            engine="sopro",
++            inputs=(
++                _TOKEN_IDS,
++                _input(
++                    "voice_state", "SoproVoiceState", "Required prepared reference voice state."
++                ),
++                _input(
++                    "prompt_tokens",
++                    "integer[]",
++                    "Optional one-dimensional semantic prompt-token override.",
++                    required=False,
++                    group="capability_specific_inputs",
++                    availability="bounded by manifest generation.prompt_tokens and semantic vocabulary",
++                    status="conditional",
++                ),
++            ),
++            parameters=(
++                _control(
++                    "language",
++                    "string",
++                    "Language selector; empty/auto selects automatic language mode.",
++                    default="auto",
++                    choices=("auto", "en", "pt", "fr", "de"),
++                ),
++                _control(
++                    "temperature",
++                    "number",
++                    "Sampling temperature; effective default comes from manifest.",
++                    default_status="unknown",
++                    minimum=0.0,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "top_p",
++                    "number",
++                    "Nucleus sampling threshold.",
++                    default_status="unknown",
++                    minimum=0.0,
++                    maximum=1.0,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "top_k",
++                    "integer",
++                    "Top-k filtering; zero disables top-k.",
++                    default_status="unknown",
++                    minimum=0,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "max_seconds",
++                    "number",
++                    "Maximum generated audio duration.",
++                    default_status="unknown",
++                    minimum=0.0,
++                    minimum_inclusive=False,
++                    unit="seconds",
++                    availability="bounded by manifest generation.max_seconds",
++                ),
++                _control(
++                    "min_seconds",
++                    "number",
++                    "Minimum generated audio duration.",
++                    default_status="unknown",
++                    minimum=0.0,
++                    minimum_inclusive=True,
++                    unit="seconds",
++                    availability="must not exceed effective max_seconds",
++                ),
++                _control(
++                    "seed",
++                    "integer",
++                    "Random seed.",
++                    default=1,
++                    minimum=0,
++                    maximum=4294967295,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "steps",
++                    "integer",
++                    "Fixed manifest-declared inference step count.",
++                    default_status="unknown",
++                    minimum=1,
++                    minimum_inclusive=True,
++                    availability="caller may only provide the manifest-declared value",
++                    constraint_status="model_declared",
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_text_len",
++                    None,
++                    "unknown",
++                    "tokens",
++                    "installed_manifest",
++                    "Input text-token bound from model.max_text_len.",
++                    constraint_status="model_declared",
++                ),
++                _limit(
++                    "max_seconds",
++                    None,
++                    "unknown",
++                    "seconds",
++                    "installed_manifest",
++                    "Output-duration limit from generation.max_seconds.",
++                    constraint_status="model_declared",
++                ),
++                _limit(
++                    "max_prompt_tokens",
++                    None,
++                    "unknown",
++                    "tokens",
++                    "installed_manifest",
++                    "Reference prompt limit from generation.prompt_tokens.",
++                    constraint_status="model_declared",
++                ),
++                _limit(
++                    "min_reference_seconds",
++                    None,
++                    "unknown",
++                    "seconds",
++                    "installed_manifest",
++                    "Reference-audio requirements are declared by the installed manifest.",
++                    constraint_status="model_declared",
++                ),
++                _limit(
++                    "reference_seconds",
++                    None,
++                    "unknown",
++                    "seconds",
++                    "installed_manifest",
++                    "Reference conditioning duration from generation.ref_seconds; the adapter fallback is 10 seconds.",
++                    constraint_status="model_declared",
++                ),
++                _limit(
++                    "reference_sample_rate",
++                    24000,
++                    "known",
++                    "Hz",
++                    "adapter_contract",
++                    "Sopro native Python reference preparation resamples to its 24 kHz profile.",
++                    constraint_status="enforced",
++                ),
++            ),
++            capabilities=(
++                _capability(
++                    "voice_cloning",
++                    True,
++                    "supported",
++                    mode="reference_audio",
++                    requires=("reference_audio", "voice_state"),
++                    requires_reference_transcript=False,
++                    reason="Reference audio is prepared into a reusable SoproVoiceState.",
++                    constraints=(
++                        "Native Python inference requires profile wasm-uint8 and CPUExecutionProvider.",
++                    ),
++                ),
++            ),
++        ),
++        "supertonic": EngineContract(
++            engine="supertonic",
++            inputs=(
++                _TOKEN_IDS,
++                _input("text_mask", "tensor", "Required model-ready text attention mask."),
++                _input("style_ttl", "tensor", "Required model-ready TTL style tensor."),
++                _input("style_dp", "tensor", "Required model-ready DP style tensor."),
++            ),
++            parameters=(
++                _control(
++                    "steps",
++                    "integer",
++                    "Denoising steps.",
++                    default=5,
++                    minimum=1,
++                    maximum=100,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "speed",
++                    "number",
++                    "Output speed multiplier.",
++                    default=1.05,
++                    minimum=0.7,
++                    maximum=2.0,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++                _control(
++                    "seed",
++                    "integer",
++                    "Optional random seed.",
++                    default=None,
++                    minimum=0,
++                    maximum=4294967295,
++                    minimum_inclusive=True,
++                    maximum_inclusive=True,
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "not_declared",
++                    "tokens",
++                    "adapter_contract",
++                    "No general hard token limit is declared.",
++                    constraint_status="not_enforced_by_adapter",
++                ),
++            ),
++            capabilities=(_NO_CLONING,),
++        ),
++    }
++)
++
++
++def get_engine_contract(engine: str) -> EngineContract:
++    """Return a registered static contract or an explicit unavailable contract.
++
++    This function intentionally accepts third-party adapter names rather than
++    raising, allowing discovery clients to explain that contract data is absent.
++    """
++    key = engine.casefold()
++    contract = ENGINE_CONTRACTS.get(key)
++    if contract is not None:
++        return contract
++    return EngineContract(
++        engine=key,
++        contract_status="unavailable",
++        contract_reason="No engine-options contract is registered for this adapter.",
++        notes=("Third-party adapters may provide their own descriptor registry.",),
++    )
++
++
++def contract_coverage(registered: tuple[str, ...] | None = None) -> dict[str, Any]:
++    """Report built-in registry coverage without importing runtime/model code."""
++    if registered is None:
++        from .systems import registered_systems
++
++        registered = registered_systems()
++    registered_names = tuple(sorted({name.casefold() for name in registered}))
++    missing = [name for name in registered_names if name not in ENGINE_CONTRACTS]
++    extra = [name for name in ENGINE_CONTRACTS if name not in registered_names]
++    return {"registered": list(registered_names), "missing": missing, "extra": sorted(extra)}
++
++
++def _jsonable(value: Any) -> Any:
++    if isinstance(value, tuple):
++        return [_jsonable(item) for item in value]
++    if isinstance(value, list):
++        return [_jsonable(item) for item in value]
++    if isinstance(value, dict):
++        return {key: _jsonable(item) for key, item in value.items()}
++    return value
++
++
++__all__ = [
++    "CapabilityDescriptor",
++    "ENGINE_CONTRACTS",
++    "EngineContract",
++    "LimitDescriptor",
++    "OptionDescriptor",
++    "contract_coverage",
++    "get_engine_contract",
++    "EngineOptionsError",
++    "list_engine_targets",
++    "resolve_engine_options",
++]
++
++
++class EngineOptionsError(ValueError):
++    """Actionable target, selector, or engine-options resolution error."""
++
++
++def _mapping(value: Any) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _as_list(value: Any) -> list[Any]:
++    if isinstance(value, (list, tuple)):
++        return list(value)
++    return []
++
++
++def _catalog_metadata(item: Any) -> Mapping[str, Any]:
++    return _mapping(getattr(item, "metadata", None))
++
++
++def _runtime_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
++    return _mapping(metadata.get("runtime"))
++
++
++def _metadata_choices(metadata: Mapping[str, Any], key: str) -> tuple[str, ...]:
++    raw = metadata.get(key)
++    if isinstance(raw, Mapping):
++        return tuple(sorted(str(choice) for choice in raw))
++    return tuple(sorted(str(choice) for choice in raw)) if isinstance(raw, (list, tuple)) else ()
++
++
++def _item_choices(item: Any, key: str) -> tuple[str, ...]:
++    metadata = _catalog_metadata(item)
++    raw = getattr(item, key, None) if key == "distribution_choices" else metadata.get(key)
++    if isinstance(raw, Mapping):
++        return tuple(sorted(str(choice) for choice in raw))
++    return tuple(sorted(str(choice) for choice in raw)) if isinstance(raw, (list, tuple)) else ()
++
++
++def _find_item(items: list[Any], target: str) -> Any | None:
++    matches = [item for item in items if item.id == target or target in item.aliases]
++    if len(matches) > 1:
++        raise EngineOptionsError(
++            f"Target alias {target!r} is ambiguous: {', '.join(sorted(i.id for i in matches))}"
++        )
++    return matches[0] if matches else None
++
++
++def _catalog_items(manager: Any, engine: str, refresh: bool) -> tuple[list[Any] | None, str | None]:
++    from .errors import CatalogError, OfflineError
++
++    try:
++        return manager.catalog.list(engine, refresh=refresh), None
++    except (OfflineError, CatalogError, OSError) as exc:
++        return None, str(exc)
++
++
++def _read_installed_json(installation: Any) -> tuple[dict[str, Mapping[str, Any]], list[str]]:
++    """Read only small JSON manifest/config artifacts; never touch model files."""
++    import json
++
++    found: dict[str, Mapping[str, Any]] = {}
++    errors: list[str] = []
++    allowed_roles = {"manifest", "config", "bundle_metadata", "metadata"}
++    for artifact in getattr(installation, "artifacts", ()):
++        role = getattr(artifact, "role", None)
++        path = getattr(artifact, "path", None)
++        if (
++            role not in allowed_roles
++            or path is None
++            or getattr(path, "suffix", "").casefold() != ".json"
++        ):
++            continue
++        try:
++            if path.stat().st_size > 2_000_000:
++                errors.append(f"{path.name}: JSON metadata exceeds the 2 MB inspection limit")
++                continue
++            parsed = json.loads(path.read_text(encoding="utf-8"))
++        except (OSError, UnicodeError, ValueError) as exc:
++            errors.append(f"{getattr(path, 'name', role)}: {exc}")
++            continue
++        if isinstance(parsed, Mapping):
++            found[str(role)] = parsed
++    return found, errors
++
++
++def _installed_for(manager: Any, item: Any | None, engine: str, target: str) -> Any | None:
++    try:
++        installations = manager.installed(engine)
++    except (OnnxVoiceError, OSError, ValueError):
++        return None
++    wanted_id = getattr(item, "id", target)
++    wanted_metadata = _catalog_metadata(item)
++    wanted_quality = wanted_metadata.get("selected_quality") or wanted_metadata.get("quality")
++    wanted_distribution = wanted_metadata.get("selected_distribution") or wanted_metadata.get(
++        "distribution_id"
++    )
++    candidates = [installation for installation in installations if installation.id == wanted_id]
++    for installation in candidates:
++        metadata = _mapping(getattr(installation, "metadata", None))
++        installed_quality = metadata.get("selected_quality") or metadata.get("quality")
++        installed_distribution = metadata.get("selected_distribution") or metadata.get(
++            "distribution_id"
++        )
++        if wanted_quality is not None and installed_quality != wanted_quality:
++            continue
++        if wanted_distribution is not None and installed_distribution != wanted_distribution:
++            continue
++        return installation
++    return None
++
++
++def _manifest_roots(manifests: Mapping[str, Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
++    roots: list[Mapping[str, Any]] = []
++    for role in ("manifest", "config", "bundle_metadata", "metadata"):
++        raw = manifests.get(role)
++        if not isinstance(raw, Mapping):
++            continue
++        nested = raw.get("manifest")
++        if isinstance(nested, Mapping):
++            roots.append(nested)
++        roots.append(raw)
++    return tuple(roots)
++
++
++def _lookup(roots: tuple[Mapping[str, Any], ...], *paths: tuple[str, ...]) -> Any:
++    for root in roots:
++        for path in paths:
++            value: Any = root
++            for key in path:
++                if not isinstance(value, Mapping) or key not in value:
++                    value = None
++                    break
++                value = value[key]
++            if value is not None:
++                return value
++    return None
++
++
++def _install_value(
++    result: dict[str, Any],
++    name: str,
++    value: Any,
++    *,
++    source: str,
++    status: str = "known",
++    unit: str | None = None,
++    description: str | None = None,
++    constraint_status: str = "model_declared",
++) -> None:
++    for limit in result["limits"]:
++        if limit["name"] == name:
++            limit.update(
++                value=value,
++                status=status,
++                source=source,
++                constraint_status=constraint_status,
++            )
++            if unit is not None:
++                limit["unit"] = unit
++            if description is not None:
++                limit["description"] = description
++            return
++    result["limits"].append(
++        {
++            "name": name,
++            "value": value,
++            "status": status,
++            "unit": unit or "",
++            "source": source,
++            "description": description or "Resolved target-specific limit.",
++            "constraint_status": constraint_status,
++            "notes": [],
++        }
++    )
++
++
++def _set_option(result: dict[str, Any], name: str, **values: Any) -> None:
++    for option in (*result["inputs"], *result["parameters"]):
++        if option["name"] == name:
++            option.update(values)
++            return
++
++
++def _fact_source(metadata: Mapping[str, Any], key: str) -> str:
++    """Return the highest-priority declared metadata source for one fact."""
++    catalog = _mapping(metadata.get("_catalog_metadata"))
++    installed = _mapping(metadata.get("_installed_metadata"))
++    for root, source in ((catalog, "catalog_metadata"), (installed, "installed_manifest")):
++        runtime = _runtime_metadata(root)
++        if (key in root and root[key] is not None) or (key in runtime and runtime[key] is not None):
++            return source
++    return "installed_manifest" if metadata.get("_manifest_loaded") else "unknown"
++
++
++def _target_mapping(metadata: Mapping[str, Any], key: str) -> tuple[Mapping[str, Any] | None, str]:
++    """Find a target metadata mapping, preferring catalog facts over installs."""
++    catalog = _mapping(metadata.get("_catalog_metadata"))
++    installed = _mapping(metadata.get("_installed_metadata"))
++    for root, source in ((catalog, "catalog_metadata"), (installed, "installed_manifest")):
++        direct = root.get(key)
++        if isinstance(direct, Mapping) and direct:
++            return direct, source
++        nested = _runtime_metadata(root).get(key)
++        if isinstance(nested, Mapping) and nested:
++            return nested, source
++    return None, "unknown"
++
++
++def _target_value_source(metadata: Mapping[str, Any], section: str, field: str) -> str:
++    """Find the source of a field nested in target generation/model metadata."""
++    catalog = _mapping(metadata.get("_catalog_metadata"))
++    installed = _mapping(metadata.get("_installed_metadata"))
++    for root, source in ((catalog, "catalog_metadata"), (installed, "installed_manifest")):
++        for parent in (root, _runtime_metadata(root)):
++            values = parent.get(section)
++            if isinstance(values, Mapping) and field in values and values[field] is not None:
++                return source
++    return "installed_manifest" if metadata.get("_manifest_loaded") else "unknown"
++
++
++def _explicit_capability_source(metadata: Mapping[str, Any], name: str) -> str:
++    catalog = _mapping(metadata.get("_catalog_metadata"))
++    installed = _mapping(metadata.get("_installed_metadata"))
++    if _capability_override(catalog, name) is not None:
++        return "catalog_metadata"
++    if _capability_override(installed, name) is not None:
++        return "installed_manifest"
++    return "installed_manifest" if metadata.get("_manifest_loaded") else "unknown"
++
++
++def _capability_override(metadata: Mapping[str, Any], name: str) -> Mapping[str, Any] | bool | None:
++    runtime = _runtime_metadata(metadata)
++    for root in (metadata, runtime):
++        caps = root.get("capabilities")
++        if isinstance(caps, Mapping) and name in caps:
++            raw = caps[name]
++            if isinstance(raw, (Mapping, bool)):
++                return raw
++        raw = root.get(name)
++        if isinstance(raw, (Mapping, bool)):
++            return raw
++    raw = metadata.get(f"supports_{name}")
++    if isinstance(raw, bool):
++        return raw
++    return None
++
++
++def _capability_dict(contract: EngineContract) -> dict[str, dict[str, Any]]:
++    return {
++        item.name: item.to_dict() for item in sorted(contract.capabilities, key=lambda x: x.name)
++    }
++
++
++def _apply_explicit_capability(
++    result: dict[str, Any], metadata: Mapping[str, Any], name: str
++) -> bool:
++    explicit = _capability_override(metadata, name)
++    if explicit is None:
++        return False
++    if isinstance(explicit, bool):
++        existing = result["capabilities"].get(name, {"name": name})
++        existing.update(
++            supported=explicit,
++            status="supported" if explicit else "not_supported",
++            source=_explicit_capability_source(metadata, name),
++        )
++    else:
++        existing = dict(result["capabilities"].get(name, {"name": name}))
++        existing.update(explicit)
++        existing.setdefault("source", _explicit_capability_source(metadata, name))
++        if "supported" in explicit and "status" not in explicit:
++            existing["status"] = "supported" if explicit["supported"] else "not_supported"
++        result["capabilities"][name] = existing
++        return True
++    result["capabilities"][name] = existing
++    return True
++
++
++def _apply_target_rules(
++    result: dict[str, Any],
++    engine: str,
++    metadata: Mapping[str, Any],
++    manifests: Mapping[str, Mapping[str, Any]],
++    *,
++    manifest_errors: list[str],
++) -> None:
++    runtime = _runtime_metadata(metadata)
++    roots = _manifest_roots(manifests)
++    if manifests:
++        result["metadata_sources"].append("installed_manifest")
++    if manifest_errors:
++        result["metadata_warnings"] = sorted(manifest_errors)
++
++    for capability_name in tuple(result["capabilities"]):
++        _apply_explicit_capability(result, metadata, capability_name)
++
++    layout = runtime.get("layout")
++    if not isinstance(layout, str):
++        layout = _lookup(roots, ("layout",), ("runtime", "layout"))
++    if not isinstance(layout, str):
++        layout = None
++    model_type = runtime.get("model_type") or metadata.get("model_type")
++    if model_type not in {"base", "voice_design"}:
++        model_type = _lookup(roots, ("model_type",), ("config", "model_type"))
++
++    if engine == "kokoro":
++        cloning = layout == "cloning-onnx-v1"
++        if _capability_override(metadata, "voice_cloning") is None:
++            result["capabilities"]["voice_cloning"] = {
++                "name": "voice_cloning",
++                "supported": True if cloning else False if layout else None,
++                "status": "supported" if cloning else "not_supported" if layout else "unknown",
++                "mode": "reference_audio" if cloning else None,
++                "requires": ["reference_audio", "reference_transcript_token_ids", "reference"]
++                if cloning
++                else [],
++                "requires_reference_transcript": True if cloning else None,
++                "reason": (
++                    "Selected distribution uses cloning-onnx-v1."
++                    if cloning
++                    else "Selected layout does not use reference-audio conditioning."
++                    if layout
++                    else "Target runtime layout is unavailable."
++                ),
++                "constraints": [],
++                "source": _fact_source(metadata, "layout") if layout else "unknown",
++            }
++        if _capability_override(metadata, "reference_voice_enrollment") is None:
++            enrollers = runtime.get("voice_enrollers")
++            has_enroller = isinstance(enrollers, (list, tuple)) and bool(enrollers)
++            result["capabilities"]["reference_voice_enrollment"] = {
++                "name": "reference_voice_enrollment",
++                "supported": has_enroller if isinstance(enrollers, (list, tuple)) else None,
++                "status": "supported"
++                if has_enroller
++                else "not_supported"
++                if isinstance(enrollers, (list, tuple))
++                else "unknown",
++                "mode": "inno_enrollment" if has_enroller else None,
++                "requires": ["reference_audio"] if has_enroller else [],
++                "requires_reference_transcript": None,
++                "reason": "Optional Inno enrollment is distinct from the full cloning layout.",
++                "constraints": [],
++                "source": _fact_source(metadata, "voice_enrollers")
++                if isinstance(enrollers, (list, tuple))
++                else "unknown",
++            }
++        if cloning:
++            configured = runtime.get("max_tokens")
++            manifest_value = _lookup(roots, ("max_tokens",), ("runtime", "max_tokens"))
++            max_tokens = (
++                configured if type(configured) is int and configured > 0 else manifest_value
++            )
++            source = (
++                _fact_source(metadata, "max_tokens")
++                if type(configured) is int and configured > 0
++                else "installed_manifest"
++            )
++            if type(max_tokens) is not int or max_tokens <= 0:
++                max_tokens, source = 510, "adapter_contract"
++            _install_value(
++                result,
++                "max_input_tokens",
++                max_tokens,
++                source=source,
++                description="Cloning model-ready sequence limit, including two adapter-added boundary tokens.",
++                constraint_status="enforced",
++            )
++            _install_value(
++                result,
++                "max_content_tokens",
++                max(0, max_tokens - 2),
++                source=source,
++                description="Caller-provided content tokens after two adapter-added boundary tokens.",
++                constraint_status="enforced",
++            )
++            _set_option(result, "reference", required=True, status="required", supported=True)
++            _set_option(result, "style", required=False, status="not_supported", supported=False)
++            _set_option(
++                result,
++                "speed",
++                supported=False,
++                status="unsupported_except_value",
++                choices=[1.0],
++                availability="cloning-onnx-v1 only accepts speed=1.0",
++                constraint_status="enforced",
++            )
++            _set_option(result, "seed", availability="cloning-onnx-v1 layout")
++        elif layout in {"split", "split-onnx-v1", "multi"}:
++            configured = runtime.get("max_tokens")
++            manifest_value = _lookup(roots, ("max_tokens",), ("runtime", "max_tokens"))
++            max_tokens = (
++                configured if type(configured) is int and configured > 0 else manifest_value
++            )
++            source = (
++                _fact_source(metadata, "max_tokens")
++                if type(configured) is int and configured > 0
++                else "installed_manifest"
++            )
++            if type(max_tokens) is not int or max_tokens <= 0:
++                max_tokens, source = 510, "adapter_contract"
++            _install_value(
++                result,
++                "max_input_tokens",
++                max_tokens,
++                source=source,
++                description="Split layout compares caller token count directly with this limit.",
++                constraint_status="enforced",
++            )
++            _install_value(
++                result,
++                "max_content_tokens",
++                None,
++                source=source,
++                status="not_applicable",
++                description="Split layout does not add cloning boundary tokens.",
++                constraint_status="not_applicable",
++            )
++            _set_option(result, "reference", status="not_supported", supported=False)
++            _set_option(result, "style", required=True, status="required", supported=True)
++            _set_option(result, "seed", availability="split layout harmonic source")
++        else:
++            _install_value(
++                result,
++                "max_content_tokens",
++                None,
++                source="onnx_graph",
++                status="unknown",
++                description="Single-model content limit depends on a fixed graph sequence dimension, which discovery does not inspect.",
++                constraint_status="unknown",
++            )
++            _set_option(
++                result,
++                "speed",
++                status="conditional",
++                supported=None,
++                availability="Depends on whether the selected graph exposes a speed input.",
++            )
++            if layout:
++                _set_option(result, "style", required=True, status="required", supported=True)
++                _set_option(result, "reference", status="not_supported", supported=False)
++                _set_option(
++                    result,
++                    "seed",
++                    supported=False,
++                    status="no_effect",
++                    availability="ordinary single-model runtime does not apply the seed",
++                )
++        if not layout:
++            _set_option(
++                result,
++                "seed",
++                supported=None,
++                status="conditional",
++                availability="selected target layout is unknown",
++            )
++        result["layout"] = layout
++
++    elif engine == "qwen3":
++        cloning = model_type == "base"
++        design = model_type == "voice_design"
++        _set_option(
++            result,
++            "voice_state",
++            required=cloning,
++            status="required" if cloning else "not_supported" if design else "conditional",
++            supported=cloning if model_type else None,
++        )
++        _set_option(
++            result,
++            "instruction_token_ids",
++            required=design,
++            status="required" if design else "not_supported" if cloning else "conditional",
++            supported=design if model_type else None,
++        )
++        if _capability_override(metadata, "voice_cloning") is None:
++            result["capabilities"]["voice_cloning"] = {
++                "name": "voice_cloning",
++                "supported": cloning if model_type else None,
++                "status": "supported" if cloning else "not_supported" if design else "unknown",
++                "mode": "reference_audio" if cloning else None,
++                "requires": ["reference_audio", "reference_transcript_token_ids", "voice_state"]
++                if cloning
++                else [],
++                "requires_reference_transcript": True if cloning else None,
++                "reason": "Qwen3 Base requires reference audio and transcript tokens."
++                if cloning
++                else "VoiceDesign uses text instructions, not reference-audio cloning."
++                if design
++                else "Target model_type is unavailable.",
++                "constraints": [],
++                "source": _fact_source(metadata, "model_type") if model_type else "unknown",
++            }
++        if _capability_override(metadata, "voice_design") is None:
++            result["capabilities"]["voice_design"] = {
++                "name": "voice_design",
++                "supported": design if model_type else None,
++                "status": "supported" if design else "not_supported" if cloning else "unknown",
++                "mode": "instruction_tokens" if design else None,
++                "requires": ["instruction_token_ids"] if design else [],
++                "requires_reference_transcript": None,
++                "reason": "VoiceDesign target accepts instruction tokens."
++                if design
++                else "Only Qwen3 VoiceDesign targets support text-directed voice design."
++                if cloning
++                else "Target model_type is unavailable.",
++                "constraints": [],
++                "source": _fact_source(metadata, "model_type") if model_type else "unknown",
++            }
++        catalog_facts = _mapping(metadata.get("_catalog_metadata"))
++        context_capacity = _lookup(
++            (catalog_facts,),
++            ("max_position_embeddings",),
++            ("text_config", "max_position_embeddings"),
++            ("model", "max_position_embeddings"),
++        )
++        context_source = "catalog_metadata"
++        if type(context_capacity) is not int or context_capacity <= 0:
++            context_capacity = _lookup(
++                roots,
++                ("max_position_embeddings",),
++                ("text_config", "max_position_embeddings"),
++                ("model", "max_position_embeddings"),
++            )
++            context_source = "installed_manifest"
++        if type(context_capacity) is int and context_capacity > 0:
++            _install_value(
++                result,
++                "model_context_capacity",
++                context_capacity,
++                source=context_source,
++                unit="model tokens",
++                description="Model context capacity includes chat-template and wrapper tokens; it is not a raw text-token limit.",
++                constraint_status="model_declared",
++            )
++        result["layout"] = layout
++
++    elif engine == "pocket":
++        explicit = _capability_override(metadata, "voice_cloning")
++        declared = metadata.get("supports_voice_cloning")
++        if not isinstance(declared, bool):
++            manifest_declared = _lookup(
++                roots, ("supports_voice_cloning",), ("capabilities", "voice_cloning")
++            )
++            if isinstance(manifest_declared, bool):
++                declared = manifest_declared
++        if explicit is None:
++            supported = declared if isinstance(declared, bool) else None
++            result["capabilities"]["voice_cloning"] = {
++                "name": "voice_cloning",
++                "supported": supported,
++                "status": "supported"
++                if supported is True
++                else "not_supported"
++                if supported is False
++                else "unknown",
++                "mode": "reference_audio" if supported is True else None,
++                "requires": ["reference_audio", "voice_state"] if supported is True else [],
++                "requires_reference_transcript": False if supported is True else None,
++                "reason": "Target metadata declares reference voice-state conditioning."
++                if supported is True
++                else "Target metadata explicitly disables reference-audio cloning."
++                if supported is False
++                else "Target metadata does not declare supports_voice_cloning.",
++                "constraints": [],
++                "source": _explicit_capability_source(metadata, "voice_cloning")
++                if isinstance(declared, bool)
++                else "unknown",
++            }
++        frame_limit = metadata.get("max_frames")
++        if type(frame_limit) is not int or frame_limit <= 0:
++            frame_limit = _lookup(roots, ("max_frames",), ("generation", "max_frames"))
++        if type(frame_limit) is int and frame_limit > 0:
++            _install_value(
++                result,
++                "max_frames",
++                frame_limit,
++                source=_fact_source(metadata, "max_frames")
++                if _fact_source(metadata, "max_frames") != "unknown"
++                else "installed_manifest",
++                unit="frames",
++                description="Maximum generated output frames; not an input-token limit.",
++                constraint_status="enforced",
++            )
++        chunk_hint = metadata.get("max_token_per_chunk")
++        if chunk_hint is not None:
++            result["selection_metadata"].append(
++                {
++                    "name": "max_token_per_chunk",
++                    "value": chunk_hint,
++                    "status": "guidance",
++                    "source": _fact_source(metadata, "max_token_per_chunk")
++                    if _fact_source(metadata, "max_token_per_chunk") != "unknown"
++                    else "installed_manifest",
++                    "description": "Producer chunking guidance only; not an adapter-enforced hard limit.",
++                }
++            )
++        result["layout"] = layout
++
++    elif engine == "sopro":
++        generation_mapping, generation_source = _target_mapping(metadata, "generation")
++        generation = dict(_mapping(_lookup(roots, ("generation",))))
++        if generation_mapping:
++            generation.update(generation_mapping)
++        elif not generation:
++            generation_source = "adapter_contract"
++        elif generation_source == "unknown":
++            generation_source = "installed_manifest"
++        model_mapping, model_source = _target_mapping(metadata, "model")
++        model = dict(_mapping(_lookup(roots, ("model",))))
++        if model_mapping:
++            model.update(model_mapping)
++        elif not model:
++            model_source = "adapter_contract"
++        elif model_source == "unknown":
++            model_source = "installed_manifest"
++        for option_name in (
++            "temperature",
++            "top_p",
++            "top_k",
++            "max_seconds",
++            "min_seconds",
++            "seed",
++            "steps",
++        ):
++            value = generation.get(option_name)
++            option_source = _target_value_source(metadata, "generation", option_name)
++            if option_source == "unknown":
++                option_source = generation_source
++            if value is None and option_name == "steps":
++                value = _lookup(roots, ("steps",))
++                option_source = "installed_manifest" if value is not None else option_source
++            if value is not None:
++                _set_option(
++                    result, option_name, default=value, default_status="known", source=option_source
++                )
++        for name, value, unit, description in (
++            (
++                "max_text_len",
++                model.get("max_text_len"),
++                "tokens",
++                "Hard input token limit declared by model.max_text_len.",
++            ),
++            (
++                "max_seconds",
++                generation.get("max_seconds"),
++                "seconds",
++                "Output-duration limit declared by generation.max_seconds.",
++            ),
++            (
++                "max_prompt_tokens",
++                generation.get("prompt_tokens"),
++                "tokens",
++                "Reference prompt-token limit declared by generation.prompt_tokens.",
++            ),
++        ):
++            if value is not None:
++                section = "model" if name == "max_text_len" else "generation"
++                field_name = "prompt_tokens" if name == "max_prompt_tokens" else name
++                limit_source = _target_value_source(metadata, section, field_name)
++                if limit_source == "unknown":
++                    limit_source = model_source if section == "model" else generation_source
++                _install_value(
++                    result,
++                    name,
++                    value,
++                    source=limit_source,
++                    unit=unit,
++                    description=description,
++                    constraint_status="model_declared",
++                )
++        reference_seconds = generation.get("ref_seconds", 10.0)
++        if (
++            isinstance(reference_seconds, (int, float))
++            and not isinstance(reference_seconds, bool)
++            and math.isfinite(float(reference_seconds))
++            and reference_seconds > 0
++        ):
++            reference_source = _target_value_source(metadata, "generation", "ref_seconds")
++            if reference_source == "unknown":
++                reference_source = (
++                    generation_source if "ref_seconds" in generation else "adapter_contract"
++                )
++            _install_value(
++                result,
++                "reference_seconds",
++                float(reference_seconds),
++                source=reference_source,
++                unit="seconds",
++                description="Effective reference conditioning duration; callers may override it with another positive finite duration.",
++                constraint_status="enforced",
++            )
++        result["layout"] = layout
++
++    elif engine == "chatterbox":
++        generation_mapping, generation_source = _target_mapping(metadata, "generation")
++        generation = dict(_mapping(_lookup(roots, ("generation",), ("runtime", "generation"))))
++        if generation_mapping:
++            generation.update(generation_mapping)
++        elif generation:
++            generation_source = "installed_manifest"
++        else:
++            generation_source = "unknown"
++        for option_name in ("max_new_tokens", "repetition_penalty"):
++            value = generation.get(option_name)
++            source = _target_value_source(metadata, "generation", option_name)
++            if source == "unknown":
++                source = generation_source
++            if value is None:
++                value = runtime.get(f"default_{option_name}")
++                source = _fact_source(metadata, f"default_{option_name}")
++            if value is not None:
++                _set_option(
++                    result, option_name, default=value, default_status="known", source=source
++                )
++        result["layout"] = layout
++
++    elif engine == "kitten2":
++        voice_value = metadata.get("voices") or _lookup(
++            roots, ("voices",), ("voice_names",), ("available_voices",)
++        )
++        if isinstance(voice_value, (Mapping, list, tuple)):
++            voices = sorted(str(name) for name in voice_value)
++        else:
++            voices = []
++        preset_value = (
++            metadata.get("decode_presets")
++            or metadata.get("presets")
++            or _lookup(roots, ("decode_presets",), ("presets",), ("generation", "presets"))
++        )
++        if isinstance(preset_value, (Mapping, list, tuple)):
++            presets = sorted(str(name) for name in preset_value)
++        else:
++            presets = []
++        default_voice = metadata.get("default_voice") or _lookup(
++            roots, ("default_voice",), ("voices", "default")
++        )
++        default_preset = metadata.get("default_preset") or _lookup(
++            roots, ("default_preset",), ("presets", "default")
++        )
++        selection_source = _fact_source(metadata, "voices")
++        if selection_source == "unknown":
++            selection_source = _fact_source(metadata, "default_voice")
++        if selection_source == "unknown" and roots:
++            selection_source = "installed_manifest"
++        result["selection_metadata"].extend(
++            [
++                {
++                    "name": "voices",
++                    "value": voices,
++                    "status": "known" if voices else "unknown",
++                    "source": selection_source if voices else "unknown",
++                },
++                {
++                    "name": "default_voice",
++                    "value": default_voice,
++                    "status": "known" if default_voice else "unknown",
++                    "source": selection_source if default_voice else "unknown",
++                },
++                {
++                    "name": "presets",
++                    "value": presets,
++                    "status": "known" if presets else "unknown",
++                    "source": selection_source if presets else "unknown",
++                },
++                {
++                    "name": "default_preset",
++                    "value": default_preset,
++                    "status": "known" if default_preset else "unknown",
++                    "source": selection_source if default_preset else "unknown",
++                },
++            ]
++        )
++        if default_voice is not None:
++            _set_option(
++                result,
++                "voice",
++                default=default_voice,
++                default_status="known",
++                source=selection_source,
++            )
++        if default_preset is not None:
++            _set_option(
++                result,
++                "preset",
++                default=default_preset,
++                default_status="known",
++                source=selection_source,
++            )
++        use_reference_prompt = metadata.get("use_reference_prompt")
++        if use_reference_prompt is None:
++            use_reference_prompt = _lookup(
++                roots, ("use_reference_prompt",), ("generation", "use_reference_prompt")
++            )
++        if isinstance(use_reference_prompt, bool):
++            _set_option(
++                result,
++                "use_reference_prompt",
++                default=use_reference_prompt,
++                default_status="known",
++                source="catalog_metadata"
++                if metadata.get("use_reference_prompt") is not None
++                else "installed_manifest",
++            )
++        result["layout"] = layout
++    else:
++        result["layout"] = layout
++
++    result["metadata_sources"] = sorted(set(result["metadata_sources"]))
++    result["limits"].sort(key=lambda value: value["name"])
++    result["inputs"].sort(key=lambda value: (value["group"], value["name"]))
++    result["parameters"].sort(key=lambda value: value["name"])
++    result["selection_metadata"].sort(key=lambda value: value["name"])
++
++
++def _variant_response(
++    manager: Any,
++    contract: EngineContract,
++    item: Any | None,
++    engine: str,
++    target: str,
++    *,
++    quality: str | None,
++    distribution: str | None,
++) -> dict[str, Any]:
++    catalog_metadata = dict(_catalog_metadata(item)) if item is not None else {}
++    installation = _installed_for(manager, item, engine, target)
++    manifests: dict[str, Mapping[str, Any]] = {}
++    manifest_errors: list[str] = []
++    installed_metadata: Mapping[str, Any] = {}
++    if installation is not None:
++        installed_metadata = _mapping(getattr(installation, "metadata", None))
++        manifests, manifest_errors = _read_installed_json(installation)
++    metadata = dict(installed_metadata)
++    if item is not None:
++        if getattr(item, "default_voice", None) is not None:
++            catalog_metadata.setdefault("default_voice", item.default_voice)
++        if getattr(item, "voices", None):
++            catalog_metadata.setdefault("voices", list(item.voices))
++    metadata.update(catalog_metadata)
++    merged_runtime = dict(_runtime_metadata(installed_metadata))
++    merged_runtime.update(_runtime_metadata(catalog_metadata))
++    if merged_runtime:
++        metadata["runtime"] = merged_runtime
++    runtime = _runtime_metadata(metadata)
++    metadata["_catalog_metadata"] = catalog_metadata
++    metadata["_installed_metadata"] = dict(installed_metadata)
++    metadata["_manifest_loaded"] = bool(manifests)
++    manifest_roots = _manifest_roots(manifests)
++    resolved_layout = runtime.get("layout")
++    if not isinstance(resolved_layout, str):
++        resolved_layout = _lookup(manifest_roots, ("layout",), ("runtime", "layout"))
++    manifest_sample_rate = _lookup(
++        manifest_roots, ("sample_rate",), ("audio", "sample_rate"), ("model", "sample_rate")
++    )
++    sample_rate = (
++        getattr(item, "sample_rate", None)
++        or getattr(installation, "sample_rate", None)
++        or runtime.get("sample_rate")
++        or manifest_sample_rate
++    )
++    selected_quality = quality or metadata.get("selected_quality") or metadata.get("quality")
++    selected_distribution = (
++        distribution or metadata.get("selected_distribution") or metadata.get("distribution_id")
++    )
++    target_id = getattr(item, "id", None) or getattr(installation, "id", None) or target
++    artifact_source = (
++        getattr(item, "artifacts", ())
++        if item is not None
++        else getattr(installation, "artifacts", ())
++    ) or ()
++    quality_available = bool(
++        metadata.get("profiles") or metadata.get("quality") or metadata.get("selected_quality")
++    ) or any(getattr(artifact, "quality", None) for artifact in artifact_source)
++    canonical_ref = getattr(item, "ref", None) or f"{engine}:{target_id}"
++    caps = _capability_dict(contract)
++    inputs = [entry.to_dict() for entry in contract.inputs]
++    params = [entry.to_dict() for entry in contract.parameters]
++    result: dict[str, Any] = {
++        "schema_version": 1,
++        "engine": engine,
++        "target": target_id,
++        "ref": canonical_ref,
++        "quality": selected_quality,
++        "distribution": selected_distribution,
++        "layout": resolved_layout,
++        "sample_rate": sample_rate,
++        "capabilities": caps,
++        "inputs": inputs,
++        "parameters": params,
++        "limits": [limit.to_dict() for limit in contract.limits],
++        "selection_metadata": [],
++        "metadata_sources": ["adapter_contract"]
++        + (
++            ["catalog_metadata"]
++            if item is not None
++            else ["installed_manifest"]
++            if installation is not None
++            else []
++        ),
++        "field_status": {
++            "target": "known",
++            "ref": "known",
++            "quality": "known"
++            if selected_quality is not None
++            else "not_selected"
++            if quality_available
++            else "not_applicable",
++            "distribution": "known"
++            if selected_distribution is not None
++            else "not_selected"
++            if metadata.get("distribution_choices")
++            else "not_applicable",
++            "layout": "known" if resolved_layout is not None else "unknown",
++            "sample_rate": "known" if sample_rate is not None else "unknown",
++        },
++        "contract_status": contract.contract_status,
++        "contract_reason": contract.contract_reason,
++    }
++    voices = (
++        getattr(item, "voices", None)
++        or getattr(installation, "voices", None)
++        or metadata.get("voices")
++        or ()
++    )
++    default_voice = (
++        getattr(item, "default_voice", None)
++        or getattr(installation, "default_voice", None)
++        or metadata.get("default_voice")
++        or ("default" if engine == "inflect" else None)
++    )
++    choices = (
++        _item_choices(item, "distribution_choices")
++        if item is not None
++        else _metadata_choices(metadata, "distribution_choices")
++    )
++    profiles = (
++        _item_choices(item, "profiles")
++        if item is not None
++        else _metadata_choices(metadata, "profiles")
++    )
++    qualities = tuple(
++        sorted(
++            set(profiles)
++            | {
++                str(artifact.quality)
++                for artifact in artifact_source
++                if getattr(artifact, "quality", None)
++            }
++        )
++    )
++    language_values = (
++        metadata.get("languages") or metadata.get("language_codes") or metadata.get("language")
++    )
++    if isinstance(language_values, str):
++        languages = [language_values]
++    elif isinstance(language_values, (list, tuple)):
++        languages = sorted(str(value) for value in language_values)
++    else:
++        languages = []
++    qualities_source = _fact_source(metadata, "profiles")
++    if qualities and qualities_source == "unknown":
++        qualities_source = "catalog_metadata" if item is not None else "installed_manifest"
++    languages_source = _fact_source(metadata, "languages")
++    if languages_source == "unknown":
++        languages_source = _fact_source(metadata, "language_codes")
++    if languages_source == "unknown" and languages:
++        languages_source = (
++            "catalog_metadata"
++            if item is not None
++            else "installed_manifest"
++            if installation is not None
++            else "unknown"
++        )
++    distributions_source = _fact_source(metadata, "distribution_choices")
++    if choices and distributions_source == "unknown":
++        distributions_source = "catalog_metadata" if item is not None else "installed_manifest"
++    voices_source = _fact_source(metadata, "voices")
++    if voices and voices_source == "unknown":
++        voices_source = "catalog_metadata" if item is not None else "installed_manifest"
++    default_voice_source = _fact_source(metadata, "default_voice")
++    if engine == "inflect" and default_voice:
++        default_voice_source = "adapter_contract"
++    elif default_voice and default_voice_source == "unknown":
++        default_voice_source = "catalog_metadata" if item is not None else "installed_manifest"
++    result["selection_metadata"] = [
++        {
++            "name": "qualities",
++            "value": list(qualities),
++            "status": "known" if qualities else "unknown",
++            "source": qualities_source if qualities else "unknown",
++        },
++        {
++            "name": "languages",
++            "value": languages,
++            "status": "known" if languages else "unknown",
++            "source": languages_source if languages else "unknown",
++        },
++        {
++            "name": "distributions",
++            "value": list(choices),
++            "status": "known" if choices else "not_applicable",
++            "source": distributions_source if choices else "adapter_contract",
++        },
++        {
++            "name": "voices",
++            "value": sorted(str(v) for v in voices),
++            "status": "known" if voices else "unknown",
++            "source": voices_source if voices else "unknown",
++        },
++        {
++            "name": "default_voice",
++            "value": default_voice,
++            "status": "known" if default_voice else "unknown",
++            "source": default_voice_source if default_voice else "unknown",
++        },
++    ]
++    _apply_target_rules(result, engine, metadata, manifests, manifest_errors=manifest_errors)
++    return result
++
++
++def _generic_response(
++    contract: EngineContract,
++    engine: str,
++    items: list[Any] | None,
++    unavailable_reason: str | None,
++) -> dict[str, Any]:
++    targets = []
++    if items is not None:
++        for item in sorted(items, key=lambda candidate: candidate.id):
++            metadata = _catalog_metadata(item)
++            runtime = _runtime_metadata(metadata)
++            language_value = (
++                metadata.get("languages")
++                or metadata.get("language_codes")
++                or metadata.get("language")
++            )
++            if isinstance(language_value, str):
++                languages = [language_value]
++            elif isinstance(language_value, (list, tuple)):
++                languages = sorted(str(value) for value in language_value)
++            else:
++                languages = []
++            targets.append(
++                {
++                    "target": item.id,
++                    "ref": item.ref,
++                    "aliases": sorted(str(alias) for alias in getattr(item, "aliases", ())),
++                    "quality": metadata.get("selected_quality") or metadata.get("quality"),
++                    "qualities": list(_item_choices(item, "profiles")),
++                    "distributions": list(_item_choices(item, "distribution_choices")),
++                    "layout": runtime.get("layout"),
++                    "sample_rate": getattr(item, "sample_rate", None)
++                    or metadata.get("sample_rate"),
++                    "languages": languages,
++                    "voices": sorted(
++                        str(voice)
++                        for voice in (getattr(item, "voices", None) or metadata.get("voices") or ())
++                    ),
++                    "default_voice": getattr(item, "default_voice", None)
++                    or metadata.get("default_voice"),
++                    "field_status": {
++                        "target": "known",
++                        "ref": "known",
++                        "quality": "known"
++                        if metadata.get("selected_quality") or metadata.get("quality")
++                        else "not_selected"
++                        if _item_choices(item, "profiles")
++                        else "not_applicable",
++                        "distributions": "known"
++                        if _item_choices(item, "distribution_choices")
++                        else "not_applicable",
++                        "layout": "known" if runtime.get("layout") is not None else "unknown",
++                        "sample_rate": "known"
++                        if getattr(item, "sample_rate", None) is not None
++                        or metadata.get("sample_rate") is not None
++                        else "unknown",
++                        "languages": "known" if languages else "unknown",
++                        "default_voice": "known"
++                        if getattr(item, "default_voice", None) or metadata.get("default_voice")
++                        else "unknown",
++                    },
++                }
++            )
++    return {
++        "schema_version": 1,
++        "engine": engine,
++        "target": None,
++        "ref": None,
++        "quality": None,
++        "distribution": None,
++        "layout": None,
++        "sample_rate": None,
++        "capabilities": _capability_dict(contract),
++        "inputs": [entry.to_dict() for entry in contract.inputs],
++        "parameters": [entry.to_dict() for entry in contract.parameters],
++        "limits": [entry.to_dict() for entry in contract.limits],
++        "selection_metadata": list(contract.to_dict()["selection_metadata"]),
++        "known_targets": targets,
++        "field_status": {
++            "target": "not_selected" if items is not None else "unknown",
++            "ref": "not_selected" if items is not None else "unknown",
++            "quality": "not_selected"
++            if any(target["qualities"] for target in targets)
++            else "not_applicable"
++            if items is not None
++            else "unknown",
++            "distribution": "not_selected"
++            if any(target["distributions"] for target in targets)
++            else "not_applicable"
++            if items is not None
++            else "unknown",
++            "layout": "not_selected"
++            if targets
++            else "not_applicable"
++            if items is not None
++            else "unknown",
++            "sample_rate": "unknown",
++        },
++        "target_discovery": {
++            "status": "available" if items is not None else "unavailable",
++            "reason": unavailable_reason,
++        },
++        "metadata_sources": ["adapter_contract", "catalog_metadata"]
++        if items is not None
++        else ["adapter_contract"],
++        "contract_status": contract.contract_status,
++        "contract_reason": contract.contract_reason,
++    }
++
++
++def resolve_engine_options(
++    manager: Any,
++    engine: str,
++    *,
++    target: str | None = None,
++    quality: str | None = None,
++    distribution: str | None = None,
++    refresh: bool = False,
++) -> dict[str, Any]:
++    """Resolve an engine contract and optional catalog target without loading models.
++
++    ``manager`` is an :class:`OnnxVoice` instance. Catalog reads may use its
++    configured network/cache policy; installed JSON manifests are read only
++    from already-installed lightweight metadata artifacts.
++    """
++    normalized_engine = engine.casefold()
++    contract = get_engine_contract(normalized_engine)
++    if target is None:
++        if quality is not None or distribution is not None:
++            raise EngineOptionsError("--quality and --distribution require --target")
++        items, unavailable = _catalog_items(manager, normalized_engine, refresh)
++        return _generic_response(contract, normalized_engine, items, unavailable)
++
++    items, unavailable = _catalog_items(manager, normalized_engine, refresh)
++    item = _find_item(items, target) if items is not None else None
++    if (
++        item is None
++        and items is not None
++        and _installed_for(manager, None, normalized_engine, target) is None
++    ):
++        valid = ", ".join(sorted(candidate.id for candidate in items)) or "none"
++        raise EngineOptionsError(
++            f"Unknown target {target!r} for engine {normalized_engine}; valid targets: {valid}"
++        )
++    if item is None:
++        installation = _installed_for(manager, None, normalized_engine, target)
++        if installation is None:
++            reason = (
++                f"Catalog target discovery is unavailable ({unavailable})"
++                if unavailable
++                else "Target is not present in the catalog or installed assets."
++            )
++            raise EngineOptionsError(f"Cannot resolve {normalized_engine}:{target}: {reason}")
++        installation_metadata = _mapping(installation.metadata)
++        installed_distribution = installation_metadata.get(
++            "selected_distribution"
++        ) or installation_metadata.get("distribution_id")
++        installed_quality = installation_metadata.get(
++            "selected_quality"
++        ) or installation_metadata.get("quality")
++        if distribution is not None and installed_distribution != distribution:
++            raise EngineOptionsError(
++                f"Installed target {normalized_engine}:{target} does not match distribution {distribution!r}"
++            )
++        if quality is not None and installed_quality != quality:
++            raise EngineOptionsError(
++                f"Installed target {normalized_engine}:{target} does not match quality {quality!r}"
++            )
++        return _variant_response(
++            manager,
++            contract,
++            None,
++            normalized_engine,
++            target,
++            quality=quality,
++            distribution=distribution,
++        )
++
++    choices = _item_choices(item, "distribution_choices")
++    if not choices:
++        declared = _catalog_metadata(item).get("distribution_id")
++        if isinstance(declared, str):
++            choices = (declared,)
++    if distribution is not None:
++        if choices and distribution not in choices:
++            raise EngineOptionsError(
++                f"Unknown distribution {distribution!r} for {item.ref}; valid choices: {', '.join(choices)}"
++            )
++        if not choices:
++            raise EngineOptionsError(f"Target {item.ref} does not declare distribution choices")
++        selected_distributions: tuple[str | None, ...] = (distribution,)
++    elif normalized_engine == "kokoro" and len(choices) > 1:
++        selected_distributions = tuple(choices)
++    else:
++        selected = _catalog_metadata(item).get("distribution_id")
++        selected_distributions = (selected if isinstance(selected, str) else None,)
++
++    responses: list[dict[str, Any]] = []
++    for selected_distribution in selected_distributions:
++        try:
++            selected_item = manager.catalog.resolve(
++                item.ref,
++                refresh=refresh,
++                quality=quality,
++                distribution=selected_distribution,
++            )
++        except (OnnxVoiceError, ValueError, OSError) as exc:
++            raise EngineOptionsError(str(exc)) from exc
++        responses.append(
++            _variant_response(
++                manager,
++                contract,
++                selected_item,
++                normalized_engine,
++                target,
++                quality=quality,
++                distribution=selected_distribution,
++            )
++        )
++    if len(responses) == 1:
++        return responses[0]
++    result = _generic_response(contract, normalized_engine, [item], None)
++    result.update(
++        target=item.id,
++        ref=item.ref,
++        quality=quality,
++        variants=responses,
++        distribution=None,
++        layout=None,
++        sample_rate=responses[0]["sample_rate"]
++        if len({response["sample_rate"] for response in responses}) == 1
++        else None,
++        field_status={
++            "target": "known",
++            "ref": "known",
++            "quality": "known"
++            if quality is not None
++            else "not_selected"
++            if _item_choices(item, "profiles")
++            else "not_applicable",
++            "distribution": "multiple_variants",
++            "layout": "multiple_variants",
++            "sample_rate": "known"
++            if responses[0]["sample_rate"] is not None
++            and len({response["sample_rate"] for response in responses}) == 1
++            else "unknown",
++        },
++        selection_metadata=result["selection_metadata"]
++        + [
++            {
++                "name": "distribution_variants",
++                "value": [response["distribution"] for response in responses],
++                "status": "known",
++                "source": "catalog_metadata",
++            }
++        ],
++        target_discovery={"status": "available", "reason": None},
++    )
++    return result
++
++
++def list_engine_targets(
++    manager: Any,
++    *,
++    engine: str | None = None,
++    capability: str | None = None,
++    refresh: bool = False,
++) -> dict[str, Any]:
++    """List target-level capability rows; unavailable catalogs remain explicit."""
++    from .systems import registered_systems
++
++    if capability not in {None, "voice-cloning"}:
++        raise EngineOptionsError(f"Unknown capability {capability!r}; valid choices: voice-cloning")
++    engines = (engine.casefold(),) if engine else registered_systems()
++    rows: list[dict[str, Any]] = []
++    unavailable_engines: list[dict[str, str | None]] = []
++    for name in engines:
++        contract = get_engine_contract(name)
++        items, unavailable = _catalog_items(manager, name, refresh)
++        if items is None:
++            generic = _generic_response(contract, name, None, unavailable)
++            unavailable_engines.append({"engine": name, "reason": unavailable})
++            clone = generic["capabilities"].get("voice_cloning", {})
++            if capability is None:
++                rows.append(
++                    {
++                        "engine": name,
++                        "target": None,
++                        "ref": None,
++                        "quality": None,
++                        "profile": None,
++                        "distribution": None,
++                        "layout": None,
++                        "voice_cloning": clone.get("status", "unknown"),
++                        "reason": unavailable,
++                        "target_discovery": "unavailable",
++                        "contract_status": contract.contract_status,
++                    }
++                )
++            continue
++        for item in sorted(items, key=lambda candidate: candidate.id):
++            distributions = _item_choices(item, "distribution_choices")
++            selected: tuple[str | None, ...]
++            if name == "kokoro" and len(distributions) > 1:
++                selected = distributions
++            else:
++                declared = _catalog_metadata(item).get("distribution_id")
++                selected = (declared,) if isinstance(declared, str) else (None,)
++            for dist in selected:
++                try:
++                    selected_item = manager.catalog.resolve(
++                        item.ref, refresh=refresh, distribution=dist
++                    )
++                except (OnnxVoiceError, ValueError, OSError):
++                    selected_item = item
++                variant = _variant_response(
++                    manager, contract, selected_item, name, item.id, quality=None, distribution=dist
++                )
++                clone = variant["capabilities"].get("voice_cloning", {})
++                if capability == "voice-cloning" and clone.get("supported") is not True:
++                    continue
++                rows.append(
++                    {
++                        "engine": name,
++                        "target": item.id,
++                        "ref": item.ref,
++                        "quality": variant.get("quality"),
++                        "profile": variant.get("quality"),
++                        "quality_choices": list(_item_choices(item, "profiles")),
++                        "distribution": variant.get("distribution"),
++                        "layout": variant.get("layout"),
++                        "sample_rate": variant.get("sample_rate"),
++                        "voice_cloning": clone.get("status", "unknown"),
++                        "cloning_mode": clone.get("mode"),
++                        "reason": clone.get("reason"),
++                        "contract_status": variant["contract_status"],
++                        "target_discovery": "available",
++                    }
++                )
++    rows.sort(
++        key=lambda row: (
++            row["engine"],
++            row["target"] or "",
++            row["distribution"] or "",
++            row["profile"] or "",
++        )
++    )
++    return {
++        "schema_version": 1,
++        "capability_filter": capability,
++        "target_discovery": "partial" if unavailable_engines else "available",
++        "engines": sorted(engines),
++        "catalog_unavailable": unavailable_engines,
++        "rows": rows,
++    }
+diff --git a/onnxvoice/systems/pocket.py b/onnxvoice/systems/pocket.py
+index 48694ad..9f4e108 100644
+--- a/onnxvoice/systems/pocket.py
++++ b/onnxvoice/systems/pocket.py
+@@ -11,6 +11,7 @@ import shutil
+ import tempfile
+ from collections.abc import Mapping, Sequence
+ from dataclasses import dataclass
++from numbers import Integral, Real
+ from pathlib import Path
+ from typing import Any, NoReturn
+
+@@ -68,6 +69,40 @@ PREDEFINED_VOICE_REVISION = "d18466fc6d3ad070afee1bde2f0db8992007c48f"
+ POCKET_MIN_FRAMES_BEFORE_EOS = 6
+
+
++def _validate_generation_controls(
++    temperature: Any,
++    lsd_steps: Any,
++    max_frames: Any,
++    frames_after_eos: Any,
++) -> tuple[float, int, int, int | None]:
++    if isinstance(temperature, bool) or not isinstance(temperature, Real):
++        raise RuntimeContractError("temperature must be a finite number")
++    temperature_value = float(temperature)
++    if not math.isfinite(temperature_value):
++        raise RuntimeContractError("temperature must be a finite number")
++    if temperature_value < 0:
++        raise RuntimeContractError("temperature must be non-negative")
++    if isinstance(lsd_steps, bool) or not isinstance(lsd_steps, Integral):
++        raise RuntimeContractError("lsd_steps must be an integer")
++    if lsd_steps < 1:
++        raise RuntimeContractError("lsd_steps must be at least 1")
++    if isinstance(max_frames, bool) or not isinstance(max_frames, Integral):
++        raise RuntimeContractError("max_frames must be an integer frame count")
++    if max_frames <= 0:
++        raise RuntimeContractError("max_frames must be a positive frame count")
++    if frames_after_eos is not None:
++        if isinstance(frames_after_eos, bool) or not isinstance(frames_after_eos, Integral):
++            raise RuntimeContractError("frames_after_eos must be an integer frame count")
++        if frames_after_eos < 0:
++            raise RuntimeContractError("frames_after_eos must be non-negative")
++    return (
++        temperature_value,
++        int(lsd_steps),
++        int(max_frames),
++        None if frames_after_eos is None else int(frames_after_eos),
++    )
++
++
+ def _load_safetensors(path: Path) -> Mapping[str, np.ndarray]:
+     try:
+         from safetensors.numpy import load_file
+@@ -1095,8 +1130,9 @@ class PocketAdapter(SystemAdapter):
+         latent_dim: int,
+         conditioning_dim: int,
+     ) -> _PocketGenerationResult:
+-        if lsd_steps < 1:
+-            raise RuntimeContractError("lsd_steps must be at least 1")
++        temperature, lsd_steps, max_frames, frames_after_eos = _validate_generation_controls(
++            temperature, lsd_steps, max_frames, frames_after_eos
++        )
+         frames: list[np.ndarray] = []
+         previous_latent: np.ndarray | None = None
+         eos_observed = False
+@@ -1221,17 +1257,27 @@ class PocketAdapter(SystemAdapter):
+         **kwargs: Any,
+     ) -> InferenceResult:
+         metadata = self._ensure_validated()
+-        if temperature < 0:
+-            raise RuntimeContractError("temperature must be non-negative")
+-        if frames_after_eos is not None and frames_after_eos < 0:
+-            raise RuntimeContractError("frames_after_eos must be non-negative")
+-        frame_limit = (
+-            max_frames
+-            if max_frames is not None
+-            else int(metadata.get("max_frames", self.DEFAULT_MAX_FRAMES))
++        frame_limit: Any
++        if max_frames is None:
++            configured_frame_limit = metadata.get("max_frames", self.DEFAULT_MAX_FRAMES)
++            if configured_frame_limit is None:
++                configured_frame_limit = self.DEFAULT_MAX_FRAMES
++            if isinstance(configured_frame_limit, bool) or not isinstance(
++                configured_frame_limit, Integral
++            ):
++                raise RuntimeContractError(
++                    "Pocket max_frames metadata must be an integer frame count"
++                )
++            if configured_frame_limit <= 0:
++                raise RuntimeContractError(
++                    "Pocket max_frames metadata must be a positive frame count"
++                )
++            frame_limit = configured_frame_limit
++        else:
++            frame_limit = max_frames
++        temperature, lsd_steps, frame_limit, frames_after_eos = _validate_generation_controls(
++            temperature, lsd_steps, frame_limit, frames_after_eos
+         )
+-        if frame_limit <= 0:
+-            raise RuntimeContractError("max_frames must be a positive frame count")
+         text_conditioner = self._get_session("text_conditioner")
+         main = self._get_session("flow_lm_main")
+         flow = self._get_session("flow_lm_flow")
+diff --git a/tests/test_cli_engines.py b/tests/test_cli_engines.py
+new file mode 100644
+index 0000000..884882e
+--- /dev/null
++++ b/tests/test_cli_engines.py
+@@ -0,0 +1,182 @@
++from __future__ import annotations
++
++import json
++from collections.abc import Sequence
++from dataclasses import replace
++from typing import Any
++
++import pytest
++
++from onnxvoice import cli
++from onnxvoice.types import CatalogItem
++
++
++class FakeCatalog:
++    def __init__(self) -> None:
++        self.items = [
++            CatalogItem(
++                system="qwen3",
++                id="base-0.6b",
++                kind="bundle",
++                artifacts=(),
++                aliases=("base-small",),
++                sample_rate=24_000,
++                metadata={
++                    "model_type": "base",
++                    "profiles": {"fp32": {}, "int4": {}},
++                    "runtime": {"model_type": "base", "layout": "qwen3-wavekat-v1"},
++                },
++            ),
++            CatalogItem(
++                system="pocket",
++                id="pocket-clone",
++                kind="bundle",
++                artifacts=(),
++                sample_rate=24_000,
++                metadata={"supports_voice_cloning": True},
++            ),
++        ]
++        self.resolve_calls: list[tuple[str, str | None, str | None]] = []
++
++    def list(self, engine: str, refresh: bool = False) -> Sequence[CatalogItem]:
++        del refresh
++        return [item for item in self.items if item.system == engine]
++
++    def resolve(
++        self,
++        ref: str,
++        *,
++        refresh: bool = False,
++        quality: str | None = None,
++        distribution: str | None = None,
++    ) -> CatalogItem:
++        del refresh
++        self.resolve_calls.append((ref, quality, distribution))
++        engine, target = ref.split(":", 1)
++        item = next(item for item in self.list(engine) if item.id == target)
++        metadata = dict(item.metadata)
++        if quality is not None:
++            metadata["selected_quality"] = quality
++        return replace(item, metadata=metadata)
++
++
++class FakeManager:
++    def __init__(self) -> None:
++        self.catalog = FakeCatalog()
++
++    def installed(self, system: str | None = None) -> list[Any]:
++        del system
++        return []
++
++
++def _patch_manager(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeManager, list[Any]]:
++    manager = FakeManager()
++    seen_args: list[Any] = []
++
++    def manager_factory(args: Any) -> FakeManager:
++        seen_args.append(args)
++        return manager
++
++    monkeypatch.setattr(cli, "_manager", manager_factory)
++    return manager, seen_args
++
++
++def test_options_json_selectors_and_offline_mode_do_not_acquire_models(
++    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
++) -> None:
++    manager, seen_args = _patch_manager(monkeypatch)
++    result = cli.main(
++        [
++            "--offline",
++            "engines",
++            "options",
++            "--engine",
++            "qwen3",
++            "--target",
++            "base-small",
++            "--quality",
++            "int4",
++            "--format",
++            "json",
++        ]
++    )
++    assert result == 0
++    payload = json.loads(capsys.readouterr().out)
++    assert payload["target"] == "base-0.6b"
++    assert payload["quality"] == "int4"
++    assert payload["capabilities"]["voice_cloning"]["supported"] is True
++    assert seen_args[0].offline is True
++    assert manager.catalog.resolve_calls == [("qwen3:base-0.6b", "int4", None)]
++    assert not hasattr(manager, "install")
++    assert not hasattr(manager, "open")
++
++
++def test_options_support_table_plain_and_tsv_renderers(
++    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
++) -> None:
++    _patch_manager(monkeypatch)
++    for output_format in ("table", "plain", "tsv"):
++        result = cli.main(
++            [
++                "engines",
++                "options",
++                "--engine",
++                "qwen3",
++                "--target",
++                "base-0.6b",
++                "--format",
++                output_format,
++            ]
++        )
++        assert result == 0
++        output = capsys.readouterr().out
++        assert "voice_cloning" in output
++        assert "base-0.6b" in output
++        if output_format == "table":
++            assert "SECTION" in output
++        elif output_format == "plain":
++            assert "SECTION" not in output
++        else:
++            assert output.splitlines()[0].startswith("SECTION\tNAME\tTYPE\tVALUE\tDETAIL")
++
++
++def test_list_capability_json_and_unknown_selector_errors(
++    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
++) -> None:
++    _patch_manager(monkeypatch)
++    result = cli.main(
++        [
++            "engines",
++            "list",
++            "--engine",
++            "pocket",
++            "--capability",
++            "voice-cloning",
++            "--format",
++            "json",
++        ]
++    )
++    assert result == 0
++    payload = json.loads(capsys.readouterr().out)
++    assert [row["target"] for row in payload["rows"]] == ["pocket-clone"]
++
++    result = cli.main(
++        ["engines", "options", "--engine", "qwen3", "--target", "missing", "--format", "json"]
++    )
++    captured = capsys.readouterr()
++    assert result == 2
++    assert "Unknown target 'missing'" in captured.err
++    assert "base-0.6b" in captured.err
++
++
++def test_list_plain_and_tsv_are_rendered(
++    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
++) -> None:
++    _patch_manager(monkeypatch)
++    for output_format in ("plain", "tsv"):
++        result = cli.main(["engines", "list", "--engine", "pocket", "--format", output_format])
++        assert result == 0
++        output = capsys.readouterr().out
++        assert "pocket-clone" in output
++        if output_format == "tsv":
++            assert output.splitlines()[0].startswith("ENGINE\tTARGET\tREF")
+diff --git a/tests/test_docs_cli_coverage.py b/tests/test_docs_cli_coverage.py
+index 9eab221..e082a07 100644
+--- a/tests/test_docs_cli_coverage.py
++++ b/tests/test_docs_cli_coverage.py
+@@ -19,6 +19,7 @@ EXPECTED_DOCUMENTED_COMMANDS = {
+     "cache",
+     "import",
+     "catalog",
++    "engines",
+ }
+
+
+diff --git a/tests/test_engine_options.py b/tests/test_engine_options.py
+new file mode 100644
+index 0000000..389a57f
+--- /dev/null
++++ b/tests/test_engine_options.py
+@@ -0,0 +1,375 @@
++from __future__ import annotations
++
++import builtins
++import json
++from collections.abc import Sequence
++from dataclasses import FrozenInstanceError, replace
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any
++
++import pytest
++
++from onnxvoice.engine_options import (
++    EngineOptionsError,
++    contract_coverage,
++    get_engine_contract,
++    list_engine_targets,
++    resolve_engine_options,
++)
++from onnxvoice.errors import OfflineError
++from onnxvoice.systems import registered_systems
++from onnxvoice.types import CatalogItem
++
++
++def _item(
++    engine: str,
++    target: str,
++    metadata: dict[str, Any] | None = None,
++    *,
++    aliases: tuple[str, ...] = (),
++    sample_rate: int | None = 24_000,
++) -> CatalogItem:
++    return CatalogItem(
++        system=engine,
++        id=target,
++        kind="bundle",
++        artifacts=(),
++        aliases=aliases,
++        sample_rate=sample_rate,
++        metadata=metadata or {},
++    )
++
++
++class FakeCatalog:
++    def __init__(self, items: builtins.list[CatalogItem]) -> None:
++        self.items = items
++        self.resolve_calls: list[tuple[str, str | None, str | None]] = []
++
++    def list(self, engine: str, refresh: bool = False) -> Sequence[CatalogItem]:
++        del refresh
++        return [item for item in self.items if item.system == engine]
++
++    def resolve(
++        self,
++        ref: str,
++        *,
++        refresh: bool = False,
++        quality: str | None = None,
++        distribution: str | None = None,
++    ) -> CatalogItem:
++        del refresh
++        self.resolve_calls.append((ref, quality, distribution))
++        engine, target = ref.split(":", 1)
++        item = next(item for item in self.list(engine) if item.id == target)
++        metadata = dict(item.metadata)
++        if quality is not None:
++            profiles = metadata.get("profiles", {})
++            if isinstance(profiles, dict) and profiles and quality not in profiles:
++                raise ValueError(
++                    f"Unknown quality {quality!r}; valid choices: {', '.join(sorted(profiles))}"
++                )
++            metadata["selected_quality"] = quality
++        if distribution is not None:
++            metadata["distribution_id"] = distribution
++            runtime = dict(metadata.get("runtime", {}))
++            if engine == "kokoro":
++                runtime["layout"] = {
++                    "clone": "cloning-onnx-v1",
++                    "split": "split-onnx-v1",
++                    "single": "single-onnx-v1",
++                }[distribution]
++            metadata["runtime"] = runtime
++        return replace(item, metadata=metadata)
++
++
++class FakeManager:
++    def __init__(
++        self,
++        items: list[CatalogItem],
++        installations: list[Any] | None = None,
++    ) -> None:
++        self.catalog = FakeCatalog(items)
++        self.installations = installations or []
++
++    def installed(self, system: str | None = None) -> list[Any]:
++        return [item for item in self.installations if system is None or item.system == system]
++
++
++def _fixture_manager() -> FakeManager:
++    return FakeManager(
++        [
++            _item(
++                "kokoro",
++                "v1.0",
++                {
++                    "distribution_id": "split",
++                    "distribution_choices": ["split", "clone"],
++                    "runtime": {"layout": "split-onnx-v1", "max_tokens": 510},
++                },
++                aliases=("kokoro-latest",),
++            ),
++            _item(
++                "qwen3",
++                "base-0.6b",
++                {
++                    "model_type": "base",
++                    "profiles": {"fp32": {}, "int4": {}},
++                    "runtime": {"model_type": "base", "layout": "qwen3-wavekat-v1"},
++                },
++            ),
++            _item(
++                "qwen3",
++                "voice-design-1.7b",
++                {
++                    "model_type": "voice_design",
++                    "profiles": {"fp32": {}, "int4": {}},
++                    "runtime": {
++                        "model_type": "voice_design",
++                        "layout": "qwen3-wavekat-v1",
++                    },
++                },
++            ),
++            _item("pocket", "clone-yes", {"supports_voice_cloning": True, "max_frames": 128}),
++            _item("pocket", "clone-no", {"supports_voice_cloning": False}),
++            _item("pocket", "clone-unknown", {}),
++        ]
++    )
++
++
++def test_contract_registry_covers_every_builtin_and_third_party_is_explicit() -> None:
++    coverage = contract_coverage()
++    assert set(coverage["registered"]) == set(registered_systems())
++    assert coverage["missing"] == []
++    assert coverage["extra"] == []
++    assert get_engine_contract("third-party-engine").contract_status == "unavailable"
++    assert "No engine-options contract is registered" in (
++        get_engine_contract("third-party-engine").contract_reason or ""
++    )
++
++
++def test_static_descriptors_are_immutable_and_json_serializable() -> None:
++    contract = get_engine_contract("piper")
++    payload = contract.to_dict()
++    assert json.dumps(payload, sort_keys=True) == json.dumps(contract.to_dict(), sort_keys=True)
++    attribute_name = "default"
++    with pytest.raises(FrozenInstanceError):
++        setattr(contract.parameters[0], attribute_name, 99)
++
++    piper_parameters = {entry.name: entry for entry in contract.parameters}
++    assert piper_parameters["speaker_id"].type == "integer"
++    assert "not reference-audio cloning" in piper_parameters["speaker_id"].description
++    unknown_text_limit = next(
++        limit for limit in contract.limits if limit.name == "max_input_tokens"
++    )
++    assert unknown_text_limit.value is None
++    assert unknown_text_limit.status == "not_declared"
++
++
++def test_kokoro_distribution_variants_keep_cloning_boundary_semantics() -> None:
++    manager = _fixture_manager()
++    data = resolve_engine_options(manager, "kokoro", target="kokoro-latest")
++    assert data["target"] == "v1.0"
++    variants = {variant["distribution"]: variant for variant in data["variants"]}
++    assert set(variants) == {"clone", "split"}
++
++    cloning = variants["clone"]
++    assert cloning["layout"] == "cloning-onnx-v1"
++    assert cloning["capabilities"]["voice_cloning"]["supported"] is True
++    assert cloning["capabilities"]["voice_cloning"]["requires_reference_transcript"] is True
++    assert cloning["capabilities"]["voice_cloning"]["requires"] == [
++        "reference_audio",
++        "reference_transcript_token_ids",
++        "reference",
++    ]
++    parameters = {entry["name"]: entry for entry in cloning["parameters"]}
++    assert parameters["speed"]["supported"] is False
++    assert parameters["speed"]["status"] == "unsupported_except_value"
++    assert parameters["speed"]["choices"] == [1.0]
++    limits = {entry["name"]: entry for entry in cloning["limits"]}
++    assert limits["max_input_tokens"]["value"] == 510
++    assert limits["max_content_tokens"]["value"] == 508
++
++    split = variants["split"]
++    assert split["capabilities"]["voice_cloning"]["supported"] is False
++    assert (
++        next(limit for limit in split["limits"] if limit["name"] == "max_content_tokens")["status"]
++        == "not_applicable"
++    )
++
++    rows = list_engine_targets(manager, engine="kokoro", capability="voice-cloning")["rows"]
++    assert [(row["target"], row["distribution"]) for row in rows] == [("v1.0", "clone")]
++    selected = resolve_engine_options(manager, "kokoro", target="v1.0", distribution="clone")
++    assert selected["distribution"] == "clone"
++    with pytest.raises(EngineOptionsError, match="valid choices: clone, split"):
++        resolve_engine_options(manager, "kokoro", target="v1.0", distribution="invalid")
++
++
++def test_qwen3_base_voice_design_and_profile_selection_are_distinct() -> None:
++    manager = _fixture_manager()
++    base = resolve_engine_options(manager, "qwen3", target="base-0.6b", quality="int4")
++    design = resolve_engine_options(manager, "qwen3", target="voice-design-1.7b")
++    assert base["quality"] == "int4"
++    assert base["capabilities"]["voice_cloning"]["supported"] is True
++    assert base["capabilities"]["voice_cloning"]["requires_reference_transcript"] is True
++    assert design["capabilities"]["voice_cloning"]["supported"] is False
++    assert design["capabilities"]["voice_design"]["supported"] is True
++    assert design["capabilities"]["voice_design"]["mode"] == "instruction_tokens"
++    assert next(option for option in design["inputs"] if option["name"] == "instruction_token_ids")[
++        "required"
++    ]
++    assert [
++        row["target"]
++        for row in list_engine_targets(manager, engine="qwen3", capability="voice-cloning")["rows"]
++    ] == ["base-0.6b"]
++
++
++def test_pocket_uses_declared_clone_capability_and_frame_units() -> None:
++    manager = _fixture_manager()
++    supported = resolve_engine_options(manager, "pocket", target="clone-yes")
++    unsupported = resolve_engine_options(manager, "pocket", target="clone-no")
++    unknown = resolve_engine_options(manager, "pocket", target="clone-unknown")
++    limits = {entry["name"]: entry for entry in supported["limits"]}
++    assert supported["capabilities"]["voice_cloning"]["supported"] is True
++    assert unsupported["capabilities"]["voice_cloning"]["supported"] is False
++    assert unknown["capabilities"]["voice_cloning"]["supported"] is None
++    assert limits["max_frames"]["value"] == 128
++    assert limits["max_frames"]["unit"] == "frames"
++    assert limits["max_input_tokens"]["value"] is None
++    assert limits["max_input_tokens"]["status"] == "not_declared"
++    assert [
++        row["target"]
++        for row in list_engine_targets(manager, engine="pocket", capability="voice-cloning")["rows"]
++    ] == ["clone-yes"]
++
++
++def test_sopro_merges_catalog_facts_with_installed_manifest(tmp_path: Path) -> None:
++    manifest_path = tmp_path / "manifest.json"
++    manifest_path.write_text(
++        json.dumps(
++            {
++                "model": {"max_text_len": 256},
++                "generation": {
++                    "max_seconds": 12,
++                    "prompt_tokens": 40,
++                    "ref_seconds": 8,
++                    "top_k": 25,
++                },
++            }
++        ),
++        encoding="utf-8",
++    )
++    item = _item(
++        "sopro",
++        "v2-turbo",
++        {
++            "runtime": {"layout": "sopro-v1"},
++            "model": {"max_text_len": 200},
++            "generation": {"max_seconds": 15, "top_p": 0.7},
++        },
++    )
++    installation = SimpleNamespace(
++        id="v2-turbo",
++        system="sopro",
++        metadata={},
++        sample_rate=24_000,
++        artifacts=[SimpleNamespace(role="manifest", path=manifest_path)],
++    )
++    data = resolve_engine_options(FakeManager([item], [installation]), "sopro", target="v2-turbo")
++    limits = {entry["name"]: entry for entry in data["limits"]}
++    parameters = {entry["name"]: entry for entry in data["parameters"]}
++    assert limits["max_text_len"]["value"] == 200
++    assert limits["max_text_len"]["source"] == "catalog_metadata"
++    assert limits["max_seconds"]["value"] == 15
++    assert limits["max_seconds"]["source"] == "catalog_metadata"
++    assert limits["max_prompt_tokens"]["value"] == 40
++    assert parameters["top_p"]["default"] == 0.7
++    assert parameters["top_p"]["source"] == "catalog_metadata"
++    assert parameters["top_k"]["default"] == 25
++    assert parameters["top_k"]["source"] == "installed_manifest"
++    assert parameters["steps"]["default_status"] == "unknown"
++    assert "wasm-uint8" in data["capabilities"]["voice_cloning"]["constraints"][0]
++    assert "CPUExecutionProvider" in data["capabilities"]["voice_cloning"]["constraints"][0]
++
++
++def test_chatterbox_generation_and_kitten2_named_selections_are_target_specific() -> None:
++    manager = FakeManager(
++        [
++            _item(
++                "chatterbox",
++                "nano-v2",
++                {
++                    "runtime": {
++                        "layout": "chatterbox-multi-v1",
++                        "default_max_new_tokens": 1024,
++                        "default_repetition_penalty": 1.2,
++                    },
++                    "generation": {"max_new_tokens": 512, "repetition_penalty": 1.15},
++                },
++            ),
++            _item(
++                "kitten2",
++                "kitten-tts-v2",
++                {
++                    "runtime": {"layout": "kitten2-onnx-bundle-v1"},
++                    "voices": {"Bella": {}, "Bruno": {}},
++                    "default_voice": "Bella",
++                    "decode_presets": {"stable": {}, "expressive": {}},
++                    "default_preset": "stable",
++                },
++            ),
++        ]
++    )
++    chatterbox = resolve_engine_options(manager, "chatterbox", target="nano-v2")
++    controls = {entry["name"]: entry for entry in chatterbox["parameters"]}
++    assert chatterbox["capabilities"]["voice_cloning"]["supported"] is True
++    assert controls["max_new_tokens"]["default"] == 512
++    assert controls["max_new_tokens"]["source"] == "catalog_metadata"
++    assert controls["repetition_penalty"]["default"] == 1.15
++
++    kitten2 = resolve_engine_options(manager, "kitten2", target="kitten-tts-v2")
++    selection = {entry["name"]: entry for entry in kitten2["selection_metadata"]}
++    controls = {entry["name"]: entry for entry in kitten2["parameters"]}
++    assert selection["voices"]["value"] == ["Bella", "Bruno"]
++    assert selection["default_voice"]["value"] == "Bella"
++    assert selection["presets"]["value"] == ["expressive", "stable"]
++    assert controls["voice"]["default"] == "Bella"
++    assert controls["preset"]["default"] == "stable"
++
++
++def test_offline_discovery_and_unknown_limits_are_explicit() -> None:
++    class OfflineCatalog:
++        def list(self, engine: str, refresh: bool = False) -> Sequence[CatalogItem]:
++            del engine, refresh
++            raise OfflineError("catalog unavailable offline")
++
++    class OfflineManager:
++        catalog = OfflineCatalog()
++
++        def installed(self, system: str | None = None) -> list[Any]:
++            del system
++            return []
++
++    data = resolve_engine_options(OfflineManager(), "piper")
++    assert data["contract_status"] == "available"
++    assert data["target_discovery"] == {
++        "status": "unavailable",
++        "reason": "catalog unavailable offline",
++    }
++    assert data["known_targets"] == []
++    rows = list_engine_targets(OfflineManager(), engine="piper", capability="voice-cloning")
++    assert rows["target_discovery"] == "partial"
++    assert rows["rows"] == []
++    limit = next(limit for limit in data["limits"] if limit["name"] == "max_input_tokens")
++    assert limit["value"] is None
++    assert limit["status"] == "not_declared"
++
++
++def test_resolved_json_is_deterministic_and_copies_static_data() -> None:
++    manager = _fixture_manager()
++    first = resolve_engine_options(manager, "kokoro", target="v1.0", distribution="clone")
++    second = resolve_engine_options(manager, "kokoro", target="v1.0", distribution="clone")
++    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
++    first["parameters"].clear()
++    third = resolve_engine_options(manager, "kokoro", target="v1.0", distribution="clone")
++    assert third["parameters"]
+diff --git a/tests/test_pocket_adapter.py b/tests/test_pocket_adapter.py
+index f54e630..05b50b5 100644
+--- a/tests/test_pocket_adapter.py
++++ b/tests/test_pocket_adapter.py
+@@ -891,6 +891,35 @@ def test_infer_rejects_negative_temperature() -> None:
+         adapter.infer([1], temperature=-0.1)
+
+
++@pytest.mark.parametrize(
++    ("controls", "message"),
++    [
++        ({"temperature": True}, "temperature must be a finite number"),
++        ({"temperature": float("nan")}, "temperature must be a finite number"),
++        ({"temperature": float("inf")}, "temperature must be a finite number"),
++        ({"lsd_steps": True}, "lsd_steps must be an integer"),
++        ({"lsd_steps": 1.5}, "lsd_steps must be an integer"),
++        ({"lsd_steps": 0}, "lsd_steps must be at least 1"),
++        ({"max_frames": True}, "max_frames must be an integer"),
++        ({"max_frames": 1.5}, "max_frames must be an integer"),
++        ({"max_frames": 0}, "max_frames must be a positive"),
++        ({"frames_after_eos": True}, "frames_after_eos must be an integer"),
++        ({"frames_after_eos": 1.5}, "frames_after_eos must be an integer"),
++        ({"frames_after_eos": -1}, "frames_after_eos must be non-negative"),
++    ],
++)
++def test_infer_rejects_invalid_numeric_controls_before_loading_sessions(
++    controls: dict[str, Any], message: str
++) -> None:
++    adapter = PocketAdapter(_make_installation())
++    with (
++        patch.object(adapter, "_ensure_validated", return_value={}),
++        patch.object(adapter, "_get_session", side_effect=AssertionError("session loaded")),
++        pytest.raises(RuntimeContractError, match=message),
++    ):
++        adapter.infer([1], **controls)
++
++
+ def _predefined_adapter(
+     tmp_path: Path,
+     *,

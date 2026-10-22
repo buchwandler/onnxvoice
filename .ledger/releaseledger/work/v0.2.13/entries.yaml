@@ -1,0 +1,141 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.13
+git_base_ref: 1b371b1e6e509094ba33f8ba9c8ade97c138a110
+git_base_sha: 1b371b1e6e509094ba33f8ba9c8ade97c138a110
+git_head_ref: 3566b429f5b980db31d69d0f62b04ba9ce0200dd
+git_head_sha: 3566b429f5b980db31d69d0f62b04ba9ce0200dd
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: Added ONNX Runtime diagnostics and persistent provider selection through CLI and Python APIs
+    status: accepted
+    source_refs:
+      - git:1754357d1116c3cfbc4677fadbe3023b3218d13a
+    paths:
+      - README.md
+      - docs/api/runtime.md
+      - docs/api/types.md
+      - docs/architecture.md
+      - docs/cli.md
+      - docs/getting-started.md
+      - docs/pocket-downloads.md
+      - docs/providers.md
+      - docs/python-api.md
+      - onnxvoice/__init__.py
+      - onnxvoice/cli.py
+      - onnxvoice/runtime.py
+      - onnxvoice/runtime_config.py
+      - onnxvoice/types.py
+      - tests/test_cli.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_public_api.py
+      - tests/test_runtime.py
+      - tests/test_runtime_status.py
+    sources:
+      - git:1754357d1116c3cfbc4677fadbe3023b3218d13a
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: Added engine discovery commands for target-specific options, capabilities, and limits
+    status: accepted
+    source_refs:
+      - git:716c576a4f7b8358d27e51c0afaf737dbcf0c129
+    paths:
+      - docs/cli.md
+      - docs/systems/chatterbox.md
+      - docs/systems/index.md
+      - docs/systems/inflect.md
+      - docs/systems/kitten.md
+      - docs/systems/kitten2.md
+      - docs/systems/kokoro.md
+      - docs/systems/piper.md
+      - docs/systems/pocket.md
+      - docs/systems/qwen3.md
+      - docs/systems/sopro.md
+      - docs/systems/supertonic.md
+      - onnxvoice/cli.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/systems/pocket.py
+      - tests/test_cli_engines.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_engine_options.py
+      - tests/test_pocket_adapter.py
+    sources:
+      - git:716c576a4f7b8358d27e51c0afaf737dbcf0c129
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: changed
+    summary: Changed voice listing filters to select engines and exact catalog targets
+    status: accepted
+    source_refs:
+      - git:7c323f55d4eed54492f0e5c4a6c4b9f91b587d96
+      - git:b5da3b310997cd731f52bcea672e8afa60139481
+    paths:
+      - docs/cli.md
+      - docs/systems/inflect.md
+      - docs/systems/kitten.md
+      - docs/systems/supertonic.md
+      - docs/voices.md
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - tests/test_cli_voices.py
+      - tests/test_kitten_voices.py
+      - tests/test_voices.py
+    sources:
+      - git:7c323f55d4eed54492f0e5c4a6c4b9f91b587d96
+      - git:b5da3b310997cd731f52bcea672e8afa60139481
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: internal
+    summary: Improved cross-platform JSON path serialization for CLI diagnostics
+    status: accepted
+    internal: true
+    source_refs:
+      - git:3c5d5680ac5b918650eed4bc2eb4b9d06dc330d0
+    paths:
+      - onnxvoice/cli.py
+    sources:
+      - git:3c5d5680ac5b918650eed4bc2eb4b9d06dc330d0
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: internal
+    summary: Improved static typing across runtime, adapter, catalog, and test code
+    status: accepted
+    internal: true
+    source_refs:
+      - git:3566b429f5b980db31d69d0f62b04ba9ce0200dd
+    paths:
+      - onnxvoice/runtime.py
+      - onnxvoice/systems/pocket.py
+      - tests/test_cli_voices.py
+      - tests/test_huggingface.py
+      - tests/test_inflect_adapter.py
+      - tests/test_kitten2_generation.py
+      - tests/test_kitten2_integration.py
+      - tests/test_kitten2_tokenizer.py
+      - tests/test_pocket_adapter.py
+      - tests/test_pocket_catalog.py
+      - tests/test_qwen3_catalog.py
+      - tests/test_qwen3_contract.py
+      - tests/test_sopro_local_open.py
+      - tests/test_store.py
+      - tests/test_supertonic_adapter.py
+      - tests/test_supertonic_catalog.py
+      - tests/test_voices.py
+    sources:
+      - git:3566b429f5b980db31d69d0f62b04ba9ce0200dd
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
