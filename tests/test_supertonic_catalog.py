@@ -367,6 +367,7 @@ def test_install_open_offline_reopen_and_inventory_use_standard_bundle_flow(
     monkeypatch.setattr(store_module, "download_huggingface_file", download)
     manager = OnnxVoice(cache_dir=cache_dir, catalog_sources={"supertonic": str(catalog_path)})
     installation = manager.install("supertonic:supertonic-3")
+    assert installation is not None
     manager.store.verify(installation)
 
     assert len(downloads) == 16
@@ -381,6 +382,7 @@ def test_install_open_offline_reopen_and_inventory_use_standard_bundle_flow(
     assert len(inventory) == 1
     record = inventory[0]
     assert record.language_codes == languages
+    assert record.installation is not None
     assert record.catalog_item is not None
     assert record.catalog_item.voices == STYLE_COMPONENTS
     assert {

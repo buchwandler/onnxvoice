@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from typing import Any
 
 import pytest
 
@@ -278,7 +279,7 @@ def test_pocket_huggingface_artifact_uses_structured_source_and_integrity(
 
     monkeypatch.setattr(store_module, "download_huggingface_file", download)
     monkeypatch.setattr(store, "_download", lambda *_args, **_kwargs: pytest.fail("used urllib"))
-    events = []
+    events: list[Any] = []
     installed = store.install(item, progress=events.append)
 
     assert installed.artifact("flow_lm_main").path.read_bytes() == payload

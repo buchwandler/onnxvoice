@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -11,8 +12,8 @@ from onnxvoice.types import CatalogItem, VoiceMetadata, VoiceRecord
 class _Manager:
     def __init__(self, record: VoiceRecord) -> None:
         self.record = record
-        self.list_args = None
-        self.resolve_args = None
+        self.list_args: dict[str, Any] | None = None
+        self.resolve_args: tuple[str, dict[str, Any]] | None = None
 
     def list_voices(self, **kwargs):
         self.list_args = kwargs
@@ -105,9 +106,9 @@ def test_voices_list_parser_accepts_exact_target_filter() -> None:
     assert args.engine == "kokoro"
     assert args.target == "v1.0"
 
-    commands = next(action for action in parser._actions if action.dest == "command").choices
+    commands: Any = next(action for action in parser._actions if action.dest == "command").choices
     voices = commands["voices"]
-    subcommands = next(
+    subcommands: Any = next(
         action for action in voices._actions if action.dest == "voices_command"
     ).choices
     list_parser = subcommands["list"]
@@ -145,9 +146,9 @@ def test_voices_list_target_filter_does_not_require_engine(monkeypatch) -> None:
 
 def test_voices_parser_exposes_only_catalog_filters_and_semantic_ref() -> None:
     parser = build_parser()
-    commands = next(action for action in parser._actions if action.dest == "command").choices
+    commands: Any = next(action for action in parser._actions if action.dest == "command").choices
     voices = commands["voices"]
-    subcommands = next(
+    subcommands: Any = next(
         action for action in voices._actions if action.dest == "voices_command"
     ).choices
     list_parser = subcommands["list"]

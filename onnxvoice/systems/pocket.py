@@ -625,7 +625,7 @@ class PocketAdapter(SystemAdapter):
                 details.append(f"missing outputs: {', '.join(missing_outputs)}")
             raise RuntimeContractError(f"{role} state contract mismatch ({'; '.join(details)})")
 
-    def _validate_session_contract(self, role: str, session: OnnxSession) -> None:
+    def _validate_session_contract(self, role: str, session: Any) -> None:
         if role in self._validated_contracts:
             return
         input_names = self._names(session, "input_names")

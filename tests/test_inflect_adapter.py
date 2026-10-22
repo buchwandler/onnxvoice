@@ -240,7 +240,7 @@ def test_inflect_adapter_validates_graph_names(
     names: tuple[str, ...],
     message: str,
 ) -> None:
-    options = {
+    options: dict[str, dict[str, Any]] = {
         "duration_input": {"duration_input_names": names},
         "duration_output": {"duration_output_names": names},
         "decode_input": {"decode_input_names": names},
@@ -337,9 +337,13 @@ def test_inflect_adapter_seed_is_deterministic(
 ) -> None:
     adapter, created = _adapter(tmp_path, monkeypatch)
     adapter.infer([3, 4], seed=123)
-    first = created[1].inputs_seen["zp_noise"].copy()
+    first_inputs = created[1].inputs_seen
+    assert first_inputs is not None
+    first = first_inputs["zp_noise"].copy()
     adapter.infer([3, 4], seed=123)
-    second = created[1].inputs_seen["zp_noise"].copy()
+    second_inputs = created[1].inputs_seen
+    assert second_inputs is not None
+    second = second_inputs["zp_noise"].copy()
     np.testing.assert_array_equal(first, second)
 
 
@@ -348,9 +352,13 @@ def test_inflect_adapter_different_seed_changes_noise(
 ) -> None:
     adapter, created = _adapter(tmp_path, monkeypatch)
     adapter.infer([3, 4], seed=123)
-    first = created[1].inputs_seen["zp_noise"].copy()
+    first_inputs = created[1].inputs_seen
+    assert first_inputs is not None
+    first = first_inputs["zp_noise"].copy()
     adapter.infer([3, 4], seed=124)
-    second = created[1].inputs_seen["zp_noise"].copy()
+    second_inputs = created[1].inputs_seen
+    assert second_inputs is not None
+    second = second_inputs["zp_noise"].copy()
     assert not np.array_equal(first, second)
 
 
@@ -457,7 +465,9 @@ def test_inflect_adapter_accepts_dynamic_one_element_scale_shape(
     inputs["length_scale"] = TensorSpec("length_scale", "tensor(float)", ("scale",))
     adapter, created = _adapter(tmp_path, monkeypatch, duration_input_specs=inputs)
     adapter.infer([1], speed=2.0)
-    scale = created[0].inputs_seen["length_scale"]
+    recorded_inputs = created[0].inputs_seen
+    assert recorded_inputs is not None
+    scale = recorded_inputs["length_scale"]
     assert scale.shape == (1,)
     assert scale.item() == pytest.approx(0.5)
 

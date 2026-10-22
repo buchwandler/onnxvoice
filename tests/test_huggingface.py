@@ -32,7 +32,7 @@ def _source() -> HuggingFaceSource:
 
 def _install_hub(monkeypatch, download) -> ModuleType:
     hub = ModuleType("huggingface_hub")
-    hub.hf_hub_download = download
+    hub.__dict__["hf_hub_download"] = download
     monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
     return hub
 

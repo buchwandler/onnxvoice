@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from onnxvoice.errors import AssetNotFoundError, VoiceNotFoundError
@@ -120,7 +122,7 @@ def test_catalog_voice_iteration_is_system_neutral() -> None:
 
 def test_list_voices_flattens_all_catalogs_and_filters_descriptive_language() -> None:
     items = (_supertonic_bundle(), _pocket_bundle(), _kokoro_model(), _piper_voice())
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = _Catalog(items)
 
     records = manager.list_voices()
@@ -161,7 +163,7 @@ def test_list_voices_filters_exact_asset_id_and_composes_filters() -> None:
         voices=("other_voice",),
         metadata={"language_codes": ["ja"]},
     )
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = _Catalog((_kokoro_model(), kokoro_v11, other_v10))
 
     all_kokoro = manager.list_voices("kokoro")
@@ -196,7 +198,7 @@ def test_multilingual_bundle_capabilities_filter_list_and_resolve() -> None:
         voices=("F1", "M1"),
         metadata={"language_codes": languages},
     )
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = _Catalog((item,))
 
     for language in ("de", "ja"):
@@ -225,7 +227,7 @@ def test_per_voice_language_capabilities_restrict_generic_bundle_filtering() -> 
             },
         },
     )
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = _Catalog((item,))
 
     records = {record.voice_id: record for record in manager.list_voices("generic")}
@@ -239,7 +241,7 @@ def test_per_voice_language_capabilities_restrict_generic_bundle_filtering() -> 
 
 
 def test_list_voices_passes_catalog_options_and_uses_requested_system() -> None:
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = _Catalog((_piper_voice(), _supertonic_bundle()))
     progress = object()
 
@@ -251,7 +253,7 @@ def test_list_voices_passes_catalog_options_and_uses_requested_system() -> None:
 
 def test_resolve_voice_supports_asset_voices_and_named_child_voices() -> None:
     items = (_piper_voice(), _kokoro_model(), _pocket_bundle(), _supertonic_bundle())
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = _Catalog(items)
     progress = object()
 
@@ -275,7 +277,7 @@ def test_resolve_voice_supports_asset_voices_and_named_child_voices() -> None:
 
 
 def test_resolve_voice_requires_catalog_declared_child_voice() -> None:
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = _Catalog((_kokoro_model(), _piper_voice()))
 
     with pytest.raises(VoiceNotFoundError, match="required"):
@@ -291,7 +293,7 @@ def test_resolve_voice_propagates_missing_catalog_asset() -> None:
         def resolve(self, ref: str, *, refresh: bool = False, progress=None):
             raise AssetNotFoundError(f"Unknown catalog item: {ref}")
 
-    manager = object.__new__(OnnxVoice)
+    manager: Any = object.__new__(OnnxVoice)
     manager.catalog = MissingCatalog(())
 
     with pytest.raises(AssetNotFoundError, match="Unknown catalog item"):

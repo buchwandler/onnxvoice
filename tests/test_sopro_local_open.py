@@ -7,7 +7,7 @@ import math
 import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -933,7 +933,7 @@ class _FakeVocoderSession:
     def run(self, inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
         self.calls.append({name: value.copy() for name, value in inputs.items()})
         frames = inputs["mel"].shape[-1] or 3
-        features = np.full((1, frames, 1026), -100.0, dtype=np.float32)
+        features: Any = np.full((1, frames, 1026), -100.0, dtype=np.float32)
         features[:, :, 0] = -2.0
         features[:, :, 513:] = 0.0
         if self.mode == "bad-vocoder":
@@ -958,6 +958,7 @@ def _install_semantic_fake_sessions(monkeypatch: pytest.MonkeyPatch, mode: str) 
 
     def create_session(path: Path, **kwargs: Any) -> Any:
         component = kwargs["component"]
+        session: Any
         if component == "semantic_prefix":
             session = _FakeSemanticPrefixSession(path, **kwargs)
         elif component == "semantic_core":
@@ -1339,7 +1340,7 @@ def test_infer_validates_tokens_options_voice_and_profile(tmp_path: Path) -> Non
         with pytest.raises(RuntimeContractError, match="Unsupported Sopro inference option"):
             runtime.infer([1], voice_state=voice, unexpected=True)
         with pytest.raises(RuntimeContractError, match="token_ids"):
-            runtime.infer(np.asarray([1.0]), voice_state=voice)
+            runtime.infer(cast(Any, np.asarray([1.0])), voice_state=voice)
         with pytest.raises(RuntimeContractError, match="token_ids"):
             runtime.infer([100000], voice_state=voice)
         prompt_length = manifest["config"]["generation"]["prompt_tokens"]

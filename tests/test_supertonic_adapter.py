@@ -144,7 +144,7 @@ def _patch_sessions(
 
 
 def _infer(adapter: SupertonicAdapter, **kwargs: Any):
-    arguments = {
+    arguments: dict[str, Any] = {
         "token_ids": [7, 11, 13],
         "text_mask": np.ones((1, 1, 3), dtype=np.float32),
         "style_ttl": np.ones((1, 4, 5), dtype=np.float64),

@@ -82,8 +82,9 @@ def test_local_open_uses_native_adapter_without_creating_sessions(
         assert runtime.default_preset == "stable"
         assert runtime.sample_rate == 24000
         assert set(runtime.decode_presets) == {"stable", "expressive"}
+        decode_presets: Any = runtime.decode_presets
         with pytest.raises(TypeError):
-            runtime.decode_presets["stable"]["top_k"] = 1
+            decode_presets["stable"]["top_k"] = 1
         assert runtime._sessions == {}
         assert runtime.diagnostics().sessions == ()
         with pytest.raises(ValueError, match="Unknown decode preset"):

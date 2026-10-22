@@ -5,7 +5,7 @@ import os
 from collections.abc import Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .errors import OptionalDependencyError, RuntimeContractError
 from .runtime_config import (
@@ -100,6 +100,9 @@ def provider_preference(
 ) -> ProviderPreference:
     """Capture the configured provider policy without importing ONNX Runtime."""
     env = os.environ if environment is None else environment
+    source: Literal[
+        "explicit", "ONNXVOICE_PROVIDERS", "ONNXVOICE_PROVIDER", "user_config", "default"
+    ]
     if providers is not None:
         requested: str | Sequence[str] = providers
         source = "explicit"
@@ -174,7 +177,9 @@ def _safe_exception_text(exc: BaseException) -> str:
 
 def _module_path(module: Any | None) -> Path | None:
     value = getattr(module, "__file__", None) if module is not None else None
-    if not isinstance(value, (str, os.PathLike)):
+    if isinstance(value, os.PathLike):
+        value = os.fspath(value)
+    if not isinstance(value, str):
         return None
     try:
         return Path(value).resolve()
@@ -225,7 +230,7 @@ def _runtime_distributions(
         except Exception:
             version = None
         try:
-            location = Path(distribution.locate_file("")).resolve()
+            location = Path(str(distribution.locate_file(""))).resolve()
         except Exception:
             location = None
 
@@ -241,7 +246,7 @@ def _runtime_distributions(
                 if len(parts) < 2 or parts[-2:] != ("onnxruntime", "__init__.py"):
                     continue
                 try:
-                    recorded_path = Path(distribution.locate_file(file)).resolve()
+                    recorded_path = Path(str(distribution.locate_file(file))).resolve()
                 except Exception:
                     continue
                 if recorded_path == module_path:
@@ -301,6 +306,7 @@ def runtime_status(*, environment: Mapping[str, str] | None = None) -> OnnxRunti
     module, import_error = _safe_import_ort()
     module_path = _module_path(module)
     distributions = _runtime_distributions(module_path)
+    state: Literal["resolved", "ambiguous", "vendor", "not_installed", "import_failed"]
     if module is None:
         state = "import_failed" if distributions else "not_installed"
         return OnnxRuntimeStatus(

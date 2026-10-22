@@ -71,7 +71,7 @@ def test_kitten2_runtime_has_no_semantic_text_dependencies() -> None:
     }
     for path in production.glob("kitten2*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        imported = set()
+        imported: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported.update(alias.name.split(".")[0] for alias in node.names)

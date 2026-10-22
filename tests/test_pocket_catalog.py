@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,7 @@ from onnxvoice.catalog import (
 from onnxvoice.catalog_tools.pocket import huggingface_resolve_url
 from onnxvoice.errors import CatalogError
 
-SAMPLE_CATALOG = {
+SAMPLE_CATALOG: dict[str, Any] = {
     "source": {
         "repository": "KevinAHM/pocket-tts-onnx",
         "revision": "abc123def456abc123def456abc123def456abc1",

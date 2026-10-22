@@ -729,13 +729,15 @@ def test_generate_latents_matches_rank_two_flow_inputs() -> None:
     main = MagicMock()
     main.output_names = ("conditioning", "eos_logit")
     main_inputs: list[dict[str, np.ndarray]] = []
-    main.run.side_effect = lambda inputs: (
+
+    def record_main(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
         main_inputs.append(inputs)
-        or [
+        return [
             np.ones((1, 4), dtype=np.float32),
             np.zeros((1, 1), dtype=np.float32),
         ]
-    )
+
+    main.run.side_effect = record_main
     flow = MagicMock()
     flow.input_specs = tuple(
         SimpleNamespace(name=name, shape=shape)
@@ -748,9 +750,12 @@ def test_generate_latents_matches_rank_two_flow_inputs() -> None:
     )
     flow.output_names = ("flow_dir",)
     flow_inputs: list[dict[str, np.ndarray]] = []
-    flow.run.side_effect = lambda inputs: (
-        flow_inputs.append(inputs) or [np.zeros((1, 3), dtype=np.float32)]
-    )
+
+    def record_flow(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
+        flow_inputs.append(inputs)
+        return [np.zeros((1, 3), dtype=np.float32)]
+
+    flow.run.side_effect = record_flow
 
     generation = adapter._generate_latents(
         main,
@@ -794,10 +799,12 @@ def _generate_latents_for_eos_pattern(
     flow = MagicMock()
     flow.output_names = ("velocity",)
     flow_inputs: list[dict[str, np.ndarray]] = []
-    flow.run.side_effect = lambda inputs: (
+
+    def record_flow(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
         flow_inputs.append({name: np.array(value, copy=True) for name, value in inputs.items()})
-        or [np.zeros((1, 1, 3), dtype=np.float32)]
-    )
+        return [np.zeros((1, 1, 3), dtype=np.float32)]
+
+    flow.run.side_effect = record_flow
 
     generation = adapter._generate_latents(
         main,
@@ -1102,7 +1109,7 @@ def test_predefined_voice_uses_declared_separate_huggingface_source(
     payload = b"fake safetensors payload"
     remote_file.write_bytes(payload)
     adapter = _predefined_adapter(tmp_path)
-    source_record = {
+    source_record: dict[str, Any] = {
         "name": "alba",
         "compatible_bundle": "english_2026-04",
         "source": {

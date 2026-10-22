@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -71,8 +71,8 @@ def test_native_language_model_generates_deterministically(
         }
     )
     model = Kitten2LanguageModel(
-        FakeLanguageSession(),
-        FakeSpeakerSession(),
+        cast(Any, FakeLanguageSession()),
+        cast(Any, FakeSpeakerSession()),
         metadata,
         embeddings_path,
     )
@@ -164,7 +164,7 @@ def test_adapter_defers_sessions_and_propagates_runtime_options(
         session_options=session_options,
     )
     assert created == []
-    sessions = [
+    sessions: list[Any] = [
         adapter._get_session(component) for component in ("lm", "speaker", "flow", "mel2wav")
     ]
     assert len(created) == 4

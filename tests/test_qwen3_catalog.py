@@ -67,7 +67,7 @@ def _catalog() -> dict[str, Any]:
         revision = "a" * 40 if bundle_id == "base-0.6b" else "b" * 40
         aliases = ["base", "clone"] if model_type == "base" else ["design", "voicedesign"]
         models = list(GENERATION) + (list(ENCODERS) if model_type == "base" else [])
-        artifacts = []
+        artifacts: list[dict[str, Any]] = []
 
         def add(
             role: str,

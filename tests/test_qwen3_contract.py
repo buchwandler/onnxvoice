@@ -98,6 +98,8 @@ def _graph_specs(
     component: str, config: Qwen3Config
 ) -> tuple[tuple[TensorSpec, ...], tuple[TensorSpec, ...]]:
     f32, i64 = "tensor(float)", "tensor(int64)"
+    inputs: tuple[TensorSpec, ...]
+    outputs: tuple[TensorSpec, ...]
     hidden = config.talker_hidden_size
     if component == "talker_prefill":
         inputs = (
@@ -105,12 +107,12 @@ def _graph_specs(
             _tensor("attention_mask", i64, 1, "sequence"),
             _tensor("position_ids", i64, 3, 1, "sequence"),
         )
-        outputs = [
+        prefill_outputs = [
             _tensor("logits", f32, 1, "sequence", config.talker_vocab_size),
             _tensor("hidden_states", f32, 1, "sequence", hidden),
         ]
         for index in range(config.talker_num_layers * 2):
-            outputs.append(
+            prefill_outputs.append(
                 _tensor(
                     f"present_key_values.{index // 2}.{'key' if index % 2 == 0 else 'value'}",
                     f32,
@@ -120,7 +122,7 @@ def _graph_specs(
                     config.talker_head_dim,
                 )
             )
-        return inputs, tuple(outputs)
+        return inputs, tuple(prefill_outputs)
     if component == "talker_decode":
         cache = (
             config.talker_num_layers,
