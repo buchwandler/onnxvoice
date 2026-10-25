@@ -26,6 +26,31 @@ class AssetDownloadError(OnnxVoiceError):
     """A remote asset could not be downloaded."""
 
 
+class AssetTransportError(AssetDownloadError):
+    """A remote asset transport is unavailable or its safe fallback failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        repository: str,
+        revision: str,
+        path: str,
+        stage: str,
+        native_error_type: str,
+        fallback_attempted: bool,
+        fallback_failed: bool,
+    ) -> None:
+        self.repository = repository
+        self.revision = revision
+        self.path = path
+        self.stage = stage
+        self.native_error_type = native_error_type
+        self.fallback_attempted = fallback_attempted
+        self.fallback_failed = fallback_failed
+        super().__init__(message)
+
+
 class AssetAccessError(AssetDownloadError):
     """A remote asset requires credentials or repository access."""
 

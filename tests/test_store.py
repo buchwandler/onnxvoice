@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
+import sys
+from types import ModuleType
 from typing import Any
 
 import pytest
 
+import onnxvoice.huggingface as huggingface_module
 from onnxvoice.errors import IntegrityError, OfflineError
 from onnxvoice.store import AssetStore
 from onnxvoice.types import Artifact, CatalogItem
@@ -310,6 +314,7 @@ def test_pocket_huggingface_download_still_checks_checksum(tmp_path, monkeypatch
     )
 
     def download(source, *, local_dir, offline):
+        assert offline is False
         path = local_dir / source.path
         path.parent.mkdir(parents=True)
         path.write_bytes(payload)
@@ -318,6 +323,8 @@ def test_pocket_huggingface_download_still_checks_checksum(tmp_path, monkeypatch
     monkeypatch.setattr(store_module, "download_huggingface_file", download)
     with pytest.raises(IntegrityError):
         store.install(item)
+    assert not store.is_installed("pocket", "bad-digest")
+    assert not store.manifest_path("pocket", "bad-digest").exists()
 
 
 def test_offline_pocket_cache_miss_does_not_invoke_huggingface(tmp_path, monkeypatch) -> None:
@@ -340,3 +347,48 @@ def test_offline_pocket_cache_miss_does_not_invoke_huggingface(tmp_path, monkeyp
 
     with pytest.raises(OfflineError):
         store.install(item)
+
+
+@pytest.mark.parametrize("fallback_payload", [b"expected model byte!", b"short"])
+def test_xet_fallback_bytes_fail_integrity_without_install_manifest(
+    tmp_path, monkeypatch, fallback_payload: bytes
+) -> None:
+    import onnxvoice.store as store_module
+
+    expected_payload = b"expected model bytes"
+    item = CatalogItem(
+        system="pocket",
+        id="bad-xet-fallback",
+        kind="bundle",
+        artifacts=(_huggingface_artifact(expected_payload),),
+        metadata={"canonical_catalog": True},
+    )
+    store = AssetStore(tmp_path / "cache")
+    hub = ModuleType("huggingface_hub")
+
+    def fail_hub_download(**_kwargs):
+        raise ValueError(
+            "Xet storage is enabled, but the hf_xet package is not installed. "
+            "Please install hf_xet."
+        )
+
+    hub.__dict__["hf_hub_download"] = fail_hub_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+
+    def open_url(request, *, timeout):
+        assert request.full_url == (
+            f"https://huggingface.co/owner/repo/resolve/{'a' * 40}/onnx/bundle/model.onnx"
+        )
+        assert timeout == 30
+        return io.BytesIO(fallback_payload)
+
+    monkeypatch.setattr(huggingface_module, "urlopen", open_url)
+    monkeypatch.setattr(
+        store_module, "download_huggingface_file", huggingface_module.download_huggingface_file
+    )
+
+    with pytest.raises(IntegrityError):
+        store.install(item)
+
+    assert not store.is_installed("pocket", "bad-xet-fallback")
+    assert not store.manifest_path("pocket", "bad-xet-fallback").exists()
