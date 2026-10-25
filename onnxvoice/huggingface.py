@@ -419,8 +419,8 @@ def _disable_xet_for_current_process(hub: ModuleType) -> bool:
             constants = importlib.import_module("huggingface_hub.constants")
         if not hasattr(constants, "HF_HUB_DISABLE_XET"):
             return False
-        constants.HF_HUB_DISABLE_XET = True
-        return constants.HF_HUB_DISABLE_XET is True
+        setattr(constants, "HF_HUB_DISABLE_XET", True)
+        return getattr(constants, "HF_HUB_DISABLE_XET") is True
     except Exception:
         return False
 
