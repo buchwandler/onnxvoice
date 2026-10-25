@@ -207,8 +207,6 @@ def _raise_xet_error(**_kwargs) -> None:
     raise ValueError(_XET_ERROR_MESSAGE)
 
 
-
-
 def test_missing_xet_retries_hub_with_runtime_switch_and_exact_arguments(
     monkeypatch, tmp_path: Path, caplog
 ) -> None:
@@ -339,7 +337,6 @@ def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
     assert all(size == 64 * 1024 for kind, size in url_calls[1:] if kind == "read")
 
 
-
 def test_missing_file_from_hub_retry_uses_https_fallback(monkeypatch, tmp_path: Path) -> None:
     calls = []
     source = _source()
@@ -360,6 +357,7 @@ def test_missing_file_from_hub_retry_uses_https_fallback(monkeypatch, tmp_path: 
     assert calls[0] == calls[1]
     assert result == tmp_path / source.path
     assert result.read_bytes() == content
+
 
 def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
     monkeypatch, tmp_path: Path
@@ -399,6 +397,7 @@ def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
     assert "gated" in str(raised.value).lower()
     assert "hf_xet" in str(raised.value)
 
+
 @pytest.mark.parametrize(("offline", "offline_env"), [(True, None), (False, "1")])
 def test_offline_mode_never_attempts_xet_fallback(
     monkeypatch, tmp_path: Path, offline: bool, offline_env: str | None
@@ -430,6 +429,7 @@ def test_offline_mode_never_attempts_xet_fallback(
     assert raised.value.__dict__["retry_outcome"] == "failed"
     assert raised.value.__dict__["fallback_outcome"] == "not_attempted"
     assert "failed=no" in str(raised.value)
+
 
 @pytest.mark.parametrize(
     ("status", "error_type"),
@@ -515,6 +515,7 @@ def test_retry_revision_not_found_is_not_bypassed(monkeypatch, tmp_path: Path) -
     assert "not found" in str(raised.value).lower()
     assert "direct HTTPS fallback was not attempted" in str(raised.value)
 
+
 def test_unrelated_value_error_is_not_classified_as_xet_or_leaked(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -540,6 +541,7 @@ def test_unrelated_value_error_is_not_classified_as_xet_or_leaked(
     assert "ValueError" in str(raised.value)
     assert secret not in str(raised.value)
     assert secret not in repr(raised.value)
+
 
 def test_xet_fallback_failure_has_safe_structured_diagnostics(
     monkeypatch, tmp_path: Path, caplog
@@ -600,6 +602,7 @@ def test_xet_fallback_failure_has_safe_structured_diagnostics(
     assert records[0].direct_fallback_error_type == "URLError"
     assert retry_secret not in caplog.text
     assert fallback_secret not in caplog.text
+
 
 def test_xet_fallback_rejects_symlink_escape_before_request(monkeypatch, tmp_path: Path) -> None:
     outside = tmp_path / "outside"

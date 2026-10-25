@@ -30,7 +30,6 @@ _REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
 _LOGGER = logging.getLogger(__name__)
 
 
-
 class _HubDownloadKwargs(TypedDict):
     repo_id: str
     filename: str
@@ -39,6 +38,7 @@ class _HubDownloadKwargs(TypedDict):
     local_files_only: bool
     token: None
     library_name: str
+
 
 @dataclass(frozen=True, slots=True)
 class HuggingFaceSource:
@@ -107,6 +107,7 @@ def download_huggingface_file(
             f"{source.repository}@{source.revision}:{source.path}"
         )
     return result
+
 
 def _raise_huggingface_error(
     exc: Exception,
@@ -181,7 +182,6 @@ def _classified_huggingface_error(
     return AssetDownloadError(f"Could not download Hugging Face asset {label} ({error_name})")
 
 
-
 def _attach_xet_recovery_diagnostics(
     error: Exception,
     initial_error: Exception,
@@ -205,7 +205,6 @@ def _attach_xet_recovery_diagnostics(
             "fallback_outcome": "not_attempted",
         }
     )
-
 
 
 def _record_xet_recovery(
@@ -365,6 +364,7 @@ def _recover_missing_xet(
     )
     return result
 
+
 def _xet_retry_transport_error(
     source: HuggingFaceSource,
     initial_error: Exception,
@@ -450,7 +450,6 @@ def _is_missing_xet_transport_error(exc: BaseException) -> bool:
     )
 
 
-
 def _hub_offline_enabled() -> bool:
     return os.environ.get("HF_HUB_OFFLINE", "").casefold() in {"1", "true", "yes"}
 
@@ -493,8 +492,6 @@ def _download_xet_fallback(source: HuggingFaceSource, *, local_dir: Path) -> Pat
     finally:
         with suppress(FileNotFoundError):
             temporary_path.unlink()
-
-
 
 
 def _safe_fallback_summary(exc: Exception) -> str:
