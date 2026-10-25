@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -206,6 +207,84 @@ def _raise_xet_error(**_kwargs) -> None:
     raise ValueError(_XET_ERROR_MESSAGE)
 
 
+
+
+def test_missing_xet_retries_hub_with_runtime_switch_and_exact_arguments(
+    monkeypatch, tmp_path: Path, caplog
+) -> None:
+    caplog.set_level("INFO", logger="onnxvoice.huggingface")
+    constants = ModuleType("huggingface_hub.constants")
+    constants.__dict__["HF_HUB_DISABLE_XET"] = False
+    monkeypatch.setitem(sys.modules, "huggingface_hub.constants", constants)
+    calls = []
+    source = _source()
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ValueError(_XET_ERROR_MESSAGE)
+        assert constants.__dict__["HF_HUB_DISABLE_XET"] is True
+        path = Path(kwargs["local_dir"]) / kwargs["filename"]
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"Hub HTTP retry")
+        return str(path)
+
+    _install_hub(monkeypatch, download)
+    monkeypatch.setattr(
+        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
+    )
+
+    result = download_huggingface_file(source, local_dir=tmp_path, offline=False)
+
+    expected = {
+        "repo_id": source.repository,
+        "filename": source.path,
+        "revision": source.revision,
+        "local_dir": str(tmp_path),
+        "local_files_only": False,
+        "token": None,
+        "library_name": "onnxvoice",
+    }
+    assert result.read_bytes() == b"Hub HTTP retry"
+    assert calls == [expected, expected]
+    assert os.environ["HF_HUB_DISABLE_XET"] == "1"
+    assert constants.__dict__["HF_HUB_DISABLE_XET"] is True
+    records = [record for record in caplog.records if hasattr(record, "recovery_stage")]
+    assert len(records) == 1
+    assert records[0].recovery_stage == "huggingface_download"
+    assert records[0].retry_attempted is True
+    assert records[0].retry_outcome == "succeeded"
+    assert records[0].direct_fallback_attempted is False
+    assert records[0].direct_fallback_outcome == "not_attempted"
+
+
+def test_missing_xet_retry_works_when_constant_is_on_loaded_hub_module(
+    monkeypatch, tmp_path: Path
+) -> None:
+    constants = SimpleNamespace(HF_HUB_DISABLE_XET=False)
+    hub_calls = []
+
+    def download(**kwargs):
+        hub_calls.append(kwargs)
+        if len(hub_calls) == 1:
+            raise ValueError(_XET_ERROR_MESSAGE)
+        assert constants.__dict__["HF_HUB_DISABLE_XET"] is True
+        path = Path(kwargs["local_dir"]) / kwargs["filename"]
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"loaded constants")
+        return str(path)
+
+    hub = _install_hub(monkeypatch, download)
+    hub.__dict__["constants"] = constants
+
+    result = download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
+
+    assert result.read_bytes() == b"loaded constants"
+    assert len(hub_calls) == 2
+    assert hub_calls[0] == hub_calls[1]
+    assert constants.__dict__["HF_HUB_DISABLE_XET"] is True
+
+
 def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -221,24 +300,36 @@ def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
 
     def download(**kwargs):
         hub_calls.append(kwargs)
-        raise ValueError(_XET_ERROR_MESSAGE)
+        if len(hub_calls) == 1:
+            raise ValueError(_XET_ERROR_MESSAGE)
+        raise RuntimeError("HTTP-mode retry unavailable")
 
     def open_url(request, *, timeout):
         url_calls.append((request, timeout))
         return Response(content)
 
-    _install_hub(monkeypatch, download)
+    hub = _install_hub(monkeypatch, download)
+    hub.__dict__["constants"] = ModuleType("huggingface_hub.constants")
     monkeypatch.setattr(huggingface, "urlopen", open_url)
 
     result = download_huggingface_file(source, local_dir=tmp_path, offline=False)
 
+    expected = {
+        "repo_id": source.repository,
+        "filename": source.path,
+        "revision": source.revision,
+        "local_dir": str(tmp_path),
+        "local_files_only": False,
+        "token": None,
+        "library_name": "onnxvoice",
+    }
     assert result.read_bytes() == content
     assert result.is_file()
     assert result.resolve().is_relative_to(tmp_path.resolve())
     assert result == tmp_path / source.path
-    assert hub_calls[0]["repo_id"] == source.repository
-    assert hub_calls[0]["revision"] == source.revision
-    assert hub_calls[0]["filename"] == source.path
+    assert hub_calls == [expected, expected]
+    assert os.environ["HF_HUB_DISABLE_XET"] == "1"
+    assert "HF_HUB_DISABLE_XET" not in hub.__dict__["constants"].__dict__
     request, timeout = url_calls[0]
     assert request.full_url == (
         f"https://huggingface.co/KevinAHM/pocket-tts-onnx/resolve/{source.revision}/{source.path}"
@@ -247,6 +338,28 @@ def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
     assert request.get_header("Authorization") is None
     assert all(size == 64 * 1024 for kind, size in url_calls[1:] if kind == "read")
 
+
+
+def test_missing_file_from_hub_retry_uses_https_fallback(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    source = _source()
+    content = b"retried pinned file"
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ValueError(_XET_ERROR_MESSAGE)
+        return str(tmp_path / "missing-retry-result")
+
+    _install_hub(monkeypatch, download)
+    monkeypatch.setattr(huggingface, "urlopen", lambda *_args, **_kwargs: io.BytesIO(content))
+
+    result = download_huggingface_file(source, local_dir=tmp_path, offline=False)
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert result == tmp_path / source.path
+    assert result.read_bytes() == content
 
 def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
     monkeypatch, tmp_path: Path
@@ -257,7 +370,13 @@ def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
         path=_source().path,
         gated=True,
     )
-    _install_hub(monkeypatch, _raise_xet_error)
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        raise ValueError(_XET_ERROR_MESSAGE)
+
+    _install_hub(monkeypatch, download)
     monkeypatch.setattr(
         huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
     )
@@ -265,13 +384,20 @@ def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
     with pytest.raises(AssetTransportError) as raised:
         download_huggingface_file(source, local_dir=tmp_path, offline=False)
 
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
     assert raised.value.stage == "huggingface_download"
     assert raised.value.native_error_type == "ValueError"
+    assert raised.value.initial_error_type == "ValueError"
+    assert raised.value.retry_attempted is True
+    assert raised.value.retry_failed is True
+    assert raised.value.retry_error_type == "ValueError"
     assert raised.value.fallback_attempted is False
     assert raised.value.fallback_failed is False
+    assert raised.value.retry_outcome == "failed"
+    assert raised.value.fallback_outcome == "not_attempted"
     assert "gated" in str(raised.value).lower()
     assert "hf_xet" in str(raised.value)
-
 
 @pytest.mark.parametrize(("offline", "offline_env"), [(True, None), (False, "1")])
 def test_offline_mode_never_attempts_xet_fallback(
@@ -281,7 +407,13 @@ def test_offline_mode_never_attempts_xet_fallback(
         monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     else:
         monkeypatch.setenv("HF_HUB_OFFLINE", offline_env)
-    _install_hub(monkeypatch, _raise_xet_error)
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        raise ValueError(_XET_ERROR_MESSAGE)
+
+    _install_hub(monkeypatch, download)
     monkeypatch.setattr(
         huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
     )
@@ -289,10 +421,15 @@ def test_offline_mode_never_attempts_xet_fallback(
     with pytest.raises(OfflineError) as raised:
         download_huggingface_file(_source(), local_dir=tmp_path, offline=offline)
 
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[0]["local_files_only"] is offline
     assert "hf_xet" in str(raised.value)
+    assert "retry attempted=yes, failed=yes" in str(raised.value)
     assert "fallback attempted=no" in str(raised.value)
+    assert raised.value.__dict__["retry_outcome"] == "failed"
+    assert raised.value.__dict__["fallback_outcome"] == "not_attempted"
     assert "failed=no" in str(raised.value)
-
 
 @pytest.mark.parametrize(
     ("status", "error_type"),
@@ -301,9 +438,12 @@ def test_offline_mode_never_attempts_xet_fallback(
 def test_xet_message_does_not_override_hub_access_or_not_found_errors(
     monkeypatch, tmp_path: Path, status: int, error_type: type[Exception]
 ) -> None:
-    def download(**_kwargs):
-        error = _StatusValueError(_XET_ERROR_MESSAGE, status)
-        raise error
+    calls = []
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        raise _StatusValueError(_XET_ERROR_MESSAGE, status)
 
     _install_hub(monkeypatch, download)
     monkeypatch.setattr(
@@ -313,15 +453,80 @@ def test_xet_message_does_not_override_hub_access_or_not_found_errors(
     with pytest.raises(error_type):
         download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
 
+    assert len(calls) == 1
+    assert "HF_HUB_DISABLE_XET" not in os.environ
+
+
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [(401, AssetAuthenticationError), (403, AssetPermissionError), (404, AssetNotFoundError)],
+)
+def test_retry_access_and_not_found_errors_are_not_bypassed(
+    monkeypatch, tmp_path: Path, status: int, error_type: type[Exception]
+) -> None:
+    calls = []
+    secret = "hf_RETRY_STATUS_SECRET"
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ValueError(_XET_ERROR_MESSAGE)
+        raise _StatusRuntimeError(f"private response {secret}", status)
+
+    _install_hub(monkeypatch, download)
+    monkeypatch.setattr(
+        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
+    )
+
+    with pytest.raises(error_type) as raised:
+        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert "HTTP-mode retry was attempted" in str(raised.value)
+    assert "fallback was not attempted" in str(raised.value)
+    assert raised.value.__dict__["retry_outcome"] == "failed"
+    assert raised.value.__dict__["fallback_outcome"] == "not_attempted"
+    assert secret not in str(raised.value)
+    assert secret not in repr(raised.value)
+
+
+def test_retry_revision_not_found_is_not_bypassed(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    class RevisionNotFoundError(Exception):
+        pass
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ValueError(_XET_ERROR_MESSAGE)
+        raise RevisionNotFoundError("private revision detail")
+
+    _install_hub(monkeypatch, download)
+    monkeypatch.setattr(
+        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
+    )
+
+    with pytest.raises(AssetNotFoundError) as raised:
+        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
+
+    assert len(calls) == 2
+    assert "not found" in str(raised.value).lower()
+    assert "direct HTTPS fallback was not attempted" in str(raised.value)
 
 def test_unrelated_value_error_is_not_classified_as_xet_or_leaked(
     monkeypatch, tmp_path: Path
 ) -> None:
     secret = "hf_UNRELATED_ERROR_SECRET"
-    _install_hub(
-        monkeypatch,
-        lambda **_kwargs: (_ for _ in ()).throw(ValueError(f"unrelated {secret}")),
-    )
+    calls = []
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        raise ValueError(f"unrelated {secret}")
+
+    _install_hub(monkeypatch, download)
     monkeypatch.setattr(
         huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
     )
@@ -329,34 +534,72 @@ def test_unrelated_value_error_is_not_classified_as_xet_or_leaked(
     with pytest.raises(AssetDownloadError) as raised:
         download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
 
+    assert len(calls) == 1
+    assert "HF_HUB_DISABLE_XET" not in os.environ
     assert not isinstance(raised.value, AssetTransportError)
     assert "ValueError" in str(raised.value)
     assert secret not in str(raised.value)
     assert secret not in repr(raised.value)
 
+def test_xet_fallback_failure_has_safe_structured_diagnostics(
+    monkeypatch, tmp_path: Path, caplog
+) -> None:
+    caplog.set_level("INFO", logger="onnxvoice.huggingface")
+    retry_secret = "hf_RETRY_EXCEPTION_SECRET"
+    fallback_secret = "hf_SIGNED_URL_QUERY_SECRET"
+    fallback_calls = []
+    hub_calls = []
 
-def test_xet_fallback_failure_has_safe_structured_diagnostics(monkeypatch, tmp_path: Path) -> None:
-    secret = "hf_SIGNED_URL_QUERY_SECRET"
-    _install_hub(monkeypatch, _raise_xet_error)
+    def download(**kwargs):
+        hub_calls.append(kwargs)
+        if len(hub_calls) == 1:
+            raise ValueError(_XET_ERROR_MESSAGE)
+        raise RuntimeError(f"private retry response {retry_secret}")
+
+    _install_hub(monkeypatch, download)
 
     def fail_urlopen(_request, *, timeout):
+        fallback_calls.append(_request)
         assert timeout == 30
-        raise URLError(f"https://cdn.example/file?token={secret}")
+        raise URLError(f"https://cdn.example/file?token={fallback_secret}")
 
     monkeypatch.setattr(huggingface, "urlopen", fail_urlopen)
 
     with pytest.raises(AssetTransportError) as raised:
         download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
 
+    assert len(hub_calls) == 2
+    assert len(fallback_calls) == 1
+    assert hub_calls[0] == hub_calls[1]
     assert raised.value.stage == "xet_fallback"
     assert raised.value.native_error_type == "URLError"
+    assert raised.value.initial_error_type == "ValueError"
+    assert raised.value.retry_attempted is True
+    assert raised.value.retry_failed is True
+    assert raised.value.retry_error_type == "RuntimeError"
+    assert raised.value.runtime_switch_activated is False
     assert raised.value.fallback_attempted is True
     assert raised.value.fallback_failed is True
+    assert raised.value.retry_outcome == "failed"
+    assert raised.value.fallback_outcome == "failed"
+    assert raised.value.fallback_error_type == "URLError"
     assert "Hugging Face asset" in str(raised.value)
+    assert "HTTP-mode retry failed" in str(raised.value)
     assert "pinned HTTPS request could not retrieve" in str(raised.value)
-    assert secret not in str(raised.value)
-    assert secret not in repr(raised.value)
-
+    for secret in (retry_secret, fallback_secret):
+        assert secret not in str(raised.value)
+        assert secret not in repr(raised.value)
+    assert raised.value.__cause__ is None
+    records = [record for record in caplog.records if hasattr(record, "recovery_stage")]
+    assert len(records) == 1
+    assert records[0].initial_error_type == "ValueError"
+    assert records[0].retry_outcome == "failed"
+    assert records[0].retry_error_type == "RuntimeError"
+    assert records[0].direct_fallback_attempted is True
+    assert records[0].direct_fallback_outcome == "failed"
+    assert records[0].direct_fallback_error_type == "URLError"
+    assert retry_secret not in caplog.text
+    assert fallback_secret not in caplog.text
 
 def test_xet_fallback_rejects_symlink_escape_before_request(monkeypatch, tmp_path: Path) -> None:
     outside = tmp_path / "outside"

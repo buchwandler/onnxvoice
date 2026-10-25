@@ -40,6 +40,12 @@ class AssetTransportError(AssetDownloadError):
         native_error_type: str,
         fallback_attempted: bool,
         fallback_failed: bool,
+        initial_error_type: str | None = None,
+        retry_attempted: bool = False,
+        retry_failed: bool = False,
+        retry_error_type: str | None = None,
+        runtime_switch_activated: bool = False,
+        fallback_error_type: str | None = None,
     ) -> None:
         self.repository = repository
         self.revision = revision
@@ -48,6 +54,18 @@ class AssetTransportError(AssetDownloadError):
         self.native_error_type = native_error_type
         self.fallback_attempted = fallback_attempted
         self.fallback_failed = fallback_failed
+        self.initial_error_type = initial_error_type
+        self.retry_attempted = retry_attempted
+        self.retry_failed = retry_failed
+        self.retry_error_type = retry_error_type
+        self.runtime_switch_activated = runtime_switch_activated
+        self.fallback_error_type = fallback_error_type
+        self.retry_outcome = (
+            "failed" if retry_failed else "succeeded" if retry_attempted else "not_attempted"
+        )
+        self.fallback_outcome = (
+            "failed" if fallback_failed else "succeeded" if fallback_attempted else "not_attempted"
+        )
         super().__init__(message)
 
 

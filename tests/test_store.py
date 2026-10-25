@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sys
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -392,3 +393,105 @@ def test_xet_fallback_bytes_fail_integrity_without_install_manifest(
 
     assert not store.is_installed("pocket", "bad-xet-fallback")
     assert not store.manifest_path("pocket", "bad-xet-fallback").exists()
+
+
+@pytest.mark.parametrize("retry_payload", [b"expected model byte!", b"short"])
+def test_hub_retry_bytes_fail_integrity_without_install_manifest(
+    tmp_path, monkeypatch, retry_payload: bytes
+) -> None:
+    import onnxvoice.store as store_module
+
+    expected_payload = b"expected model bytes"
+    item = CatalogItem(
+        system="pocket",
+        id="bad-xet-hub-retry",
+        kind="bundle",
+        artifacts=(_huggingface_artifact(expected_payload),),
+        metadata={"canonical_catalog": True},
+    )
+    store = AssetStore(tmp_path / "cache")
+    hub = ModuleType("huggingface_hub")
+    hub.__dict__["constants"] = ModuleType("huggingface_hub.constants")
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ValueError(
+                "Xet storage is enabled, but the hf_xet package is not installed. "
+                "Please install hf_xet."
+            )
+        path = Path(kwargs["local_dir"]) / kwargs["filename"]
+        path.parent.mkdir(parents=True)
+        path.write_bytes(retry_payload)
+        return str(path)
+
+    hub.__dict__["hf_hub_download"] = download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    monkeypatch.setattr(
+        store_module, "download_huggingface_file", huggingface_module.download_huggingface_file
+    )
+
+    with pytest.raises(IntegrityError):
+        store.install(item)
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert not store.is_installed("pocket", "bad-xet-hub-retry")
+    assert not store.manifest_path("pocket", "bad-xet-hub-retry").exists()
+
+
+@pytest.mark.parametrize("recovery_path", ["hub_retry", "https_fallback"])
+def test_valid_xet_recovery_download_installs_through_store(
+    tmp_path, monkeypatch, recovery_path: str
+) -> None:
+    import onnxvoice.store as store_module
+
+    payload = b"verified model bytes"
+    item = CatalogItem(
+        system="pocket",
+        id=f"good-xet-{recovery_path}",
+        kind="bundle",
+        artifacts=(_huggingface_artifact(payload),),
+        metadata={"canonical_catalog": True},
+    )
+    store = AssetStore(tmp_path / "cache")
+    hub = ModuleType("huggingface_hub")
+    hub.__dict__["constants"] = ModuleType("huggingface_hub.constants")
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ValueError(
+                "Xet storage is enabled, but the hf_xet package is not installed. "
+                "Please install hf_xet."
+            )
+        if recovery_path == "https_fallback":
+            raise RuntimeError("Hub HTTP retry failed")
+        path = Path(kwargs["local_dir"]) / kwargs["filename"]
+        path.parent.mkdir(parents=True)
+        path.write_bytes(payload)
+        return str(path)
+
+    hub.__dict__["hf_hub_download"] = download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    monkeypatch.setattr(
+        store_module, "download_huggingface_file", huggingface_module.download_huggingface_file
+    )
+
+    def open_url(request, *, timeout):
+        assert recovery_path == "https_fallback"
+        assert request.full_url == (
+            f"https://huggingface.co/owner/repo/resolve/{'a' * 40}/onnx/bundle/model.onnx"
+        )
+        assert timeout == 30
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(huggingface_module, "urlopen", open_url)
+    installed = store.install(item)
+
+    assert installed.artifact("flow_lm_main").path.read_bytes() == payload
+    assert store.is_installed("pocket", f"good-xet-{recovery_path}")
+    assert store.manifest_path("pocket", f"good-xet-{recovery_path}").exists()
+    assert len(calls) == 2
