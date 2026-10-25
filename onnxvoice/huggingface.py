@@ -414,7 +414,7 @@ def _disable_xet_for_current_process(hub: ModuleType) -> bool:
     """Disable Xet for this process and update Hub's loaded runtime switch if available."""
     os.environ["HF_HUB_DISABLE_XET"] = "1"
     try:
-        constants = getattr(hub, "constants", None)
+        constants: Any = getattr(hub, "constants", None)
         if constants is None:
             constants = importlib.import_module("huggingface_hub.constants")
         if not hasattr(constants, "HF_HUB_DISABLE_XET"):
