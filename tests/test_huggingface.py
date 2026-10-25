@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from urllib.error import URLError
+from urllib.request import Request
 
 import pytest
 
@@ -288,7 +289,7 @@ def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
 ) -> None:
     source = _source()
     hub_calls = []
-    url_calls = []
+    url_calls: list[tuple[Request, int] | tuple[str, int | None]] = []
     content = b"fallback asset" * 7000
 
     class Response(io.BytesIO):
@@ -302,7 +303,7 @@ def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
             raise ValueError(_XET_ERROR_MESSAGE)
         raise RuntimeError("HTTP-mode retry unavailable")
 
-    def open_url(request, *, timeout):
+    def open_url(request: Request, *, timeout: int) -> Response:
         url_calls.append((request, timeout))
         return Response(content)
 
@@ -329,6 +330,7 @@ def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
     assert os.environ["HF_HUB_DISABLE_XET"] == "1"
     assert "HF_HUB_DISABLE_XET" not in hub.__dict__["constants"].__dict__
     request, timeout = url_calls[0]
+    assert isinstance(request, Request)
     assert request.full_url == (
         f"https://huggingface.co/KevinAHM/pocket-tts-onnx/resolve/{source.revision}/{source.path}"
     )
