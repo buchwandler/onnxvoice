@@ -1,0 +1,594 @@
+ onnxvoice/errors.py       |  25 ++++++
+ onnxvoice/huggingface.py  | 165 +++++++++++++++++++++++++++++++++++--
+ tests/test_huggingface.py | 206 +++++++++++++++++++++++++++++++++++++++++++++-
+ tests/test_store.py       |  52 ++++++++++++
+ 4 files changed, 440 insertions(+), 8 deletions(-)
+
+diff --git a/onnxvoice/errors.py b/onnxvoice/errors.py
+index f0d2a80..5e60eb0 100644
+--- a/onnxvoice/errors.py
++++ b/onnxvoice/errors.py
+@@ -26,6 +26,31 @@ class AssetDownloadError(OnnxVoiceError):
+     """A remote asset could not be downloaded."""
+
+
++class AssetTransportError(AssetDownloadError):
++    """A remote asset transport is unavailable or its safe fallback failed."""
++
++    def __init__(
++        self,
++        message: str,
++        *,
++        repository: str,
++        revision: str,
++        path: str,
++        stage: str,
++        native_error_type: str,
++        fallback_attempted: bool,
++        fallback_failed: bool,
++    ) -> None:
++        self.repository = repository
++        self.revision = revision
++        self.path = path
++        self.stage = stage
++        self.native_error_type = native_error_type
++        self.fallback_attempted = fallback_attempted
++        self.fallback_failed = fallback_failed
++        super().__init__(message)
++
++
+ class AssetAccessError(AssetDownloadError):
+     """A remote asset requires credentials or repository access."""
+
+diff --git a/onnxvoice/huggingface.py b/onnxvoice/huggingface.py
+index 6a3fecd..fce0a1f 100644
+--- a/onnxvoice/huggingface.py
++++ b/onnxvoice/huggingface.py
+@@ -3,16 +3,23 @@ from __future__ import annotations
+ import importlib
+ import os
+ import re
++import socket
++import tempfile
++from contextlib import suppress
+ from dataclasses import dataclass
+ from pathlib import Path
+ from types import ModuleType
+ from typing import Any
++from urllib.error import HTTPError, URLError
++from urllib.parse import quote
++from urllib.request import Request, urlopen
+
+ from .errors import (
+     AssetAuthenticationError,
+     AssetDownloadError,
+     AssetNotFoundError,
+     AssetPermissionError,
++    AssetTransportError,
+     OfflineError,
+     OptionalDependencyError,
+ )
+@@ -72,7 +79,7 @@ def download_huggingface_file(
+             library_name="onnxvoice",
+         )
+     except Exception as exc:
+-        _raise_huggingface_error(exc, source=source, offline=offline)
++        return _raise_huggingface_error(exc, source=source, offline=offline, local_dir=local_dir)
+
+     result = Path(downloaded)
+     if not result.is_file():
+@@ -88,7 +95,8 @@ def _raise_huggingface_error(
+     *,
+     source: HuggingFaceSource,
+     offline: bool,
+-) -> None:
++    local_dir: Path,
++) -> Path:
+     error_types = _hub_error_types()
+     status = _http_status(exc)
+     label = f"{source.repository}@{source.revision}:{source.path}"
+@@ -112,10 +120,6 @@ def _raise_huggingface_error(
+         ) from exc
+     if _is_instance(exc, error_types["missing"]) or status == 404:
+         raise AssetNotFoundError(f"Hugging Face asset not found: {label}") from exc
+-    if offline:
+-        raise OfflineError(
+-            f"Hugging Face asset {label} could not be resolved while offline"
+-        ) from exc
+
+     error_name = type(exc).__name__
+     if error_name == "GatedRepoError":
+@@ -136,11 +140,160 @@ def _raise_huggingface_error(
+             f"Hugging Face asset {label} is not available in the local cache"
+         ) from exc
+
++    if _is_missing_xet_transport_error(exc):
++        limitation = (
++            "Hugging Face Hub requires the optional hf_xet transport, but it is unavailable."
++        )
++        if offline or _hub_offline_enabled():
++            raise OfflineError(
++                f"Could not download Hugging Face asset {label} "
++                f"(huggingface_download, {error_name}; fallback attempted=no, failed=no): "
++                f"{limitation} Offline mode is local-cache-only; connect to the network or "
++                "install a usable hf_xet transport, then retry."
++            ) from exc
++        if source.gated:
++            raise AssetTransportError(
++                f"Could not download Hugging Face asset {label} "
++                f"(huggingface_download, {error_name}; fallback attempted=no, failed=no): "
++                f"{limitation} The source is marked gated, so no unauthenticated HTTPS "
++                "fallback was attempted. Authenticate and install a usable hf_xet transport, "
++                "then retry.",
++                repository=source.repository,
++                revision=source.revision,
++                path=source.path,
++                stage="huggingface_download",
++                native_error_type=error_name,
++                fallback_attempted=False,
++                fallback_failed=False,
++            ) from exc
++        try:
++            return _download_xet_fallback(source, local_dir=local_dir)
++        except Exception as fallback_exc:
++            raise _xet_fallback_error(source, exc, fallback_exc) from fallback_exc
++
++    if offline:
++        raise OfflineError(
++            f"Hugging Face asset {label} could not be resolved while offline"
++        ) from exc
++
+     raise AssetDownloadError(
+         f"Could not download Hugging Face asset {label} ({error_name})"
+     ) from exc
+
+
++def _is_missing_xet_transport_error(exc: BaseException) -> bool:
++    if not isinstance(exc, ValueError) and not type(exc).__module__.startswith("huggingface_hub."):
++        return False
++    if _http_status(exc) is not None:
++        return False
++    message = str(exc).casefold()
++    if "xet" not in message or "hf_xet" not in message:
++        return False
++    return any(
++        phrase in message
++        for phrase in (
++            "not installed",
++            "not available",
++            "unavailable",
++            "missing",
++            "not found",
++            "could not import",
++            "cannot import",
++            "please install",
++            "install hf_xet",
++            "requires hf_xet",
++        )
++    )
++
++
++def _hub_offline_enabled() -> bool:
++    return os.environ.get("HF_HUB_OFFLINE", "").casefold() in {"1", "true", "yes"}
++
++
++def _download_xet_fallback(source: HuggingFaceSource, *, local_dir: Path) -> Path:
++    relative_path = validate_relative_path(source.path, field_name="Hugging Face repository path")
++    root = Path(local_dir)
++    root.mkdir(parents=True, exist_ok=True)
++    root = root.resolve()
++
++    parts = relative_path.split("/")
++    parent = root
++    for part in parts[:-1]:
++        candidate = parent / part
++        with suppress(FileExistsError):
++            candidate.mkdir()
++        resolved = candidate.resolve()
++        if not resolved.is_relative_to(root) or not resolved.is_dir():
++            raise ValueError("Hugging Face fallback path escapes local_dir")
++        parent = resolved
++    destination = parent / parts[-1]
++
++    url = (
++        "https://huggingface.co/"
++        f"{quote(source.repository, safe='/')}/resolve/"
++        f"{quote(source.revision, safe='')}/"
++        f"{quote(relative_path, safe='/')}"
++    )
++    request = Request(url, headers={"User-Agent": "onnxvoice"})
++    descriptor, temporary_name = tempfile.mkstemp(prefix=".onnxvoice-", dir=parent)
++    temporary_path = Path(temporary_name)
++    try:
++        with os.fdopen(descriptor, "wb") as output, urlopen(request, timeout=30) as response:
++            while chunk := response.read(64 * 1024):
++                output.write(chunk)
++        os.replace(temporary_path, destination)
++        if not destination.is_file() or not destination.resolve().is_relative_to(root):
++            raise OSError("Hugging Face fallback did not produce a file beneath local_dir")
++        return destination
++    finally:
++        with suppress(FileNotFoundError):
++            temporary_path.unlink()
++
++
++def _xet_fallback_error(
++    source: HuggingFaceSource,
++    hub_error: Exception,
++    fallback_error: Exception,
++) -> AssetTransportError:
++    fallback_type = type(fallback_error).__name__
++    hub_type = type(hub_error).__name__
++    label = f"{source.repository}@{source.revision}:{source.path}"
++    return AssetTransportError(
++        f"Could not download Hugging Face asset {label} "
++        f"(xet_fallback, {fallback_type}; fallback attempted=yes, failed=yes; "
++        f"Hugging Face error={hub_type}): {_safe_fallback_summary(fallback_error)} "
++        "Verify that the pinned public asset is reachable over HTTPS, then retry.",
++        repository=source.repository,
++        revision=source.revision,
++        path=source.path,
++        stage="xet_fallback",
++        native_error_type=fallback_type,
++        fallback_attempted=True,
++        fallback_failed=True,
++    )
++
++
++def _safe_fallback_summary(exc: Exception) -> str:
++    status = _http_status(exc)
++    if status is None:
++        code = getattr(exc, "code", None)
++        status = code if isinstance(code, int) else None
++    if status in {401, 403}:
++        return "The pinned HTTPS request was denied by the server."
++    if status == 404:
++        return "The pinned HTTPS file was not found."
++    if status is not None:
++        return f"The pinned HTTPS request returned HTTP status {status}."
++    reason = getattr(exc, "reason", None)
++    if isinstance(exc, (TimeoutError, socket.timeout)) or isinstance(
++        reason, (TimeoutError, socket.timeout)
++    ):
++        return "The pinned HTTPS request timed out."
++    if isinstance(exc, (HTTPError, URLError)):
++        return "The pinned HTTPS request could not retrieve the file."
++    return "The pinned HTTPS fallback could not retrieve or write the file."
++
++
+ def _hub_error_types() -> dict[str, tuple[type[BaseException], ...]]:
+     modules: list[ModuleType] = []
+     for name in ("huggingface_hub.errors", "huggingface_hub.utils"):
+diff --git a/tests/test_huggingface.py b/tests/test_huggingface.py
+index 7cf5dde..d2e685b 100644
+--- a/tests/test_huggingface.py
++++ b/tests/test_huggingface.py
+@@ -1,17 +1,21 @@
+ from __future__ import annotations
+
+ import importlib
++import io
+ import sys
+ from pathlib import Path
+ from types import ModuleType, SimpleNamespace
++from urllib.error import URLError
+
+ import pytest
+
++import onnxvoice.huggingface as huggingface
+ from onnxvoice.errors import (
+     AssetAuthenticationError,
+     AssetDownloadError,
+     AssetNotFoundError,
+     AssetPermissionError,
++    AssetTransportError,
+     OfflineError,
+     OptionalDependencyError,
+ )
+@@ -30,6 +34,22 @@ def _source() -> HuggingFaceSource:
+     )
+
+
++class _StatusRuntimeError(RuntimeError):
++    response: SimpleNamespace
++
++    def __init__(self, message: str, status: int) -> None:
++        super().__init__(message)
++        self.response = SimpleNamespace(status_code=status)
++
++
++class _StatusValueError(ValueError):
++    response: SimpleNamespace
++
++    def __init__(self, message: str, status: int) -> None:
++        super().__init__(message)
++        self.response = SimpleNamespace(status_code=status)
++
++
+ def _install_hub(monkeypatch, download) -> ModuleType:
+     hub = ModuleType("huggingface_hub")
+     hub.__dict__["hf_hub_download"] = download
+@@ -128,8 +148,7 @@ def test_http_errors_map_without_exposing_exception_text(
+     secret = "hf_FAKE_SECRET_SENTINEL"
+
+     def download(**_kwargs):
+-        error = RuntimeError(f"request failed with {secret}")
+-        error.response = SimpleNamespace(status_code=status)
++        error = _StatusRuntimeError(f"request failed with {secret}", status)
+         raise error
+
+     _install_hub(monkeypatch, download)
+@@ -175,3 +194,186 @@ def test_offline_local_cache_miss_maps_to_offline_error(monkeypatch, tmp_path: P
+     _install_hub(monkeypatch, download)
+     with pytest.raises(OfflineError, match="while offline"):
+         download_huggingface_file(_source(), local_dir=tmp_path, offline=True)
++
++
++_XET_ERROR_MESSAGE = (
++    "Xet storage is enabled for this repository, but the hf_xet package is not installed. "
++    "Please install hf_xet to use this transport."
++)
++
++
++def _raise_xet_error(**_kwargs) -> None:
++    raise ValueError(_XET_ERROR_MESSAGE)
++
++
++def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
++    monkeypatch, tmp_path: Path
++) -> None:
++    source = _source()
++    hub_calls = []
++    url_calls = []
++    content = b"fallback asset" * 7000
++
++    class Response(io.BytesIO):
++        def read(self, size: int | None = -1) -> bytes:
++            url_calls.append(("read", size))
++            return super().read(size)
++
++    def download(**kwargs):
++        hub_calls.append(kwargs)
++        raise ValueError(_XET_ERROR_MESSAGE)
++
++    def open_url(request, *, timeout):
++        url_calls.append((request, timeout))
++        return Response(content)
++
++    _install_hub(monkeypatch, download)
++    monkeypatch.setattr(huggingface, "urlopen", open_url)
++
++    result = download_huggingface_file(source, local_dir=tmp_path, offline=False)
++
++    assert result.read_bytes() == content
++    assert result.is_file()
++    assert result.resolve().is_relative_to(tmp_path.resolve())
++    assert result == tmp_path / source.path
++    assert hub_calls[0]["repo_id"] == source.repository
++    assert hub_calls[0]["revision"] == source.revision
++    assert hub_calls[0]["filename"] == source.path
++    request, timeout = url_calls[0]
++    assert request.full_url == (
++        f"https://huggingface.co/KevinAHM/pocket-tts-onnx/resolve/{source.revision}/{source.path}"
++    )
++    assert timeout == 30
++    assert request.get_header("Authorization") is None
++    assert all(size == 64 * 1024 for kind, size in url_calls[1:] if kind == "read")
++
++
++def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
++    monkeypatch, tmp_path: Path
++) -> None:
++    source = HuggingFaceSource(
++        repository=_source().repository,
++        revision=_source().revision,
++        path=_source().path,
++        gated=True,
++    )
++    _install_hub(monkeypatch, _raise_xet_error)
++    monkeypatch.setattr(
++        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
++    )
++
++    with pytest.raises(AssetTransportError) as raised:
++        download_huggingface_file(source, local_dir=tmp_path, offline=False)
++
++    assert raised.value.stage == "huggingface_download"
++    assert raised.value.native_error_type == "ValueError"
++    assert raised.value.fallback_attempted is False
++    assert raised.value.fallback_failed is False
++    assert "gated" in str(raised.value).lower()
++    assert "hf_xet" in str(raised.value)
++
++
++@pytest.mark.parametrize(("offline", "offline_env"), [(True, None), (False, "1")])
++def test_offline_mode_never_attempts_xet_fallback(
++    monkeypatch, tmp_path: Path, offline: bool, offline_env: str | None
++) -> None:
++    if offline_env is None:
++        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
++    else:
++        monkeypatch.setenv("HF_HUB_OFFLINE", offline_env)
++    _install_hub(monkeypatch, _raise_xet_error)
++    monkeypatch.setattr(
++        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
++    )
++
++    with pytest.raises(OfflineError) as raised:
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=offline)
++
++    assert "hf_xet" in str(raised.value)
++    assert "fallback attempted=no" in str(raised.value)
++    assert "failed=no" in str(raised.value)
++
++
++@pytest.mark.parametrize(
++    ("status", "error_type"),
++    [(401, AssetAuthenticationError), (403, AssetPermissionError), (404, AssetNotFoundError)],
++)
++def test_xet_message_does_not_override_hub_access_or_not_found_errors(
++    monkeypatch, tmp_path: Path, status: int, error_type: type[Exception]
++) -> None:
++    def download(**_kwargs):
++        error = _StatusValueError(_XET_ERROR_MESSAGE, status)
++        raise error
++
++    _install_hub(monkeypatch, download)
++    monkeypatch.setattr(
++        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
++    )
++
++    with pytest.raises(error_type):
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++
++
++def test_unrelated_value_error_is_not_classified_as_xet_or_leaked(
++    monkeypatch, tmp_path: Path
++) -> None:
++    secret = "hf_UNRELATED_ERROR_SECRET"
++    _install_hub(
++        monkeypatch,
++        lambda **_kwargs: (_ for _ in ()).throw(ValueError(f"unrelated {secret}")),
++    )
++    monkeypatch.setattr(
++        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
++    )
++
++    with pytest.raises(AssetDownloadError) as raised:
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++
++    assert not isinstance(raised.value, AssetTransportError)
++    assert "ValueError" in str(raised.value)
++    assert secret not in str(raised.value)
++    assert secret not in repr(raised.value)
++
++
++def test_xet_fallback_failure_has_safe_structured_diagnostics(monkeypatch, tmp_path: Path) -> None:
++    secret = "hf_SIGNED_URL_QUERY_SECRET"
++    _install_hub(monkeypatch, _raise_xet_error)
++
++    def fail_urlopen(_request, *, timeout):
++        assert timeout == 30
++        raise URLError(f"https://cdn.example/file?token={secret}")
++
++    monkeypatch.setattr(huggingface, "urlopen", fail_urlopen)
++
++    with pytest.raises(AssetTransportError) as raised:
++        download_huggingface_file(_source(), local_dir=tmp_path, offline=False)
++
++    assert raised.value.stage == "xet_fallback"
++    assert raised.value.native_error_type == "URLError"
++    assert raised.value.fallback_attempted is True
++    assert raised.value.fallback_failed is True
++    assert "Hugging Face asset" in str(raised.value)
++    assert "pinned HTTPS request could not retrieve" in str(raised.value)
++    assert secret not in str(raised.value)
++    assert secret not in repr(raised.value)
++
++
++def test_xet_fallback_rejects_symlink_escape_before_request(monkeypatch, tmp_path: Path) -> None:
++    outside = tmp_path / "outside"
++    outside.mkdir()
++    local_dir = tmp_path / "local"
++    local_dir.mkdir()
++    try:
++        (local_dir / "onnx").symlink_to(outside, target_is_directory=True)
++    except (NotImplementedError, OSError):
++        pytest.skip("directory symlinks are not supported")
++    _install_hub(monkeypatch, _raise_xet_error)
++    monkeypatch.setattr(
++        huggingface, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected HTTPS fallback")
++    )
++
++    with pytest.raises(AssetTransportError) as raised:
++        download_huggingface_file(_source(), local_dir=local_dir, offline=False)
++
++    assert raised.value.stage == "xet_fallback"
++    assert not list(outside.iterdir())
+diff --git a/tests/test_store.py b/tests/test_store.py
+index 7ef3eb8..9880485 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -1,12 +1,16 @@
+ from __future__ import annotations
+
+ import hashlib
++import io
+ import json
+ import os
++import sys
++from types import ModuleType
+ from typing import Any
+
+ import pytest
+
++import onnxvoice.huggingface as huggingface_module
+ from onnxvoice.errors import IntegrityError, OfflineError
+ from onnxvoice.store import AssetStore
+ from onnxvoice.types import Artifact, CatalogItem
+@@ -310,6 +314,7 @@ def test_pocket_huggingface_download_still_checks_checksum(tmp_path, monkeypatch
+     )
+
+     def download(source, *, local_dir, offline):
++        assert offline is False
+         path = local_dir / source.path
+         path.parent.mkdir(parents=True)
+         path.write_bytes(payload)
+@@ -318,6 +323,8 @@ def test_pocket_huggingface_download_still_checks_checksum(tmp_path, monkeypatch
+     monkeypatch.setattr(store_module, "download_huggingface_file", download)
+     with pytest.raises(IntegrityError):
+         store.install(item)
++    assert not store.is_installed("pocket", "bad-digest")
++    assert not store.manifest_path("pocket", "bad-digest").exists()
+
+
+ def test_offline_pocket_cache_miss_does_not_invoke_huggingface(tmp_path, monkeypatch) -> None:
+@@ -340,3 +347,48 @@ def test_offline_pocket_cache_miss_does_not_invoke_huggingface(tmp_path, monkeyp
+
+     with pytest.raises(OfflineError):
+         store.install(item)
++
++
++@pytest.mark.parametrize("fallback_payload", [b"expected model byte!", b"short"])
++def test_xet_fallback_bytes_fail_integrity_without_install_manifest(
++    tmp_path, monkeypatch, fallback_payload: bytes
++) -> None:
++    import onnxvoice.store as store_module
++
++    expected_payload = b"expected model bytes"
++    item = CatalogItem(
++        system="pocket",
++        id="bad-xet-fallback",
++        kind="bundle",
++        artifacts=(_huggingface_artifact(expected_payload),),
++        metadata={"canonical_catalog": True},
++    )
++    store = AssetStore(tmp_path / "cache")
++    hub = ModuleType("huggingface_hub")
++
++    def fail_hub_download(**_kwargs):
++        raise ValueError(
++            "Xet storage is enabled, but the hf_xet package is not installed. "
++            "Please install hf_xet."
++        )
++
++    hub.__dict__["hf_hub_download"] = fail_hub_download
++    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
++
++    def open_url(request, *, timeout):
++        assert request.full_url == (
++            f"https://huggingface.co/owner/repo/resolve/{'a' * 40}/onnx/bundle/model.onnx"
++        )
++        assert timeout == 30
++        return io.BytesIO(fallback_payload)
++
++    monkeypatch.setattr(huggingface_module, "urlopen", open_url)
++    monkeypatch.setattr(
++        store_module, "download_huggingface_file", huggingface_module.download_huggingface_file
++    )
++
++    with pytest.raises(IntegrityError):
++        store.install(item)
++
++    assert not store.is_installed("pocket", "bad-xet-fallback")
++    assert not store.manifest_path("pocket", "bad-xet-fallback").exists()

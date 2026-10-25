@@ -1,0 +1,84 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.14
+git_base_ref: v0.2.13
+git_base_sha: 6dee40514527c10f117f5b33d943cf33e1759b6f
+git_head_ref: HEAD
+git_head_sha: b07663f89a78237990e118de352077abd6b08b8d
+git_range: 6dee40514527c10f117f5b33d943cf33e1759b6f..b07663f89a78237990e118de352077abd6b08b8d
+commit_count: 4
+rows:
+  - sha: 0ed88350f75c0b538007d1cba634b8a50c979b83
+    source_ref: git:0ed88350f75c0b538007d1cba634b8a50c979b83
+    short_sha: 0ed8835
+    changed_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    stats:
+      files_changed: 4
+      insertions: 440
+      deletions: 8
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: better error execption"
+  - sha: 89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2
+    source_ref: git:89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2
+    short_sha: 89bc62f
+    changed_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    stats:
+      files_changed: 4
+      insertions: 703
+      deletions: 109
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "fix: download with hf hub"
+  - sha: 8a479fb813d30ce383a258d6d32fe73c38de1408
+    source_ref: git:8a479fb813d30ce383a258d6d32fe73c38de1408
+    short_sha: 8a479fb
+    changed_paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    stats:
+      files_changed: 2
+      insertions: 9
+      deletions: 9
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "chore: pre-commit"
+  - sha: b07663f89a78237990e118de352077abd6b08b8d
+    source_ref: git:b07663f89a78237990e118de352077abd6b08b8d
+    short_sha: b07663f
+    changed_paths:
+      - onnxvoice/huggingface.py
+    stats:
+      files_changed: 1
+      insertions: 2
+      deletions: 2
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "chore: mypy"

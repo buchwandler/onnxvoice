@@ -1,0 +1,63 @@
+{
+  "candidate_count": 4,
+  "candidates": [
+    {
+      "additions": 440,
+      "deletions": 8,
+      "patch_file": "0ed8835.patch",
+      "patch_sha256": "9f24f0161dfadc63df486acd142f61f017b4bcbe51c1748685dd01552330f7cd",
+      "paths": [
+        "onnxvoice/errors.py",
+        "onnxvoice/huggingface.py",
+        "tests/test_huggingface.py",
+        "tests/test_store.py"
+      ],
+      "sha": "0ed88350f75c0b538007d1cba634b8a50c979b83",
+      "short_sha": "0ed8835",
+      "source_ref": "git:0ed88350f75c0b538007d1cba634b8a50c979b83"
+    },
+    {
+      "additions": 703,
+      "deletions": 109,
+      "patch_file": "89bc62f.patch",
+      "patch_sha256": "5d4d43d87b4d3f1f4390a3bde118d5fdc4162a2f4f7754b67a84e702062b1e68",
+      "paths": [
+        "onnxvoice/errors.py",
+        "onnxvoice/huggingface.py",
+        "tests/test_huggingface.py",
+        "tests/test_store.py"
+      ],
+      "sha": "89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2",
+      "short_sha": "89bc62f",
+      "source_ref": "git:89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2"
+    },
+    {
+      "additions": 9,
+      "deletions": 9,
+      "patch_file": "8a479fb.patch",
+      "patch_sha256": "9873db5ff84558d4b4973a30cfead4fd0bb8c1f13f3c1823b46641f0fdd7dc45",
+      "paths": ["onnxvoice/huggingface.py", "tests/test_huggingface.py"],
+      "sha": "8a479fb813d30ce383a258d6d32fe73c38de1408",
+      "short_sha": "8a479fb",
+      "source_ref": "git:8a479fb813d30ce383a258d6d32fe73c38de1408"
+    },
+    {
+      "additions": 2,
+      "deletions": 2,
+      "patch_file": "b07663f.patch",
+      "patch_sha256": "b30193ccda90ef3527c9d0a09b49547e246921daefd66613fb4ff086698854cb",
+      "paths": ["onnxvoice/huggingface.py"],
+      "sha": "b07663f89a78237990e118de352077abd6b08b8d",
+      "short_sha": "b07663f",
+      "source_ref": "git:b07663f89a78237990e118de352077abd6b08b8d"
+    }
+  ],
+  "git_base_ref": "6dee40514527c10f117f5b33d943cf33e1759b6f",
+  "git_base_sha": "6dee40514527c10f117f5b33d943cf33e1759b6f",
+  "git_head_ref": "b07663f89a78237990e118de352077abd6b08b8d",
+  "git_head_sha": "b07663f89a78237990e118de352077abd6b08b8d",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.14",
+  "schema_version": 1
+}

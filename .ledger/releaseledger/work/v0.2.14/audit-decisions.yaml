@@ -1,0 +1,52 @@
+rows:
+  - sha: 0ed88350f75c0b538007d1cba634b8a50c979b83
+    inspected: true
+    inspected_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    observed_behavior: "Introduced structured transport errors and a safe pinned-HTTPS fallback for missing Hugging Face Xet support, including path containment and redacted diagnostics."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: 89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2
+    inspected: true
+    inspected_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    observed_behavior: "Improved Hugging Face recovery by retrying with Xet disabled, preserving access and not-found classification, and recording safe retry and fallback outcomes."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: 8a479fb813d30ce383a258d6d32fe73c38de1408
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    observed_behavior: "Applied formatting-only cleanup to the Hugging Face recovery implementation and its tests."
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: b07663f89a78237990e118de352077abd6b08b8d
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+    observed_behavior: "Adjusted an attribute assignment to satisfy static typing without changing runtime behavior."
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

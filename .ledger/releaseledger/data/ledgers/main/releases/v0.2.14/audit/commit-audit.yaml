@@ -1,0 +1,113 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 3
+release_version: v0.2.14
+git_base_ref: v0.2.13
+git_base_sha: 6dee40514527c10f117f5b33d943cf33e1759b6f
+git_head_ref: HEAD
+git_head_sha: b07663f89a78237990e118de352077abd6b08b8d
+git_range: 6dee40514527c10f117f5b33d943cf33e1759b6f..b07663f89a78237990e118de352077abd6b08b8d
+commit_count: 4
+rows:
+  - sha: 0ed88350f75c0b538007d1cba634b8a50c979b83
+    source_ref: git:0ed88350f75c0b538007d1cba634b8a50c979b83
+    short_sha: 0ed8835
+    changed_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    stats:
+      files_changed: 4
+      insertions: 440
+      deletions: 8
+    inspected: true
+    inspected_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    observed_behavior:
+      Introduced structured transport errors and a safe pinned-HTTPS
+      fallback for missing Hugging Face Xet support, including path containment and
+      redacted diagnostics.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: better error execption"
+    target_entry_id: entry-0001
+    notes: ""
+  - sha: 89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2
+    source_ref: git:89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2
+    short_sha: 89bc62f
+    changed_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    stats:
+      files_changed: 4
+      insertions: 703
+      deletions: 109
+    inspected: true
+    inspected_paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    observed_behavior:
+      Improved Hugging Face recovery by retrying with Xet disabled,
+      preserving access and not-found classification, and recording safe retry and fallback
+      outcomes.
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "fix: download with hf hub"
+    target_entry_id: entry-0002
+    notes: ""
+  - sha: 8a479fb813d30ce383a258d6d32fe73c38de1408
+    source_ref: git:8a479fb813d30ce383a258d6d32fe73c38de1408
+    short_sha: 8a479fb
+    changed_paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    stats:
+      files_changed: 2
+      insertions: 9
+      deletions: 9
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    observed_behavior:
+      Applied formatting-only cleanup to the Hugging Face recovery
+      implementation and its tests.
+    public_impact: internal
+    decision: internal
+    stale: false
+    evidence_subject: "chore: pre-commit"
+    target_entry_id: entry-0003
+    notes: ""
+  - sha: b07663f89a78237990e118de352077abd6b08b8d
+    source_ref: git:b07663f89a78237990e118de352077abd6b08b8d
+    short_sha: b07663f
+    changed_paths:
+      - onnxvoice/huggingface.py
+    stats:
+      files_changed: 1
+      insertions: 2
+      deletions: 2
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+    observed_behavior:
+      Adjusted an attribute assignment to satisfy static typing without
+      changing runtime behavior.
+    public_impact: internal
+    decision: internal
+    stale: false
+    evidence_subject: "chore: mypy"
+    target_entry_id: entry-0004
+    notes: ""

@@ -1,0 +1,142 @@
+ onnxvoice/huggingface.py  | 9 +++------
+ tests/test_huggingface.py | 9 ++++++---
+ 2 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/onnxvoice/huggingface.py b/onnxvoice/huggingface.py
+index c3c8b60..5f90036 100644
+--- a/onnxvoice/huggingface.py
++++ b/onnxvoice/huggingface.py
+@@ -30,7 +30,6 @@ _REPOSITORY_RE = re.compile(r"^[^/\\\s]+/[^/\\\s]+$")
+ _LOGGER = logging.getLogger(__name__)
+
+
+-
+ class _HubDownloadKwargs(TypedDict):
+     repo_id: str
+     filename: str
+@@ -40,6 +39,7 @@ class _HubDownloadKwargs(TypedDict):
+     token: None
+     library_name: str
+
++
+ @dataclass(frozen=True, slots=True)
+ class HuggingFaceSource:
+     repository: str
+@@ -108,6 +108,7 @@ def download_huggingface_file(
+         )
+     return result
+
++
+ def _raise_huggingface_error(
+     exc: Exception,
+     *,
+@@ -181,7 +182,6 @@ def _classified_huggingface_error(
+     return AssetDownloadError(f"Could not download Hugging Face asset {label} ({error_name})")
+
+
+-
+ def _attach_xet_recovery_diagnostics(
+     error: Exception,
+     initial_error: Exception,
+@@ -207,7 +207,6 @@ def _attach_xet_recovery_diagnostics(
+     )
+
+
+-
+ def _record_xet_recovery(
+     initial_error: Exception,
+     *,
+@@ -365,6 +364,7 @@ def _recover_missing_xet(
+     )
+     return result
+
++
+ def _xet_retry_transport_error(
+     source: HuggingFaceSource,
+     initial_error: Exception,
+@@ -450,7 +450,6 @@ def _is_missing_xet_transport_error(exc: BaseException) -> bool:
+     )
+
+
+-
+ def _hub_offline_enabled() -> bool:
+     return os.environ.get("HF_HUB_OFFLINE", "").casefold() in {"1", "true", "yes"}
+
+@@ -495,8 +494,6 @@ def _download_xet_fallback(source: HuggingFaceSource, *, local_dir: Path) -> Pat
+             temporary_path.unlink()
+
+
+-
+-
+ def _safe_fallback_summary(exc: Exception) -> str:
+     status = _http_status(exc)
+     if status is None:
+diff --git a/tests/test_huggingface.py b/tests/test_huggingface.py
+index a59681e..af6a1f6 100644
+--- a/tests/test_huggingface.py
++++ b/tests/test_huggingface.py
+@@ -207,8 +207,6 @@ def _raise_xet_error(**_kwargs) -> None:
+     raise ValueError(_XET_ERROR_MESSAGE)
+
+
+-
+-
+ def test_missing_xet_retries_hub_with_runtime_switch_and_exact_arguments(
+     monkeypatch, tmp_path: Path, caplog
+ ) -> None:
+@@ -339,7 +337,6 @@ def test_missing_xet_transport_falls_back_to_exact_pinned_https_file(
+     assert all(size == 64 * 1024 for kind, size in url_calls[1:] if kind == "read")
+
+
+-
+ def test_missing_file_from_hub_retry_uses_https_fallback(monkeypatch, tmp_path: Path) -> None:
+     calls = []
+     source = _source()
+@@ -361,6 +358,7 @@ def test_missing_file_from_hub_retry_uses_https_fallback(monkeypatch, tmp_path:
+     assert result == tmp_path / source.path
+     assert result.read_bytes() == content
+
++
+ def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
+     monkeypatch, tmp_path: Path
+ ) -> None:
+@@ -399,6 +397,7 @@ def test_gated_source_does_not_attempt_unauthenticated_xet_fallback(
+     assert "gated" in str(raised.value).lower()
+     assert "hf_xet" in str(raised.value)
+
++
+ @pytest.mark.parametrize(("offline", "offline_env"), [(True, None), (False, "1")])
+ def test_offline_mode_never_attempts_xet_fallback(
+     monkeypatch, tmp_path: Path, offline: bool, offline_env: str | None
+@@ -431,6 +430,7 @@ def test_offline_mode_never_attempts_xet_fallback(
+     assert raised.value.__dict__["fallback_outcome"] == "not_attempted"
+     assert "failed=no" in str(raised.value)
+
++
+ @pytest.mark.parametrize(
+     ("status", "error_type"),
+     [(401, AssetAuthenticationError), (403, AssetPermissionError), (404, AssetNotFoundError)],
+@@ -515,6 +515,7 @@ def test_retry_revision_not_found_is_not_bypassed(monkeypatch, tmp_path: Path) -
+     assert "not found" in str(raised.value).lower()
+     assert "direct HTTPS fallback was not attempted" in str(raised.value)
+
++
+ def test_unrelated_value_error_is_not_classified_as_xet_or_leaked(
+     monkeypatch, tmp_path: Path
+ ) -> None:
+@@ -541,6 +542,7 @@ def test_unrelated_value_error_is_not_classified_as_xet_or_leaked(
+     assert secret not in str(raised.value)
+     assert secret not in repr(raised.value)
+
++
+ def test_xet_fallback_failure_has_safe_structured_diagnostics(
+     monkeypatch, tmp_path: Path, caplog
+ ) -> None:
+@@ -601,6 +603,7 @@ def test_xet_fallback_failure_has_safe_structured_diagnostics(
+     assert retry_secret not in caplog.text
+     assert fallback_secret not in caplog.text
+
++
+ def test_xet_fallback_rejects_symlink_escape_before_request(monkeypatch, tmp_path: Path) -> None:
+     outside = tmp_path / "outside"
+     outside.mkdir()

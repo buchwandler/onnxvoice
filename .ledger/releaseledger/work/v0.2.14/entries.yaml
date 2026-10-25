@@ -1,0 +1,72 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.14
+git_base_ref: 6dee40514527c10f117f5b33d943cf33e1759b6f
+git_base_sha: 6dee40514527c10f117f5b33d943cf33e1759b6f
+git_head_ref: b07663f89a78237990e118de352077abd6b08b8d
+git_head_sha: b07663f89a78237990e118de352077abd6b08b8d
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added structured Hugging Face transport errors and a safe pinned-HTTPS fallback when optional Xet support is unavailable"
+    status: accepted
+    source_refs:
+      - git:0ed88350f75c0b538007d1cba634b8a50c979b83
+    paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    sources:
+      - git:0ed88350f75c0b538007d1cba634b8a50c979b83
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: fixed
+    summary: "Fixed Hugging Face downloads by retrying without Xet before using a pinned HTTPS fallback"
+    status: accepted
+    source_refs:
+      - git:89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2
+    paths:
+      - onnxvoice/errors.py
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+      - tests/test_store.py
+    sources:
+      - git:89bc62fb3ce0a66ffd4bddeb8a0f8f56278a54b2
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: internal
+    summary: "Improved formatting consistency to the Hugging Face recovery implementation and its tests"
+    internal: true
+    status: accepted
+    source_refs:
+      - git:8a479fb813d30ce383a258d6d32fe73c38de1408
+    paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    sources:
+      - git:8a479fb813d30ce383a258d6d32fe73c38de1408
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: internal
+    summary: "Improved static typing for Hugging Face recovery code without changing runtime behavior"
+    internal: true
+    status: accepted
+    source_refs:
+      - git:b07663f89a78237990e118de352077abd6b08b8d
+    paths:
+      - onnxvoice/huggingface.py
+    sources:
+      - git:b07663f89a78237990e118de352077abd6b08b8d
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
