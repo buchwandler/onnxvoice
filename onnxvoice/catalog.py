@@ -3503,6 +3503,7 @@ def _phonon_artifact(
     model_key: str,
     precision: str,
     tag: str,
+    release_version: str | None,
     source_revision: str,
     license_info: Mapping[str, Any],
 ) -> Artifact:
@@ -3558,6 +3559,7 @@ def _phonon_artifact(
         metadata={
             "path": path,
             "release_tag": tag,
+            "release_version": release_version,
             "model_key": model_key,
             "precision": precision,
             "source_revision": source_revision,
@@ -3572,9 +3574,29 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
         raise CatalogError("Phonon catalog must be an object")
     if type(data.get("schema_version")) is not int or data["schema_version"] != 2:
         raise CatalogError("Phonon catalog schema_version must be 2")
+    catalog_release_version = (
+        _require_phonon_safe_id(data["release_version"], "Phonon catalog release_version")
+        if "release_version" in data
+        else None
+    )
     bundles = data.get("bundles")
     if not isinstance(bundles, Sequence) or isinstance(bundles, (str, bytes)):
         raise CatalogError("Phonon catalog bundles must be a sequence")
+    declared_release_versions: set[str] = set()
+    for index, raw_bundle in enumerate(bundles):
+        if not isinstance(raw_bundle, Mapping) or "release_version" not in raw_bundle:
+            continue
+        release_version = _require_phonon_safe_id(
+            raw_bundle["release_version"], f"Phonon bundle {index} release_version"
+        )
+        if catalog_release_version is not None and release_version != catalog_release_version:
+            raise CatalogError(
+                f"Phonon bundle {index}: release_version does not match catalog release_version"
+            )
+        declared_release_versions.add(release_version)
+    if len(declared_release_versions) > 1:
+        raise CatalogError("Phonon catalog rows contain multiple release_version values")
+    active_release_version = catalog_release_version or next(iter(declared_release_versions), None)
 
     grouped: dict[str, dict[str, Any]] = {}
     seen_variants: set[tuple[str, str]] = set()
@@ -3658,6 +3680,7 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
                     model_key=model_key,
                     precision=precision,
                     tag=tag,
+                    release_version=active_release_version,
                     source_revision=source_revision,
                     license_info=license_info,
                 )
@@ -3692,6 +3715,7 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
 
         profile = {
             "quality": precision,
+            "release_version": active_release_version,
             "release_tag": tag,
             "source_revision": source_revision,
             "source_uri": source_uri,
@@ -3742,6 +3766,10 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
             "runtime": base["runtime"],
             "generation": base["generation"],
             "profiles": profiles,
+            "release_version": active_release_version,
+            "release_versions": {
+                quality: profiles[quality]["release_version"] for quality in qualities
+            },
             "quality_profiles": qualities,
             "source_revisions": {
                 quality: profiles[quality]["source_revision"] for quality in qualities

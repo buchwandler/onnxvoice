@@ -495,3 +495,68 @@ def test_valid_xet_recovery_download_installs_through_store(
     assert store.is_installed("pocket", f"good-xet-{recovery_path}")
     assert store.manifest_path("pocket", f"good-xet-{recovery_path}").exists()
     assert len(calls) == 2
+
+
+def test_phonon_github_release_artifacts_use_verified_download_cache_offline(
+    tmp_path, monkeypatch
+) -> None:
+    import onnxvoice.store as store_module
+
+    payload = b"verified Phonon release graph"
+    url = "https://github.com/example/phonon/releases/download/v1/graph.onnx"
+    sha256 = hashlib.sha256(payload).hexdigest()
+    item = CatalogItem(
+        system="phonon",
+        id="github-release",
+        kind="bundle",
+        artifacts=(Artifact("model", "graph.onnx", url, len(payload), sha256),),
+    )
+    calls = []
+
+    class Response(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__(payload)
+            self.headers = {"Content-Length": str(len(payload))}
+
+    def open_url(request, *, timeout):
+        calls.append(request.full_url)
+        assert timeout == 60
+        return Response()
+
+    monkeypatch.setattr(store_module.urllib.request, "urlopen", open_url)
+    monkeypatch.setattr(
+        store_module,
+        "download_huggingface_file",
+        lambda *_args, **_kwargs: pytest.fail("direct GitHub URL used Hugging Face transport"),
+    )
+    cache_dir = tmp_path / "cache"
+    store = AssetStore(cache_dir)
+    installed = store.install(item)
+    assert installed.artifact("model").path.read_bytes() == payload
+    assert calls == [url]
+
+    store.remove("phonon", "github-release")
+    offline_store = AssetStore(cache_dir, offline=True)
+    offline_store.install(item)
+    assert (
+        offline_store.get("phonon", "github-release").artifact("model").path.read_bytes() == payload
+    )
+    assert calls == [url]
+
+    bad_digest = CatalogItem(
+        system="phonon",
+        id="github-bad-digest",
+        kind="bundle",
+        artifacts=(Artifact("model", "graph.onnx", url, len(payload), "0" * 64),),
+    )
+    with pytest.raises(IntegrityError):
+        store.install(bad_digest)
+
+    bad_size = CatalogItem(
+        system="phonon",
+        id="github-bad-size",
+        kind="bundle",
+        artifacts=(Artifact("model", "graph.onnx", url, len(payload) + 1, sha256),),
+    )
+    with pytest.raises(IntegrityError):
+        store.install(bad_size)

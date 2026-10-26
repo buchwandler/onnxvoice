@@ -233,15 +233,43 @@ class PhononAdapter(SystemAdapter):
         return normalized[0], locale, locale
 
     @staticmethod
+    def _runtime_section(config: Mapping[str, Any]) -> Mapping[str, Any]:
+        value = config.get("runtime")
+        return value if isinstance(value, Mapping) else {}
+
+    @staticmethod
+    def _runtime_value(
+        config: Mapping[str, Any], runtime: Mapping[str, Any], keys: Sequence[str]
+    ) -> Any:
+        """Read a known runtime field from explicit compatibility sections only."""
+        onnx = config.get("onnx")
+        sections = (runtime, onnx, config)
+        for section in sections:
+            if not isinstance(section, Mapping):
+                continue
+            for key in keys:
+                value = section.get(key)
+                if value is not None:
+                    return value
+        return None
+
+    @staticmethod
     def _normalize_runtime(config: Mapping[str, Any]) -> dict[str, Any]:
-        kind = PhononAdapter._find_value(config, ("kind", "runtime_kind"))
+        config_runtime = PhononAdapter._runtime_section(config)
+        kind = config_runtime.get("kind")
+        if kind is None:
+            kind = config.get("runtime_kind")
+        if kind is None:
+            kind = config.get("kind")
+        if kind is None:
+            kind = _RUNTIME_KIND
         if kind != _RUNTIME_KIND:
             raise RuntimeContractError(
                 f"Phonon config runtime kind must be {_RUNTIME_KIND!r}, got {kind!r}"
             )
         runtime: dict[str, Any] = {"kind": kind, "graphs": list(_GRAPH_FILES.values())}
         for field_name, aliases in _RUNTIME_ALIASES.items():
-            value = PhononAdapter._find_value(config, aliases)
+            value = PhononAdapter._runtime_value(config, config_runtime, aliases)
             if field_name == "mimi_state":
                 if not isinstance(value, (Mapping, list, tuple)) or not value:
                     raise RuntimeContractError(
@@ -254,7 +282,12 @@ class PhononAdapter(SystemAdapter):
                     raise RuntimeContractError("Phonon frame_rate must be positive")
             else:
                 runtime[field_name] = PhononAdapter._positive_int(value, field_name)
-        declared_graphs = PhononAdapter._find_value(config, ("graphs",))
+        onnx = config.get("onnx")
+        declared_graphs = config_runtime.get("graphs")
+        if declared_graphs is None and isinstance(onnx, Mapping):
+            declared_graphs = onnx.get("graphs")
+        if declared_graphs is None:
+            declared_graphs = config.get("graphs")
         if declared_graphs is not None:
             if not isinstance(declared_graphs, Sequence) or isinstance(
                 declared_graphs, (str, bytes)
@@ -646,7 +679,7 @@ class PhononAdapter(SystemAdapter):
             self._require_dtype(embed_spec, component, "floating")
             self._require_dtype(output_specs["hidden"], component, "floating")
             self._require_dtype(output_specs["eos_logit"], component, "floating")
-            bindings: list[_KVBinding] = []
+            kv_bindings: list[_KVBinding] = []
             for layer, kind in sorted(expected_state):
                 input_spec = input_state[(layer, kind)]
                 output_spec = output_state[(layer, kind)]
@@ -682,7 +715,7 @@ class PhononAdapter(SystemAdapter):
                 )
                 if incompatible_shape:
                     raise RuntimeContractError("Phonon past/present KV shapes are incompatible")
-                bindings.append(
+                kv_bindings.append(
                     _KVBinding(
                         input_spec.name,
                         output_spec.name,
@@ -694,7 +727,7 @@ class PhononAdapter(SystemAdapter):
                         kind,
                     )
                 )
-            self._kv_bindings = tuple(bindings)
+            self._kv_bindings = tuple(kv_bindings)
 
         elif component == "flow_lm_flow":
             self._require_names(input_names, {"hidden", "noise", "duration_delta"}, component)
@@ -738,7 +771,7 @@ class PhononAdapter(SystemAdapter):
                 raise RuntimeContractError("Phonon Mimi offset input/output dtypes do not match")
             if not self._compatible_static_shape(offset_input.shape, offset_output.shape):
                 raise RuntimeContractError("Phonon Mimi offset input/output shapes do not match")
-            bindings: list[_MimiStateBinding] = []
+            mimi_bindings: list[_MimiStateBinding] = []
             for name, shape, configured_dtype in self._mimi_state_specs:
                 input_name = f"state.{name}"
                 output_name = f"next_state.{name}"
@@ -756,7 +789,7 @@ class PhononAdapter(SystemAdapter):
                     raise RuntimeContractError(
                         f"Phonon Mimi next-state shape mismatch for {name!r}"
                     )
-                bindings.append(
+                mimi_bindings.append(
                     _MimiStateBinding(
                         name,
                         input_name,
@@ -767,7 +800,7 @@ class PhononAdapter(SystemAdapter):
                         output_spec,
                     )
                 )
-            self._mimi_bindings = tuple(bindings)
+            self._mimi_bindings = tuple(mimi_bindings)
             self._offset_input_spec = offset_input
             self._offset_output_spec = offset_output
         else:

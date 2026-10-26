@@ -540,3 +540,80 @@ def test_adapter_close_is_idempotent_and_closes_all_lazy_sessions(
     adapter.close()
     assert all(session.closed for session in fake.sessions.values())
     assert adapter.diagnostics().sessions == ()
+
+
+def test_missing_runtime_kind_is_inferred_for_local_phonon_and_validates_graphs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, fake = _make_adapter(tmp_path, monkeypatch)
+    config_path = adapter.installation.require_artifact("config").path
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["runtime"].pop("kind")
+    config["voice_metadata"] = {"kind": "character"}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    chunks = list(adapter.stream([1], duration_delta=0.25, max_frames=1))
+
+    assert chunks
+    assert adapter._runtime["kind"] == "phonon-streaming-onnx-v1"
+    assert set(fake.sessions) == set(_GRAPH_FILES)
+
+
+@pytest.mark.parametrize(
+    ("kind_location", "kind"),
+    [("runtime", "pocket"), ("runtime_kind", "other"), ("kind", "other")],
+)
+def test_conflicting_explicit_runtime_kind_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind_location: str,
+    kind: str,
+) -> None:
+    adapter, _ = _make_adapter(tmp_path, monkeypatch)
+    config_path = adapter.installation.require_artifact("config").path
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if kind_location == "runtime":
+        config["runtime"]["kind"] = kind
+    else:
+        config["runtime"].pop("kind")
+        config[kind_location] = kind
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(RuntimeContractError, match="runtime kind"):
+        adapter._load_contract()
+
+
+def test_canonical_runtime_config_needs_no_compatibility_fallbacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, _ = _make_adapter(tmp_path, monkeypatch)
+    config_path = adapter.installation.require_artifact("config").path
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert config["runtime"] == _RUNTIME
+    assert PhononAdapter._normalize_runtime(config) == _RUNTIME
+
+
+def test_runtime_fields_use_only_explicit_sections_and_known_aliases() -> None:
+    onnx = {
+        "frame_rate": _RUNTIME["frame_rate"],
+        "hidden_size": _RUNTIME["d_model"],
+        "latent_dim": _RUNTIME["latent_dim"],
+        "num_flow_layers": _RUNTIME["num_layers"],
+        "heads": _RUNTIME["num_heads"],
+        "head_dim": _RUNTIME["head_dim"],
+        "mimi_state": _RUNTIME["mimi_state"],
+    }
+    config = {
+        "runtime": {
+            "kind": _RUNTIME["kind"],
+            "sample_rate": _RUNTIME["sample_rate"],
+            "graphs": _RUNTIME["graphs"],
+        },
+        "onnx": onnx,
+        "frame_samples": _RUNTIME["frame_samples"],
+        "sampling_rate": 123,
+        "voice_metadata": {"kind": "unrelated"},
+    }
+
+    assert PhononAdapter._normalize_runtime(config) == _RUNTIME

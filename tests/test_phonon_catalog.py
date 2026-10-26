@@ -315,3 +315,87 @@ def test_noncommercial_license_cannot_be_mislabeled_as_commercial():
     bundle["license"]["commercial_use"] = True
     with pytest.raises(CatalogError, match="commercial-use status conflicts"):
         _parse_phonon(_catalog(bundle))
+
+
+@pytest.mark.parametrize(
+    ("catalog_version", "row_version"),
+    [("0.2.0", "0.2.0"), ("0.2.0", None), (None, "0.2.0")],
+)
+def test_release_version_is_validated_and_propagated(
+    tmp_path: Path, catalog_version: str | None, row_version: str | None
+) -> None:
+    bundle = _bundle()
+    data = _catalog(bundle)
+    if catalog_version is not None:
+        data["release_version"] = catalog_version
+    if row_version is not None:
+        bundle["release_version"] = row_version
+
+    (item,) = _parse_phonon(data)
+
+    assert item.metadata["release_version"] == "0.2.0"
+    assert item.metadata["release_versions"] == {"fp32": "0.2.0"}
+    profile = item.metadata["profiles"]["fp32"]
+    assert profile["release_version"] == "0.2.0"
+    artifact = item.require_artifact("config")
+    assert artifact.metadata["release_version"] == "0.2.0"
+
+    catalog_path = tmp_path / "phonon.json"
+    catalog_path.write_text(json.dumps(data), encoding="utf-8")
+    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"phonon": str(catalog_path)})
+    selected = client.resolve("phonon:phonon-31m-en", quality="fp32")
+    assert selected.metadata["selected_quality"] == "fp32"
+    assert selected.metadata["release_version"] == "0.2.0"
+    assert selected.metadata["release_tag"] == bundle["tag"]
+    assert selected.metadata["source_revision"] == bundle["source_revision"]
+    selected_graph = selected.require_artifact("model", component="flow_lm_main")
+    assert selected_graph.metadata["release_version"] == "0.2.0"
+
+
+def test_release_versions_are_consistent_across_qualities() -> None:
+    fp32 = _bundle()
+    q4 = _bundle("phonon-31m-en", "q4", tag="phonon-31m-en-q4", revision="b" * 40)
+    fp32["release_version"] = "0.2.0"
+    q4["release_version"] = "0.2.0"
+
+    (item,) = _parse_phonon(_catalog(fp32, q4))
+
+    assert item.metadata["release_version"] == "0.2.0"
+    assert item.metadata["release_versions"] == {"fp32": "0.2.0", "q4": "0.2.0"}
+
+
+def test_mismatched_catalog_and_row_release_versions_are_rejected() -> None:
+    bundle = _bundle()
+    bundle["release_version"] = "0.3.0"
+    data = _catalog(bundle)
+    data["release_version"] = "0.2.0"
+
+    with pytest.raises(CatalogError, match="does not match catalog release_version"):
+        _parse_phonon(data)
+
+
+def test_multiple_active_row_release_versions_are_rejected() -> None:
+    fp32 = _bundle()
+    q4 = _bundle("phonon-31m-en", "q4", tag="phonon-31m-en-q4", revision="b" * 40)
+    fp32["release_version"] = "0.2.0"
+    q4["release_version"] = "0.3.0"
+
+    with pytest.raises(CatalogError, match="multiple release_version values"):
+        _parse_phonon(_catalog(fp32, q4))
+
+
+@pytest.mark.parametrize("release_version", [None, "", "unsafe version", "../0.2.0", 17])
+def test_unsafe_catalog_release_versions_are_rejected(release_version: Any) -> None:
+    data = _catalog(_bundle())
+    data["release_version"] = release_version
+
+    with pytest.raises(CatalogError, match="release_version is unsafe"):
+        _parse_phonon(data)
+
+
+def test_null_row_release_version_is_rejected() -> None:
+    bundle = _bundle()
+    bundle["release_version"] = None
+
+    with pytest.raises(CatalogError, match="release_version is unsafe"):
+        _parse_phonon(_catalog(bundle))
