@@ -93,21 +93,24 @@ finally:
 
 ## Supported systems
 
-| System      | Built-in adapter | Catalog | Named voices                 |
-| ----------- | ---------------- | ------- | ---------------------------- |
-| Piper       | Yes              | Yes     | Yes                          |
-| Kokoro      | Yes              | Yes     | Yes                          |
-| Pocket      | Yes              | Yes     | Catalog-dependent            |
-| Supertonic  | Yes              | Yes     | Yes                          |
-| Kitten      | Yes              | Yes     | Yes                          |
-| KittenTTS 2 | Yes              | Yes     | Catalog child voices         |
-| Inflect     | Yes              | Yes     | Fixed `default` voice        |
-| Sopro       | Yes (partial)    | Yes     | Zero-shot reference audio    |
-| Qwen3-TTS   | Yes              | Yes     | No; VoiceDesign/Base bundles |
-| Chatterbox  | Yes              | Yes     | Zero-shot reference audio    |
+| System      | Built-in adapter | Catalog               | Named voices                       |
+| ----------- | ---------------- | --------------------- | ---------------------------------- |
+| Piper       | Yes              | Yes                   | Yes                                |
+| Kokoro      | Yes              | Yes                   | Yes                                |
+| Pocket      | Yes              | Yes                   | Catalog-dependent                  |
+| Supertonic  | Yes              | Yes                   | Yes                                |
+| Kitten      | Yes              | Yes                   | Yes                                |
+| KittenTTS 2 | Yes              | Yes                   | Catalog child voices               |
+| Inflect     | Yes              | Yes                   | Fixed `default` voice              |
+| Sopro       | Yes (partial)    | Yes                   | Zero-shot reference audio          |
+| Qwen3-TTS   | Yes              | Yes                   | No; VoiceDesign/Base bundles       |
+| Chatterbox  | Yes              | Yes                   | Zero-shot reference audio          |
+| Phonon      | Yes              | Yes (currently empty) | Catalog-declared projected prompts |
 
 Sopro currently provides bundle management, graph inspection, tokenization, and reference preparation only. End-to-end Python synthesis remains capability-gated pending the real native-runtime and parity gate; see [Sopro support](docs/systems/sopro.md).
 Catalog contents determine which named voices are available. Discovery does not depend on a separate capability list. Adapters execute system-specific model contracts and do not imply text normalization or phonemization support.
+
+Phonon is a registered low-level token-ID-to-streaming-PCM engine, but the checked-in bundle catalog currently has no installable targets or qualities. Adapter registration does not imply model availability; see the [Phonon runtime guide](docs/systems/phonon.md) for discovery and licensing details.
 
 ## Documentation
 
@@ -116,6 +119,8 @@ The [full documentation](docs/index.md) includes task-oriented CLI and Python gu
 See [Qwen3-TTS WaveKat](docs/systems/qwen3.md) for the model-specific API and bundle contract.
 
 See [Chatterbox](docs/systems/chatterbox.md) for its supported bundles, profiles, and runtime boundary.
+
+See [Phonon](docs/systems/phonon.md) for its token-ID/PCM boundary, catalog-driven availability, local opening, and model-license distinctions.
 
 ## Development
 

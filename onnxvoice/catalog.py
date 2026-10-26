@@ -81,6 +81,7 @@ DEFAULT_SOURCES = {
     "chatterbox": "https://raw.githubusercontent.com/buchwandler/chatterbox-onnx-bundles/main/catalog/bundles.json",
     "qwen3": "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json",
     "kitten2": "https://raw.githubusercontent.com/buchwandler/kitten2-onnx-bundles/main/catalog/bundles.json",
+    "phonon": "https://raw.githubusercontent.com/buchwandler/phonon-onnx-bundles/main/catalog/bundles.json",
 }
 _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
     {
@@ -252,6 +253,8 @@ class CatalogClient:
             return _parse_sopro(raw)
         if system == "inflect":
             return _parse_inflect(raw)
+        if system == "phonon":
+            return _parse_phonon(raw)
         raise CatalogError(f"No parser for system {system!r}")
 
     def resolve(
@@ -325,6 +328,8 @@ class CatalogClient:
             return _select_sopro_profile(item, quality)
         if item.system == "pocket":
             return _select_pocket_profile(item, quality)
+        if item.system == "phonon":
+            return _select_phonon_profile(item, quality)
         selected_quality = quality
         model_artifacts = [
             artifact
@@ -3039,7 +3044,7 @@ def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogIte
 
 
 def _item_supports_quality(item: CatalogItem, quality: str) -> bool:
-    if item.system in {"pocket", "sopro", "chatterbox"}:
+    if item.system in {"pocket", "sopro", "chatterbox", "phonon"}:
         profiles = item.metadata.get("profiles") or {}
         return isinstance(profiles, Mapping) and quality in profiles
     return bool(
@@ -3263,3 +3268,547 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
             )
         )
     return result
+
+
+_PHONON_QUALITIES = frozenset({"fp32", "q8", "q4", "fp16"})
+_PHONON_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_PHONON_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+_PHONON_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_PHONON_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+_PHONON_GRAPHS = {
+    "onnx/text_conditioner.onnx": "text_conditioner",
+    "onnx/flow_lm_main.onnx": "flow_lm_main",
+    "onnx/flow_lm_flow.onnx": "flow_lm_flow",
+    "onnx/mimi_decoder.onnx": "mimi_decoder",
+}
+_PHONON_GENERATION_FIELDS = (
+    "temperature_default",
+    "eos_threshold_default",
+    "duration_delta_default",
+    "frames_after_eos",
+    "min_frames_before_eos",
+    "max_frames",
+)
+
+
+def _require_phonon_safe_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _PHONON_SAFE_ID_RE.fullmatch(value) is None:
+        raise CatalogError(f"{label} is unsafe: {value!r}")
+    return value
+
+
+def _phonon_positive_int(value: Any, label: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise CatalogError(f"{label} must be a positive integer")
+    return value
+
+
+def _phonon_optional_int(value: Any, label: str, *, minimum: int) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < minimum:
+        raise CatalogError(f"{label} must be an integer >= {minimum} or null")
+    return value
+
+
+def _phonon_optional_number(
+    value: Any, label: str, *, minimum: float | None = None
+) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CatalogError(f"{label} must be a finite number or null")
+    number = float(value)
+    if not math.isfinite(number) or (minimum is not None and number < minimum):
+        raise CatalogError(f"{label} is outside its valid range")
+    return number
+
+
+def _phonon_https_url(value: Any, label: str, *, optional: bool = False) -> str | None:
+    if value is None and optional:
+        return None
+    if not isinstance(value, str) or not value:
+        raise CatalogError(f"{label} must be a non-empty HTTPS URL")
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise CatalogError(f"{label} must be a non-empty HTTPS URL")
+    return value
+
+
+def _parse_phonon_runtime(raw: Any, bundle_id: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise CatalogError(f"{bundle_id}: runtime metadata must be an object")
+    runtime = dict(raw)
+    if runtime.get("kind") != "phonon-streaming-onnx-v1":
+        raise CatalogError(f"{bundle_id}: unsupported runtime.kind {runtime.get('kind')!r}")
+    graphs = runtime.get("graphs")
+    if not isinstance(graphs, Sequence) or isinstance(graphs, (str, bytes)):
+        raise CatalogError(f"{bundle_id}: runtime.graphs must be a sequence")
+    if tuple(graphs) != tuple(_PHONON_GRAPHS):
+        raise CatalogError(f"{bundle_id}: runtime.graphs do not match the Phonon ABI")
+    _phonon_positive_int(runtime.get("sample_rate"), f"{bundle_id}: runtime.sample_rate")
+    _phonon_positive_int(runtime.get("frame_samples"), f"{bundle_id}: runtime.frame_samples")
+    frame_rate = runtime.get("frame_rate")
+    if isinstance(frame_rate, bool) or not isinstance(frame_rate, (int, float)):
+        raise CatalogError(f"{bundle_id}: runtime.frame_rate must be positive")
+    if not math.isfinite(float(frame_rate)) or float(frame_rate) <= 0:
+        raise CatalogError(f"{bundle_id}: runtime.frame_rate must be positive")
+    for field in ("d_model", "latent_dim", "num_layers", "num_heads", "head_dim"):
+        _phonon_positive_int(runtime.get(field), f"{bundle_id}: runtime.{field}")
+    mimi_state = runtime.get("mimi_state")
+    if not isinstance(mimi_state, (Mapping, list, tuple)) or not mimi_state:
+        raise CatalogError(f"{bundle_id}: runtime.mimi_state must be a non-empty object or list")
+    return runtime
+
+
+def _parse_phonon_generation(raw: Any, bundle_id: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise CatalogError(f"{bundle_id}: generation metadata must be an object")
+    for field in _PHONON_GENERATION_FIELDS:
+        if field not in raw:
+            raise CatalogError(f"{bundle_id}: generation.{field} must be explicit (or null)")
+    result = dict(raw)
+    result["temperature_default"] = _phonon_optional_number(
+        raw["temperature_default"], f"{bundle_id}: generation.temperature_default", minimum=0.0
+    )
+    result["eos_threshold_default"] = _phonon_optional_number(
+        raw["eos_threshold_default"], f"{bundle_id}: generation.eos_threshold_default"
+    )
+    result["duration_delta_default"] = _phonon_optional_number(
+        raw["duration_delta_default"], f"{bundle_id}: generation.duration_delta_default"
+    )
+    result["frames_after_eos"] = _phonon_optional_int(
+        raw["frames_after_eos"], f"{bundle_id}: generation.frames_after_eos", minimum=0
+    )
+    result["min_frames_before_eos"] = _phonon_optional_int(
+        raw["min_frames_before_eos"], f"{bundle_id}: generation.min_frames_before_eos", minimum=0
+    )
+    result["max_frames"] = _phonon_optional_int(
+        raw["max_frames"], f"{bundle_id}: generation.max_frames", minimum=1
+    )
+    return result
+
+
+def _parse_phonon_voices(raw: Any, bundle_id: str) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or not raw:
+        raise CatalogError(f"{bundle_id}: voices must be a non-empty sequence")
+    names: list[str] = []
+    details: list[dict[str, Any]] = []
+    for index, voice in enumerate(raw):
+        if not isinstance(voice, Mapping):
+            raise CatalogError(f"{bundle_id}: voice {index} must be an object")
+        name = _require_phonon_safe_id(voice.get("name"), f"{bundle_id} voice name")
+        if name in names:
+            raise CatalogError(f"{bundle_id}: duplicate voice {name!r}")
+        names.append(name)
+        display_name = voice.get("display_name", name)
+        if not isinstance(display_name, str) or not display_name.strip():
+            raise CatalogError(f"{bundle_id}/{name}: display_name must be a non-empty string")
+        upstream_voice_id = voice.get("voice_id")
+        if upstream_voice_id is not None and (
+            not isinstance(upstream_voice_id, str) or not upstream_voice_id
+        ):
+            raise CatalogError(f"{bundle_id}/{name}: voice_id must be a non-empty string")
+        source_locale = voice.get("locale")
+        if source_locale is not None and not isinstance(source_locale, str):
+            raise CatalogError(f"{bundle_id}/{name}: locale must be a string")
+        locale = ""
+        if isinstance(source_locale, str) and _PHONON_LANGUAGE_RE.fullmatch(
+            source_locale.replace("_", "-")
+        ):
+            locale = normalize_language_tag(source_locale)
+        gender_source = voice.get("gender")
+        if gender_source is not None and not isinstance(gender_source, str):
+            raise CatalogError(f"{bundle_id}/{name}: gender must be a string")
+        gender = (
+            gender_source.lower()
+            if isinstance(gender_source, str) and gender_source.lower() in {"male", "female"}
+            else "unknown"
+        )
+        frames = voice.get("frames")
+        if frames is not None:
+            frames = _phonon_positive_int(frames, f"{bundle_id}/{name}: frames")
+        detail: dict[str, Any] = {
+            "id": name,
+            "name": display_name,
+            "display_name": display_name,
+            "language": language_base(locale),
+            "locale": locale,
+            "language_label": locale or language_base(locale) or "unknown",
+            "gender": gender,
+        }
+        if upstream_voice_id is not None:
+            detail["voice_id"] = upstream_voice_id
+            detail["upstream_voice_id"] = upstream_voice_id
+        if frames is not None:
+            detail["frames"] = frames
+        if source_locale and not locale:
+            detail["source_locale"] = source_locale
+        if gender_source is not None and gender == "unknown":
+            detail["source_gender"] = gender_source
+        details.append(detail)
+    return tuple(names), details
+
+
+def _parse_phonon_license(raw: Any, bundle_id: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise CatalogError(f"{bundle_id}: license metadata must be an object")
+    license_info = dict(raw)
+    spdx = license_info.get("spdx")
+    canonical = {
+        "Apache-2.0": ("https://www.apache.org/licenses/LICENSE-2.0", True),
+        "CC-BY-NC-4.0": ("https://creativecommons.org/licenses/by-nc/4.0/", False),
+    }
+    if not isinstance(spdx, str) or spdx not in canonical:
+        raise CatalogError(f"{bundle_id}: unsupported license.spdx {spdx!r}")
+    expected_uri, expected_commercial_use = canonical[spdx]
+    uri = _phonon_https_url(license_info.get("uri"), f"{bundle_id}: license.uri")
+    if uri != expected_uri:
+        raise CatalogError(f"{bundle_id}: license.uri is not canonical for {spdx}")
+    if type(license_info.get("commercial_use")) is not bool:
+        raise CatalogError(f"{bundle_id}: license.commercial_use must be boolean")
+    if license_info["commercial_use"] is not expected_commercial_use:
+        raise CatalogError(f"{bundle_id}: license commercial-use status conflicts with {spdx}")
+    restrictions = license_info.get("restrictions")
+    if not isinstance(restrictions, Sequence) or isinstance(restrictions, (str, bytes)):
+        raise CatalogError(f"{bundle_id}: license.restrictions must be a sequence")
+    if any(not isinstance(value, str) for value in restrictions):
+        raise CatalogError(f"{bundle_id}: license restrictions must be strings")
+    attribution_path = license_info.get("attribution_path")
+    if attribution_path != "ATTRIBUTION.md":
+        raise CatalogError(f"{bundle_id}: license.attribution_path must be ATTRIBUTION.md")
+    if spdx == "CC-BY-NC-4.0":
+        legalcode_uri = _phonon_https_url(
+            license_info.get("legalcode_uri"), f"{bundle_id}: license.legalcode_uri"
+        )
+        if legalcode_uri != "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en":
+            raise CatalogError(f"{bundle_id}: CC-BY-NC-4.0 legal-code URI is not canonical")
+        if license_info.get("warranty_disclaimer_section") != "Section 5":
+            raise CatalogError(
+                f"{bundle_id}: CC-BY-NC-4.0 warranty disclaimer must refer to Section 5"
+            )
+        if "non-commercial" not in restrictions:
+            raise CatalogError(
+                f"{bundle_id}: CC-BY-NC-4.0 must preserve its non-commercial restriction"
+            )
+    elif "legalcode_uri" in license_info or "warranty_disclaimer_section" in license_info:
+        raise CatalogError(f"{bundle_id}: Apache-2.0 metadata must not include CC-specific fields")
+    return license_info
+
+
+def _phonon_artifact(
+    raw: Mapping[str, Any],
+    *,
+    bundle_id: str,
+    model_key: str,
+    precision: str,
+    tag: str,
+    source_revision: str,
+    license_info: Mapping[str, Any],
+) -> Artifact:
+    path = raw.get("path")
+    if not isinstance(path, str):
+        raise CatalogError(f"{bundle_id}: artifact path must be a string")
+    try:
+        validate_relative_path(path, field_name=f"{bundle_id} artifact path")
+    except ValueError as exc:
+        raise CatalogError(str(exc)) from exc
+    size = raw.get("bytes")
+    _phonon_positive_int(size, f"{bundle_id}/{path}: bytes")
+    checksum = raw.get("sha256")
+    if not isinstance(checksum, str) or _PHONON_SHA256_RE.fullmatch(checksum) is None:
+        raise CatalogError(
+            f"{bundle_id}/{path}: sha256 must be 64 lowercase hexadecimal characters"
+        )
+    url = _phonon_https_url(raw.get("download_url"), f"{bundle_id}/{path}: download_url")
+    assert url is not None
+
+    component: str | None = None
+    if path in _PHONON_GRAPHS:
+        role, component = "model", _PHONON_GRAPHS[path]
+    elif path == "config.json":
+        role = "config"
+    elif path == "tokenizer.json":
+        role = "tokenizer"
+    elif path == "ATTRIBUTION.md":
+        role = "attribution"
+    elif path == "export-provenance.json":
+        role = "provenance"
+    elif path.startswith("voices/"):
+        relative = path.removeprefix("voices/")
+        if "/" in relative or not relative.endswith(".bin"):
+            raise CatalogError(f"{bundle_id}: invalid voice prompt path {path!r}")
+        component = _require_phonon_safe_id(relative[:-4], f"{bundle_id} voice prompt name")
+        role = "voice_prompt"
+    elif path.startswith("third_party/"):
+        role = "notice"
+        component = path.removeprefix("third_party/")
+    else:
+        raise CatalogError(f"{bundle_id}: unsupported bundle artifact path {path!r}")
+
+    return Artifact(
+        role=role,
+        filename=path,
+        url=url,
+        size=size,
+        sha256=checksum,
+        quality=precision,
+        component=component,
+        format=Path(path).suffix.lower().lstrip("."),
+        metadata={
+            "path": path,
+            "release_tag": tag,
+            "model_key": model_key,
+            "precision": precision,
+            "source_revision": source_revision,
+            "license": dict(license_info),
+        },
+    )
+
+
+def _parse_phonon(data: Any) -> list[CatalogItem]:
+    """Parse installable Phonon catalog v2 rows into one target per model key."""
+    if not isinstance(data, Mapping):
+        raise CatalogError("Phonon catalog must be an object")
+    if type(data.get("schema_version")) is not int or data["schema_version"] != 2:
+        raise CatalogError("Phonon catalog schema_version must be 2")
+    bundles = data.get("bundles")
+    if not isinstance(bundles, Sequence) or isinstance(bundles, (str, bytes)):
+        raise CatalogError("Phonon catalog bundles must be a sequence")
+
+    grouped: dict[str, dict[str, Any]] = {}
+    seen_variants: set[tuple[str, str]] = set()
+    for index, raw_bundle in enumerate(bundles):
+        if not isinstance(raw_bundle, Mapping):
+            raise CatalogError(f"Phonon bundle {index} must be an object")
+        model_key = _require_phonon_safe_id(raw_bundle.get("model_key"), "Phonon model_key")
+        precision = raw_bundle.get("precision")
+        if not isinstance(precision, str) or precision not in _PHONON_QUALITIES:
+            raise CatalogError(f"{model_key}: unsupported precision {precision!r}")
+        variant = (model_key, precision)
+        if variant in seen_variants:
+            raise CatalogError(f"duplicate published Phonon variant {model_key}/{precision}")
+        seen_variants.add(variant)
+        tag = _require_phonon_safe_id(raw_bundle.get("tag"), f"{model_key} release tag")
+        source_revision = raw_bundle.get("source_revision")
+        if (
+            not isinstance(source_revision, str)
+            or _PHONON_REVISION_RE.fullmatch(source_revision) is None
+        ):
+            raise CatalogError(
+                f"{model_key}/{precision}: source_revision must be an immutable 40-character SHA"
+            )
+        source_uri = _phonon_https_url(
+            raw_bundle.get("source_uri"), f"{model_key}/{precision}: source_uri", optional=True
+        )
+        if source_uri is not None:
+            source_path = urllib.parse.urlsplit(source_uri)
+            if (
+                source_path.query
+                or source_path.fragment
+                or not source_path.path.endswith(f"/tree/{source_revision}")
+            ):
+                raise CatalogError(f"{model_key}/{precision}: source_uri must pin source_revision")
+        runtime = _parse_phonon_runtime(raw_bundle.get("runtime"), f"{model_key}/{precision}")
+        generation = _parse_phonon_generation(
+            raw_bundle.get("generation"), f"{model_key}/{precision}"
+        )
+        license_info = _parse_phonon_license(raw_bundle.get("license"), f"{model_key}/{precision}")
+        voices, voice_details = _parse_phonon_voices(
+            raw_bundle.get("voices"), f"{model_key}/{precision}"
+        )
+        default_voice = raw_bundle.get("default_voice")
+        if not isinstance(default_voice, str) or default_voice not in voices:
+            raise CatalogError(f"{model_key}/{precision}: default_voice must name a bundled voice")
+        raw_languages = raw_bundle.get("languages")
+        if (
+            not isinstance(raw_languages, Sequence)
+            or isinstance(raw_languages, (str, bytes))
+            or not raw_languages
+        ):
+            raise CatalogError(f"{model_key}/{precision}: languages must be a non-empty sequence")
+        languages: list[str] = []
+        for value in raw_languages:
+            if (
+                not isinstance(value, str)
+                or _PHONON_LANGUAGE_RE.fullmatch(value.replace("_", "-")) is None
+            ):
+                raise CatalogError(f"{model_key}/{precision}: invalid language tag {value!r}")
+            normalized = normalize_language_tag(value)
+            if normalized not in languages:
+                languages.append(normalized)
+
+        raw_artifacts = raw_bundle.get("artifacts")
+        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
+            raise CatalogError(f"{model_key}/{precision}: artifacts must be a sequence")
+        artifacts: list[Artifact] = []
+        paths: set[str] = set()
+        for raw_artifact in raw_artifacts:
+            if not isinstance(raw_artifact, Mapping):
+                raise CatalogError(f"{model_key}/{precision}: artifact must be an object")
+            path = raw_artifact.get("path")
+            if not isinstance(path, str):
+                raise CatalogError(f"{model_key}/{precision}: artifact path must be a string")
+            if path in paths:
+                raise CatalogError(f"{model_key}/{precision}: duplicate artifact path {path!r}")
+            artifacts.append(
+                _phonon_artifact(
+                    raw_artifact,
+                    bundle_id=f"{model_key}/{precision}",
+                    model_key=model_key,
+                    precision=precision,
+                    tag=tag,
+                    source_revision=source_revision,
+                    license_info=license_info,
+                )
+            )
+            paths.add(path)
+
+        required_paths = {
+            "config.json",
+            "tokenizer.json",
+            "ATTRIBUTION.md",
+            "export-provenance.json",
+            *_PHONON_GRAPHS,
+            *(f"voices/{voice}.bin" for voice in voices),
+        }
+        if license_info["spdx"] == "CC-BY-NC-4.0":
+            required_paths.update({"third_party/model/README.md", "third_party/voices/README.md"})
+        missing = required_paths - paths
+        if missing:
+            raise CatalogError(
+                f"{model_key}/{precision}: missing required artifacts: {', '.join(sorted(missing))}"
+            )
+        prompt_names = {
+            artifact.component for artifact in artifacts if artifact.role == "voice_prompt"
+        }
+        if prompt_names != set(voices):
+            raise CatalogError(
+                f"{model_key}/{precision}: voice prompt inventory does not match voices"
+            )
+        attribution_path = license_info["attribution_path"]
+        if attribution_path not in paths:
+            raise CatalogError(f"{model_key}/{precision}: bundled attribution file is missing")
+
+        profile = {
+            "quality": precision,
+            "release_tag": tag,
+            "source_revision": source_revision,
+            "source_uri": source_uri,
+            "runtime": runtime,
+            "generation": generation,
+            "license": license_info,
+            "languages": languages,
+            "voices": voices,
+            "voice_details": voice_details,
+            "default_voice": default_voice,
+        }
+        current = grouped.get(model_key)
+        if current is None:
+            grouped[model_key] = {
+                "profile_signature": {
+                    "runtime": runtime,
+                    "generation": generation,
+                    "license": license_info,
+                    "languages": languages,
+                    "voices": voices,
+                    "voice_details": voice_details,
+                    "default_voice": default_voice,
+                },
+                "profiles": {precision: profile},
+                "artifacts": list(artifacts),
+            }
+        else:
+            if current["profile_signature"] != {
+                "runtime": runtime,
+                "generation": generation,
+                "license": license_info,
+                "languages": languages,
+                "voices": voices,
+                "voice_details": voice_details,
+                "default_voice": default_voice,
+            }:
+                raise CatalogError(f"{model_key}: published quality metadata is inconsistent")
+            current["profiles"][precision] = profile
+            current["artifacts"].extend(artifacts)
+
+    result: list[CatalogItem] = []
+    for model_key, group in sorted(grouped.items()):
+        profiles = group["profiles"]
+        qualities = sorted(profiles)
+        base = profiles.get("fp32", profiles[qualities[0]])
+        license_info = base["license"]
+        metadata = {
+            "runtime": base["runtime"],
+            "generation": base["generation"],
+            "profiles": profiles,
+            "quality_profiles": qualities,
+            "source_revisions": {
+                quality: profiles[quality]["source_revision"] for quality in qualities
+            },
+            "release_tags": {quality: profiles[quality]["release_tag"] for quality in qualities},
+            "source_uri": base["source_uri"],
+            "source_revision": base["source_revision"],
+            "license": license_info,
+            "license_spdx": license_info["spdx"],
+            "license_uri": license_info["uri"],
+            "commercial_use": license_info["commercial_use"],
+            "restrictions": list(license_info["restrictions"]),
+            "attribution_path": license_info["attribution_path"],
+            "languages": list(base["languages"]),
+            "language_codes": list(base["languages"]),
+            "voice_details": base["voice_details"],
+            "voice_cloning": False,
+            "streaming": True,
+            "named_voices": True,
+        }
+        result.append(
+            CatalogItem(
+                system="phonon",
+                id=model_key,
+                kind="bundle",
+                artifacts=tuple(group["artifacts"]),
+                sample_rate=base["runtime"]["sample_rate"],
+                voices=tuple(base["voices"]),
+                default_voice=base["default_voice"],
+                metadata=metadata,
+            )
+        )
+    return result
+
+
+def _select_phonon_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
+    profiles = item.metadata.get("profiles")
+    if not isinstance(profiles, Mapping) or not profiles:
+        raise CatalogError(f"Phonon target {item.id!r} has no quality profiles")
+    selected_quality = (
+        quality if quality is not None else ("fp32" if "fp32" in profiles else sorted(profiles)[0])
+    )
+    profile = profiles.get(selected_quality)
+    if not isinstance(profile, Mapping):
+        available = ", ".join(sorted(str(value) for value in profiles)) or "none"
+        raise AssetNotFoundError(
+            f"Unknown Phonon quality {selected_quality!r} for {item.id!r}; available: {available}"
+        )
+    artifacts = tuple(
+        artifact for artifact in item.artifacts if artifact.quality == selected_quality
+    )
+    if not artifacts:
+        raise CatalogError(f"Phonon profile {item.id}/{selected_quality} has no artifacts")
+    return CatalogItem(
+        system=item.system,
+        id=item.id,
+        kind=item.kind,
+        artifacts=artifacts,
+        aliases=item.aliases,
+        sample_rate=profile["runtime"]["sample_rate"],
+        voices=tuple(profile["voices"]),
+        default_voice=profile["default_voice"],
+        metadata={
+            **item.metadata,
+            **profile,
+            "profiles": profiles,
+            "quality_profiles": sorted(profiles),
+            "selected_quality": selected_quality,
+        },
+    )

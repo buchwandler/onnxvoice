@@ -2,17 +2,18 @@
 
 Each system adapter owns the model-specific ONNX graph contract. It does not provide text normalization, G2P/phonemization, sentence planning, or application-level voice policy.
 
-| System     | Built-in adapter | Built-in catalog | Voice data in normalized catalog items                   | Typical runtime inputs                                        |
-| ---------- | ---------------- | ---------------- | -------------------------------------------------------- | ------------------------------------------------------------- |
-| Piper      | Yes              | Yes              | Voice item IDs                                           | Token IDs and optional numeric speaker ID                     |
-| Kokoro     | Yes              | Yes              | Child voice IDs on model items                           | Token IDs and caller-provided model-ready style               |
-| Pocket     | Yes              | Yes              | IDs in each item's `voices` field                        | Token IDs and prepared voice state                            |
-| Supertonic | Yes              | Yes              | Child voice IDs on model items                           | Token IDs, text mask, and caller-provided style tensors       |
-| Kitten     | Yes              | Yes              | Child voice IDs on model items                           | Model-ready token IDs, style tensor, and speed                |
-| Inflect    | Yes              | Yes              | One fixed `default` voice                                | Model-ready token IDs, speed, variation, and seed             |
-| Sopro      | Yes (partial)    | Yes              | Zero-shot reference audio                                | One-segment token IDs and reference state; `wasm-uint8` + CPU |
-| Qwen3-TTS  | Yes              | Yes              | No; VoiceDesign/Base bundles                             | Wrapped text/instruction IDs or Base voice state              |
-| Chatterbox | Yes              | Yes              | Model-ready token IDs and prepared reference voice state |
+| System     | Built-in adapter | Built-in catalog     | Voice data in normalized catalog items | Typical runtime inputs                                             |
+| ---------- | ---------------- | -------------------- | -------------------------------------- | ------------------------------------------------------------------ |
+| Piper      | Yes              | Yes                  | Voice item IDs                         | Token IDs and optional numeric speaker ID                          |
+| Kokoro     | Yes              | Yes                  | Child voice IDs on model items         | Token IDs and caller-provided model-ready style                    |
+| Pocket     | Yes              | Yes                  | IDs in each item's `voices` field      | Token IDs and prepared voice state                                 |
+| Supertonic | Yes              | Yes                  | Child voice IDs on model items         | Token IDs, text mask, and caller-provided style tensors            |
+| Kitten     | Yes              | Yes                  | Child voice IDs on model items         | Model-ready token IDs, style tensor, and speed                     |
+| Inflect    | Yes              | Yes                  | One fixed `default` voice              | Model-ready token IDs, speed, variation, and seed                  |
+| Sopro      | Yes (partial)    | Yes                  | Zero-shot reference audio              | One-segment token IDs and reference state; `wasm-uint8` + CPU      |
+| Qwen3-TTS  | Yes              | Yes                  | No; VoiceDesign/Base bundles           | Wrapped text/instruction IDs or Base voice state                   |
+| Chatterbox | Yes              | Yes                  | No; prepared reference state           | Model-ready token IDs and prepared reference voice state           |
+| Phonon     | Yes              | Yes; currently empty | Catalog-declared projected prompt IDs  | Model-ready token IDs and generation controls → streaming mono PCM |
 
 Sopro native offline inference is currently enabled only for the parity-tested `wasm-uint8` plus `CPUExecutionProvider` combination. See [Sopro](sopro.md) for the API boundary and native parity gate.
 `OnnxVoice` discovers voices from the normalized catalog data shown above. A catalog item whose kind is `voice` contributes its own ID; items with child voices contribute the IDs already present in `CatalogItem.voices`. The catalog determines which voices are available.
@@ -33,5 +34,6 @@ inflect
 sopro
 qwen3
 chatterbox
+phonon
 qwen3-release-validation
 ```

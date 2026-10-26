@@ -10,6 +10,7 @@ from .kokoro import KokoroAdapter
 from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
 from .kokoro_inno import KokoroVoicePack
 from .kokoro_split import SplitKokoroRuntime
+from .phonon import PhononAdapter, PhononStreamChunk, PhononVoiceState
 from .piper import PiperAdapter
 from .pocket import PocketAdapter
 from .qwen3 import Qwen3Adapter
@@ -24,6 +25,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
     PiperAdapter.system: PiperAdapter,
     KokoroAdapter.system: KokoroAdapter,
     PocketAdapter.system: PocketAdapter,
+    PhononAdapter.system: PhononAdapter,
     SupertonicAdapter.system: SupertonicAdapter,
     SoproAdapter.system: SoproAdapter,
     KittenAdapter.system: KittenAdapter,
@@ -54,6 +56,9 @@ __all__ = [
     "PiperAdapter",
     "KokoroAdapter",
     "PocketAdapter",
+    "PhononAdapter",
+    "PhononVoiceState",
+    "PhononStreamChunk",
     "SupertonicAdapter",
     "SoproAdapter",
     "SoproRun",

@@ -49,6 +49,20 @@ This selects the backing asset without changing the semantic voice reference, fo
 
 Pocket discovery is limited to voice IDs already present in normalized `CatalogItem.voices`. Predefined names or descriptive details outside that field are not added as voices by discovery.
 
+## Phonon voices
+
+A published Phonon bundle contributes only the child voice IDs declared by its prompt inventory. A semantic reference has the form `phonon:<catalog-target>/<declared-voice-id>`; it does not identify a locally invented target or voice. The checked-in Phonon bundle catalog currently has no targets, so it exposes no Phonon voice references.
+
+```python
+from onnxvoice import OnnxVoice
+
+manager = OnnxVoice()
+for record in manager.list_voices(system="phonon"):
+    print(record.ref, record.backing_ref)
+```
+
+At runtime, select a declared prompt name or a `PhononVoiceState`. Phonon uses bundled projected voice prompts and does not support arbitrary reference-audio cloning. See the [Phonon guide](systems/phonon.md) for its streaming boundary, controls, and license details.
+
 ## Resolve a voice
 
 Use `resolve_voice()` to look up a semantic reference in the current catalog:

@@ -727,6 +727,140 @@ ENGINE_CONTRACTS: Mapping[str, EngineContract] = MappingProxyType(
                 ),
             ),
         ),
+        "phonon": EngineContract(
+            engine="phonon",
+            inputs=(_TOKEN_IDS,),
+            parameters=(
+                _control(
+                    "voice",
+                    "string",
+                    "Bundled projected voice prompt; no reference-audio cloning is supported.",
+                    default_status="unknown",
+                    availability="Installed or catalog voice metadata.",
+                ),
+                _control(
+                    "duration_delta",
+                    "number",
+                    "Text-conditioner duration offset; default is bundle metadata dependent.",
+                    default_status="unknown",
+                ),
+                _control(
+                    "temperature",
+                    "number",
+                    "Flow noise temperature; noise scale is sqrt(temperature).",
+                    default_status="unknown",
+                    minimum=0.0,
+                    minimum_inclusive=True,
+                ),
+                _control(
+                    "seed",
+                    "integer",
+                    "Optional non-negative seed for reproducible per-utterance flow noise.",
+                    default=None,
+                    minimum=0,
+                    minimum_inclusive=True,
+                ),
+                _control(
+                    "eos_threshold",
+                    "number",
+                    "EOS-logit threshold; the default is bundle metadata dependent.",
+                    default_status="unknown",
+                ),
+                _control(
+                    "frames_after_eos",
+                    "integer",
+                    "Decoded frames to append after detecting EOS.",
+                    default_status="unknown",
+                    minimum=0,
+                    minimum_inclusive=True,
+                    unit="frames",
+                ),
+                _control(
+                    "min_frames_before_eos",
+                    "integer",
+                    "Earliest frame index at which EOS may terminate generation.",
+                    default_status="unknown",
+                    minimum=0,
+                    minimum_inclusive=True,
+                    unit="frames",
+                ),
+                _control(
+                    "max_frames",
+                    "integer",
+                    "Mandatory hard cap on generated frames.",
+                    default_status="unknown",
+                    minimum=1,
+                    minimum_inclusive=True,
+                    unit="frames",
+                ),
+            ),
+            limits=(
+                _limit(
+                    "max_frames",
+                    None,
+                    "unknown",
+                    "frames",
+                    "bundle_generation_metadata",
+                    "The selected bundle may declare a hard frame cap; otherwise callers must provide one.",
+                    constraint_status="model_declared",
+                ),
+                _limit(
+                    "max_input_tokens",
+                    None,
+                    "not_declared",
+                    "tokens",
+                    "adapter_contract",
+                    "ONNXVoice accepts caller-prepared IDs and does not tokenize or chunk text.",
+                    constraint_status="not_enforced_by_adapter",
+                ),
+            ),
+            capabilities=(
+                _capability(
+                    "voice_cloning",
+                    False,
+                    "not_supported",
+                    reason="Phonon selects bundled projected voice prompts; reference-audio enrollment is not implemented.",
+                ),
+                _capability(
+                    "streaming",
+                    True,
+                    "supported",
+                    mode="frame_streaming",
+                    reason="The adapter yields decoded PCM frames from the four-graph runtime.",
+                ),
+                _capability(
+                    "named_voices",
+                    True,
+                    "supported",
+                    mode="bundled_voice_prompt",
+                    reason="The selected bundle declares its available voice prompts.",
+                ),
+            ),
+            selection_metadata=(
+                _input(
+                    "voices",
+                    "string[]",
+                    "Voice names declared by the selected bundle.",
+                    required=False,
+                    group="selection_metadata",
+                    status="target_dependent",
+                    availability="catalog or installed config",
+                ),
+                _input(
+                    "default_voice",
+                    "string",
+                    "Bundle-declared default voice, if any.",
+                    required=False,
+                    group="selection_metadata",
+                    status="target_dependent",
+                    availability="catalog or installed config",
+                ),
+            ),
+            notes=(
+                "The runtime accepts model-ready token IDs and returns streaming PCM; tokenization and long-text chunking belong to a frontend.",
+                "Generation defaults are resolved from the selected bundle; controls without defaults remain required.",
+            ),
+        ),
         "qwen3": EngineContract(
             engine="qwen3",
             inputs=(
@@ -1744,6 +1878,99 @@ def _apply_target_rules(
             )
         result["layout"] = layout
 
+    elif engine == "phonon":
+        generation_mapping, generation_source = _target_mapping(metadata, "generation")
+        generation = dict(_mapping(_lookup(roots, ("generation",), ("onnx", "generation"))))
+        if generation_mapping:
+            generation.update(generation_mapping)
+        elif generation:
+            generation_source = "installed_manifest"
+        for option_name, field_name in (
+            ("duration_delta", "duration_delta_default"),
+            ("temperature", "temperature_default"),
+            ("eos_threshold", "eos_threshold_default"),
+            ("frames_after_eos", "frames_after_eos"),
+            ("min_frames_before_eos", "min_frames_before_eos"),
+            ("max_frames", "max_frames"),
+        ):
+            value = generation.get(field_name)
+            source = _target_value_source(metadata, "generation", field_name)
+            if source == "unknown":
+                source = generation_source
+            if value is None:
+                _set_option(
+                    result,
+                    option_name,
+                    default=None,
+                    default_status="unknown",
+                    required=True,
+                    status="required",
+                    source=source,
+                    availability="No default is declared; supply this control for inference.",
+                )
+            else:
+                _set_option(
+                    result,
+                    option_name,
+                    default=value,
+                    default_status="known",
+                    required=False,
+                    status="supported",
+                    source=source,
+                )
+            if option_name == "max_frames" and type(value) is int and value > 0:
+                _install_value(
+                    result,
+                    "max_frames",
+                    value,
+                    source=source,
+                    unit="frames",
+                    description="Selected bundle's enforced maximum output frame count.",
+                    constraint_status="enforced",
+                )
+
+        voices = metadata.get("voices")
+        if not isinstance(voices, (list, tuple)) or not voices:
+            configured_voices = _lookup(roots, ("voices",))
+            if isinstance(configured_voices, Mapping):
+                voices = tuple(configured_voices)
+            elif isinstance(configured_voices, (list, tuple)):
+                voice_entries = [
+                    entry.get("name") if isinstance(entry, Mapping) else entry
+                    for entry in configured_voices
+                ]
+                voices = tuple(name for name in voice_entries if isinstance(name, str) and name)
+        voice_names = (
+            sorted(str(name) for name in voices) if isinstance(voices, (list, tuple)) else []
+        )
+        default_voice = metadata.get("default_voice")
+        if not isinstance(default_voice, str) or not default_voice:
+            configured_default = _lookup(roots, ("default_voice",), ("voices", "default"))
+            default_voice = configured_default if isinstance(configured_default, str) else None
+        if voice_names:
+            voice_source = _fact_source(metadata, "voices")
+            if voice_source == "unknown":
+                voice_source = (
+                    "installed_manifest"
+                    if metadata.get("_manifest_loaded")
+                    else "catalog_metadata"
+                    if isinstance(metadata.get("_catalog_metadata"), Mapping)
+                    else "unknown"
+                )
+            _set_option(
+                result,
+                "voice",
+                choices=voice_names,
+                default=default_voice,
+                default_status="known" if default_voice in voice_names else "unknown",
+                required=default_voice not in voice_names,
+                status="supported" if default_voice in voice_names else "required",
+                source=voice_source,
+                availability="Declared bundled voice prompts.",
+            )
+        result["layout"] = "phonon-four-graph-streaming-v1"
+        result["field_status"]["layout"] = "known"
+
     elif engine == "sopro":
         generation_mapping, generation_source = _target_mapping(metadata, "generation")
         generation = dict(_mapping(_lookup(roots, ("generation",))))
@@ -1998,7 +2225,11 @@ def _variant_response(
     if not isinstance(resolved_layout, str):
         resolved_layout = _lookup(manifest_roots, ("layout",), ("runtime", "layout"))
     manifest_sample_rate = _lookup(
-        manifest_roots, ("sample_rate",), ("audio", "sample_rate"), ("model", "sample_rate")
+        manifest_roots,
+        ("sample_rate",),
+        ("runtime", "sample_rate"),
+        ("audio", "sample_rate"),
+        ("model", "sample_rate"),
     )
     sample_rate = (
         getattr(item, "sample_rate", None)
@@ -2064,6 +2295,12 @@ def _variant_response(
         "contract_status": contract.contract_status,
         "contract_reason": contract.contract_reason,
     }
+    if engine == "phonon":
+        license_info = metadata.get("license")
+        if not isinstance(license_info, Mapping):
+            license_info = _lookup(manifest_roots, ("license",))
+        if isinstance(license_info, Mapping):
+            result["license"] = dict(license_info)
     voices = (
         getattr(item, "voices", None)
         or getattr(installation, "voices", None)
@@ -2076,6 +2313,19 @@ def _variant_response(
         or metadata.get("default_voice")
         or ("default" if engine == "inflect" else None)
     )
+    if engine == "phonon":
+        if not voices:
+            configured_voices = _lookup(manifest_roots, ("voices",))
+            if isinstance(configured_voices, (list, tuple)):
+                names = [
+                    entry.get("name") if isinstance(entry, Mapping) else entry
+                    for entry in configured_voices
+                ]
+                voices = tuple(name for name in names if isinstance(name, str) and name)
+        if not default_voice:
+            configured_default = _lookup(manifest_roots, ("default_voice",), ("voices", "default"))
+            if isinstance(configured_default, str) and configured_default:
+                default_voice = configured_default
     choices = (
         _item_choices(item, "distribution_choices")
         if item is not None
@@ -2206,6 +2456,9 @@ def _generic_response(
                     ),
                     "default_voice": getattr(item, "default_voice", None)
                     or metadata.get("default_voice"),
+                    "license": dict(metadata["license"])
+                    if isinstance(metadata.get("license"), Mapping)
+                    else None,
                     "field_status": {
                         "target": "known",
                         "ref": "known",
@@ -2498,6 +2751,13 @@ def list_engine_targets(
                         "distribution": variant.get("distribution"),
                         "layout": variant.get("layout"),
                         "sample_rate": variant.get("sample_rate"),
+                        "license_spdx": variant.get("license", {}).get("spdx")
+                        if isinstance(variant.get("license"), Mapping)
+                        else None,
+                        "commercial_use": variant.get("license", {}).get("commercial_use")
+                        if isinstance(variant.get("license"), Mapping)
+                        else None,
+                        "license": variant.get("license"),
                         "voice_cloning": clone.get("status", "unknown"),
                         "cloning_mode": clone.get("mode"),
                         "reason": clone.get("reason"),

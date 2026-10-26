@@ -36,9 +36,13 @@ onnxvoice engines options --engine piper
 onnxvoice engines options --engine kokoro --target v1.0 --format json
 onnxvoice engines options --engine qwen3 --target base-0.6b
 onnxvoice --offline engines options --engine kokoro --target v1.0
+onnxvoice engines list --engine phonon --format json
+onnxvoice engines options --engine phonon
 ```
 
 `engines list` reports target/variant rows and accepts `--engine`, `--capability voice-cloning`, `--refresh`, and `--format`. `engines options` accepts an engine plus optional target ID or alias, `--quality`, `--distribution`, `--refresh`, and `--format`. Quality and distribution selectors require `--target`; valid values come from that target's catalog metadata. Without a target, the command reports the static adapter contract and known catalog targets. With a target, it resolves that target's parameter, input, capability, quality/distribution, and limit details. The supported output formats are `table`, `plain`, `json`, and `tsv`.
+
+Phonon is a token-ID-to-streaming-PCM adapter with no text normalization or tokenization. The registered adapter can be discovered even while its catalog has no installable entries; target and quality selectors become available only when they are published. See [Phonon](systems/phonon.md) for its controls and current availability.
 
 Capability and limit rows are target-specific where metadata varies by model type, profile, distribution, or installed manifest. A `null` value with `not_declared`, `unknown`, or `unavailable` status is intentional: ONNXVoice does not infer undocumented limits. For example, Qwen3 Base supports reference-conditioned cloning, while VoiceDesign is instruction-conditioned voice design, not cloning. Kokoro cloning distributions require reference audio and transcript token IDs; stock voice styles and optional Inno enrollment on ordinary layouts are separate capabilities. Piper's numeric `speaker_id` selects an existing speaker and is not cloning. See the relevant [system pages](systems/index.md) for adapter boundaries and [voice records](voices.md) for catalog voice selection.
 
@@ -62,16 +66,16 @@ onnxvoice list --system piper --format json
 onnxvoice installed --format tsv
 ```
 
-| Flag                   | Accepted values or meaning                                              |
-| ---------------------- | ----------------------------------------------------------------------- |
-| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect`, `qwen3` |
-| `--kind`               | `voice`, `model`, `bundle`                                              |
-| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`                          |
-| `--gender`             | `male`, `female`, `neutral`, `unknown`                                  |
-| `--quality`            | Quality selection                                                       |
-| `--distribution`       | Distribution identifier                                                 |
-| `--status`             | `installed`, `available`, `local`                                       |
-| `--format`             | `table`, `plain`, `json`, `tsv`                                         |
+| Flag                   | Accepted values or meaning                                                        |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect`, `qwen3`, `phonon` |
+| `--kind`               | `voice`, `model`, `bundle`                                                        |
+| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`                                    |
+| `--gender`             | `male`, `female`, `neutral`, `unknown`                                            |
+| `--quality`            | Quality selection                                                                 |
+| `--distribution`       | Distribution identifier                                                           |
+| `--status`             | `installed`, `available`, `local`                                                 |
+| `--format`             | `table`, `plain`, `json`, `tsv`                                                   |
 
 Generic language tags match compatible specific locales. An `en` filter matches English locales such as `en-US` and `en-GB`. An `en-US` filter matches a generic `en` capability, but not a conflicting specific locale such as `en-GB`. Case and hyphen normalization are supported.
 
