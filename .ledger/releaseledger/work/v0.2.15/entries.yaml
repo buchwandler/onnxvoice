@@ -1,0 +1,84 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.15
+git_base_ref: b07663f89a78237990e118de352077abd6b08b8d
+git_base_sha: b07663f89a78237990e118de352077abd6b08b8d
+git_head_ref: a591bf3068ad314437407135b1608474f8b2e513
+git_head_sha: a591bf3068ad314437407135b1608474f8b2e513
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: Added cache inventory, reclaim planning, and clearer multi-variant removal controls
+    status: accepted
+    source_refs:
+      - git:aca4fd159db89b84b50c7a2343600fa1436d6505
+    paths:
+      - README.md
+      - docs/api/manager.md
+      - docs/api/store.md
+      - docs/api/types.md
+      - docs/cli.md
+      - docs/python-api.md
+      - docs/storage.md
+      - onnxvoice/__init__.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_cache_usage.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_public_api.py
+    sources:
+      - git:aca4fd159db89b84b50c7a2343600fa1436d6505
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: Added a catalog-driven Phonon streaming ONNX engine with managed and local loading
+    status: accepted
+    source_refs:
+      - git:10a45fc368e7ecd09dcec302ea52211adb60bd48
+      - git:a591bf3068ad314437407135b1608474f8b2e513
+    paths:
+      - README.md
+      - docs/cli.md
+      - docs/systems/index.md
+      - docs/systems/phonon.md
+      - docs/voices.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/phonon.py
+      - tests/test_phonon_catalog.py
+      - tests/test_phonon_integration.py
+      - tests/test_phonon_real_bundle.py
+      - tests/test_phonon_runtime.py
+      - tests/test_store.py
+    sources:
+      - git:10a45fc368e7ecd09dcec302ea52211adb60bd48
+      - git:a591bf3068ad314437407135b1608474f8b2e513
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: fixed
+    summary: Fixed ONNX session error reporting with component, provider, model, and original-cause context
+    status: accepted
+    source_refs:
+      - git:6f3e7f7287ce9b4127f8892ed94566856569da35
+    paths:
+      - docs/api/runtime.md
+      - docs/systems/chatterbox.md
+      - onnxvoice/runtime.py
+      - tests/test_runtime.py
+    sources:
+      - git:6f3e7f7287ce9b4127f8892ed94566856569da35
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

@@ -1,0 +1,17 @@
+ onnxvoice/huggingface.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/onnxvoice/huggingface.py b/onnxvoice/huggingface.py
+index a8b424d..5f90036 100644
+--- a/onnxvoice/huggingface.py
++++ b/onnxvoice/huggingface.py
+@@ -419,8 +419,8 @@ def _disable_xet_for_current_process(hub: ModuleType) -> bool:
+             constants = importlib.import_module("huggingface_hub.constants")
+         if not hasattr(constants, "HF_HUB_DISABLE_XET"):
+             return False
+-        setattr(constants, "HF_HUB_DISABLE_XET", True)
+-        return getattr(constants, "HF_HUB_DISABLE_XET") is True
++        constants.HF_HUB_DISABLE_XET = True
++        return constants.HF_HUB_DISABLE_XET is True
+     except Exception:
+         return False

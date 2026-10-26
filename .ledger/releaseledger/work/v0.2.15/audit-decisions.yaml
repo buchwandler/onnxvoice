@@ -1,0 +1,120 @@
+rows:
+  - sha: c5274cd01d7c955c9849e93c6632fc2b4c6c1852
+    inspected: true
+    inspected_paths:
+      - docs/changelog.md
+      - .ledger/releaseledger/data/ledgers/main/events/events.jsonl
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/release.md
+      - .ledger/releaseledger/work/v0.2.14/entries.yaml
+    observed_behavior: Updated the generated changelog and releaseledger records for v0.2.14; no product runtime behavior changed
+    public_impact: none
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: Release bookkeeping only
+    stale: false
+  - sha: 883996e9fd0a6378e34124b06e984f6f486647d0
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    observed_behavior: Adjusted Hugging Face helper typing and verification expressions without changing runtime behavior
+    public_impact: none
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: Implementation-only typing/formatting change
+    stale: false
+  - sha: 1482216d85a71727490468141c86e45a075da820
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+    observed_behavior: Applied a formatting-only adjustment in the Hugging Face helper without changing runtime behavior
+    public_impact: none
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: Implementation-only formatting change
+    stale: false
+  - sha: 7d829bf7caabee2fec662a25cc7065700fd07581
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+    observed_behavior: Applied a typing-oriented adjustment in the Hugging Face helper without changing runtime behavior
+    public_impact: none
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: Implementation-only typing change
+    stale: false
+  - sha: aca4fd159db89b84b50c7a2343600fa1436d6505
+    inspected: true
+    inspected_paths:
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - README.md
+      - docs/cli.md
+      - docs/python-api.md
+      - docs/storage.md
+      - tests/test_cache_usage.py
+      - tests/test_public_api.py
+    observed_behavior: Added cache inventory metrics and reclaim planning, richer installed-entry sorting, explicit multi-variant removal controls, uninstall as a removal alias, and documented the expanded store and manager APIs
+    public_impact: public
+    decision: accepted
+    target_entry_key: cache-inventory-and-gc
+    target_entry_id: null
+    notes: Reviewed implementation, public API/docs, and tests
+    stale: false
+  - sha: 10a45fc368e7ecd09dcec302ea52211adb60bd48
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/systems/phonon.py
+      - onnxvoice/__init__.py
+      - docs/systems/phonon.md
+      - docs/cli.md
+      - docs/voices.md
+      - tests/test_phonon_catalog.py
+      - tests/test_phonon_integration.py
+      - tests/test_phonon_runtime.py
+    observed_behavior: Added the Phonon streaming ONNX engine with catalog validation, managed and local loading, four-graph runtime support, voice and option discovery, and documented opt-in real-bundle acceptance coverage
+    public_impact: public
+    decision: accepted
+    target_entry_key: phonon-streaming-engine
+    target_entry_id: null
+    notes: Reviewed adapter, catalog, CLI, documentation, and tests
+    stale: false
+  - sha: 6f3e7f7287ce9b4127f8892ed94566856569da35
+    inspected: true
+    inspected_paths:
+      - onnxvoice/runtime.py
+      - docs/api/runtime.md
+      - docs/systems/chatterbox.md
+      - tests/test_runtime.py
+    observed_behavior: Expanded ONNX session-creation diagnostics with the graph component, resolved providers, model filename, and preserved original exception cause
+    public_impact: public
+    decision: accepted
+    target_entry_key: session-creation-diagnostics
+    target_entry_id: null
+    notes: Reviewed runtime implementation, documentation, and tests
+    stale: false
+  - sha: a591bf3068ad314437407135b1608474f8b2e513
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/systems/phonon.py
+      - docs/systems/phonon.md
+      - tests/test_phonon_catalog.py
+      - tests/test_phonon_runtime.py
+      - tests/test_store.py
+    observed_behavior: Added Phonon catalog release-version propagation and compatibility handling for runtime metadata, plus additional graph-state and local-runtime validation coverage
+    public_impact: public
+    decision: accepted
+    target_entry_key: phonon-streaming-engine
+    target_entry_id: null
+    notes: Reviewed follow-up catalog and runtime behavior with tests
+    stale: false

@@ -1612,6 +1612,15 @@ class AssetStore:
                 orphan_auxiliary_count += 1
                 orphan_auxiliary_bytes += record_size
 
+        other_cache_bytes = 0
+        seen_other_inodes = {inode_key(file) for file in scan.files if file.category != "other"}
+        for file in files_by_category.get("other", ()):
+            key = inode_key(file)
+            if key in seen_other_inodes:
+                continue
+            seen_other_inodes.add(key)
+            other_cache_bytes += file.apparent_bytes
+
         category_bytes = {
             category: sum(file.apparent_bytes for file in category_files)
             for category, category_files in files_by_category.items()
@@ -1645,7 +1654,7 @@ class AssetStore:
             install_apparent_bytes=category_bytes.get("install", 0),
             metadata_bytes=category_bytes.get("metadata", 0),
             lock_bytes=category_bytes.get("lock", 0),
-            other_cache_bytes=category_bytes.get("other", 0),
+            other_cache_bytes=other_cache_bytes,
             legacy_cache_bytes=category_bytes.get("legacy", 0),
             hardlinked_install_artifact_count=hardlinked_count,
             hardlinked_install_bytes=hardlinked_bytes,

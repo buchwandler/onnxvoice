@@ -1,0 +1,156 @@
+{
+  "candidate_count": 8,
+  "candidates": [
+    {
+      "additions": 2405,
+      "deletions": 2,
+      "patch_file": "c5274cd.patch",
+      "patch_sha256": "522029326de64d0773d2a74bc4014766a291f23ff19ec0f2c88aaa8635116642",
+      "paths": [
+        ".ledger/releaseledger/data/ledgers/main/events/events.jsonl",
+        ".ledger/releaseledger/data/ledgers/main/releases/v0.2.14/audit/commit-audit.yaml",
+        ".ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0001.md",
+        ".ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0002.md",
+        ".ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0003.md",
+        ".ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0004.md",
+        ".ledger/releaseledger/data/ledgers/main/releases/v0.2.14/release.md",
+        ".ledger/releaseledger/work/v0.2.14/audit-decisions.yaml",
+        ".ledger/releaseledger/work/v0.2.14/audit.yaml",
+        ".ledger/releaseledger/work/v0.2.14/entries.yaml",
+        ".ledger/releaseledger/work/v0.2.14/evidence/0ed8835.patch",
+        ".ledger/releaseledger/work/v0.2.14/evidence/89bc62f.patch",
+        ".ledger/releaseledger/work/v0.2.14/evidence/8a479fb.patch",
+        ".ledger/releaseledger/work/v0.2.14/evidence/b07663f.patch",
+        ".ledger/releaseledger/work/v0.2.14/evidence/manifest.json",
+        ".ledger/releaseledger/work/v0.2.14/range.json",
+        "docs/changelog.md",
+        "onnxvoice/huggingface.py"
+      ],
+      "sha": "c5274cd01d7c955c9849e93c6632fc2b4c6c1852",
+      "short_sha": "c5274cd",
+      "source_ref": "git:c5274cd01d7c955c9849e93c6632fc2b4c6c1852"
+    },
+    {
+      "additions": 6,
+      "deletions": 4,
+      "patch_file": "883996e.patch",
+      "patch_sha256": "d20c4fe6284c5cb062ddf0e49666dd784be61523b3fe88b7f2ea3d6e29d5a950",
+      "paths": ["onnxvoice/huggingface.py", "tests/test_huggingface.py"],
+      "sha": "883996e9fd0a6378e34124b06e984f6f486647d0",
+      "short_sha": "883996e",
+      "source_ref": "git:883996e9fd0a6378e34124b06e984f6f486647d0"
+    },
+    {
+      "additions": 2,
+      "deletions": 2,
+      "patch_file": "1482216.patch",
+      "patch_sha256": "8b3abed1d1e25598a6b6eabd8f9b6b554e93a91616bc195b13c11ccc50545ed7",
+      "paths": ["onnxvoice/huggingface.py"],
+      "sha": "1482216d85a71727490468141c86e45a075da820",
+      "short_sha": "1482216",
+      "source_ref": "git:1482216d85a71727490468141c86e45a075da820"
+    },
+    {
+      "additions": 1,
+      "deletions": 1,
+      "patch_file": "7d829bf.patch",
+      "patch_sha256": "9ca861911ee252fe191c681a0ec2df52e4d99ecced00d3df498c6a560ccd62b1",
+      "paths": ["onnxvoice/huggingface.py"],
+      "sha": "7d829bf7caabee2fec662a25cc7065700fd07581",
+      "short_sha": "7d829bf",
+      "source_ref": "git:7d829bf7caabee2fec662a25cc7065700fd07581"
+    },
+    {
+      "additions": 1976,
+      "deletions": 266,
+      "patch_file": "aca4fd1.patch",
+      "patch_sha256": "05ffbfef6a757b25a3071958e56aa9ea057401860b429eff69e8478c5a34c2f2",
+      "paths": [
+        "README.md",
+        "docs/api/manager.md",
+        "docs/api/store.md",
+        "docs/api/types.md",
+        "docs/cli.md",
+        "docs/python-api.md",
+        "docs/storage.md",
+        "onnxvoice/__init__.py",
+        "onnxvoice/cli.py",
+        "onnxvoice/manager.py",
+        "onnxvoice/store.py",
+        "onnxvoice/types.py",
+        "tests/test_cache_usage.py",
+        "tests/test_docs_cli_coverage.py",
+        "tests/test_public_api.py"
+      ],
+      "sha": "aca4fd159db89b84b50c7a2343600fa1436d6505",
+      "short_sha": "aca4fd1",
+      "source_ref": "git:aca4fd159db89b84b50c7a2343600fa1436d6505"
+    },
+    {
+      "additions": 3689,
+      "deletions": 35,
+      "patch_file": "10a45fc.patch",
+      "patch_sha256": "8ed8fbc18f2298737ee24513394d8bbc9f088fca84debf59ec2754dbdfe5483b",
+      "paths": [
+        "README.md",
+        "docs/cli.md",
+        "docs/systems/index.md",
+        "docs/systems/phonon.md",
+        "docs/voices.md",
+        "onnxvoice/__init__.py",
+        "onnxvoice/catalog.py",
+        "onnxvoice/cli.py",
+        "onnxvoice/engine_options.py",
+        "onnxvoice/systems/__init__.py",
+        "onnxvoice/systems/phonon.py",
+        "tests/test_phonon_catalog.py",
+        "tests/test_phonon_integration.py",
+        "tests/test_phonon_real_bundle.py",
+        "tests/test_phonon_runtime.py"
+      ],
+      "sha": "10a45fc368e7ecd09dcec302ea52211adb60bd48",
+      "short_sha": "10a45fc",
+      "source_ref": "git:10a45fc368e7ecd09dcec302ea52211adb60bd48"
+    },
+    {
+      "additions": 77,
+      "deletions": 1,
+      "patch_file": "6f3e7f7.patch",
+      "patch_sha256": "e6ea8514b31401ebefc53a0ddedff49a37c439304d04ffa2e7eaf77af8cd29d9",
+      "paths": [
+        "docs/api/runtime.md",
+        "docs/systems/chatterbox.md",
+        "onnxvoice/runtime.py",
+        "tests/test_runtime.py"
+      ],
+      "sha": "6f3e7f7287ce9b4127f8892ed94566856569da35",
+      "short_sha": "6f3e7f7",
+      "source_ref": "git:6f3e7f7287ce9b4127f8892ed94566856569da35"
+    },
+    {
+      "additions": 308,
+      "deletions": 16,
+      "patch_file": "a591bf3.patch",
+      "patch_sha256": "8d9e3e6037b6b5b8113d7a7c72035fb9ddd035d7d5e85304bc18fbc47cb25f18",
+      "paths": [
+        "docs/systems/phonon.md",
+        "onnxvoice/catalog.py",
+        "onnxvoice/systems/phonon.py",
+        "tests/test_phonon_catalog.py",
+        "tests/test_phonon_runtime.py",
+        "tests/test_store.py"
+      ],
+      "sha": "a591bf3068ad314437407135b1608474f8b2e513",
+      "short_sha": "a591bf3",
+      "source_ref": "git:a591bf3068ad314437407135b1608474f8b2e513"
+    }
+  ],
+  "git_base_ref": "b07663f89a78237990e118de352077abd6b08b8d",
+  "git_base_sha": "b07663f89a78237990e118de352077abd6b08b8d",
+  "git_head_ref": "a591bf3068ad314437407135b1608474f8b2e513",
+  "git_head_sha": "a591bf3068ad314437407135b1608474f8b2e513",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.15",
+  "schema_version": 1
+}

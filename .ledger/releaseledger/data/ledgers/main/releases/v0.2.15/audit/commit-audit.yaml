@@ -1,0 +1,269 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 3
+release_version: v0.2.15
+git_base_ref: b07663f89a78237990e118de352077abd6b08b8d
+git_base_sha: b07663f89a78237990e118de352077abd6b08b8d
+git_head_ref: HEAD
+git_head_sha: a591bf3068ad314437407135b1608474f8b2e513
+git_range: b07663f89a78237990e118de352077abd6b08b8d..a591bf3068ad314437407135b1608474f8b2e513
+commit_count: 8
+rows:
+  - sha: c5274cd01d7c955c9849e93c6632fc2b4c6c1852
+    source_ref: git:c5274cd01d7c955c9849e93c6632fc2b4c6c1852
+    short_sha: c5274cd
+    changed_paths:
+      - .ledger/releaseledger/data/ledgers/main/events/events.jsonl
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/audit/commit-audit.yaml
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0001.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0002.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0003.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/entries/entry-0004.md
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/release.md
+      - .ledger/releaseledger/work/v0.2.14/audit-decisions.yaml
+      - .ledger/releaseledger/work/v0.2.14/audit.yaml
+      - .ledger/releaseledger/work/v0.2.14/entries.yaml
+      - .ledger/releaseledger/work/v0.2.14/evidence/0ed8835.patch
+      - .ledger/releaseledger/work/v0.2.14/evidence/89bc62f.patch
+      - .ledger/releaseledger/work/v0.2.14/evidence/8a479fb.patch
+      - .ledger/releaseledger/work/v0.2.14/evidence/b07663f.patch
+      - .ledger/releaseledger/work/v0.2.14/evidence/manifest.json
+      - .ledger/releaseledger/work/v0.2.14/range.json
+      - docs/changelog.md
+      - onnxvoice/huggingface.py
+    stats:
+      files_changed: 18
+      insertions: 2405
+      deletions: 2
+    inspected: true
+    inspected_paths:
+      - docs/changelog.md
+      - .ledger/releaseledger/data/ledgers/main/events/events.jsonl
+      - .ledger/releaseledger/data/ledgers/main/releases/v0.2.14/release.md
+      - .ledger/releaseledger/work/v0.2.14/entries.yaml
+    observed_behavior:
+      Updated the generated changelog and releaseledger records for
+      v0.2.14; no product runtime behavior changed
+    public_impact: none
+    decision: internal
+    stale: false
+    evidence_subject: "doc: changelog"
+    notes: Release bookkeeping only
+  - sha: 883996e9fd0a6378e34124b06e984f6f486647d0
+    source_ref: git:883996e9fd0a6378e34124b06e984f6f486647d0
+    short_sha: 883996e
+    changed_paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    stats:
+      files_changed: 2
+      insertions: 6
+      deletions: 4
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+      - tests/test_huggingface.py
+    observed_behavior:
+      Adjusted Hugging Face helper typing and verification expressions
+      without changing runtime behavior
+    public_impact: none
+    decision: internal
+    stale: false
+    evidence_subject: "chore: mypy"
+    notes: Implementation-only typing/formatting change
+  - sha: 1482216d85a71727490468141c86e45a075da820
+    source_ref: git:1482216d85a71727490468141c86e45a075da820
+    short_sha: "1482216"
+    changed_paths:
+      - onnxvoice/huggingface.py
+    stats:
+      files_changed: 1
+      insertions: 2
+      deletions: 2
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+    observed_behavior:
+      Applied a formatting-only adjustment in the Hugging Face helper
+      without changing runtime behavior
+    public_impact: none
+    decision: internal
+    stale: false
+    evidence_subject: "chore: pre-commit"
+    notes: Implementation-only formatting change
+  - sha: 7d829bf7caabee2fec662a25cc7065700fd07581
+    source_ref: git:7d829bf7caabee2fec662a25cc7065700fd07581
+    short_sha: 7d829bf
+    changed_paths:
+      - onnxvoice/huggingface.py
+    stats:
+      files_changed: 1
+      insertions: 1
+      deletions: 1
+    inspected: true
+    inspected_paths:
+      - onnxvoice/huggingface.py
+    observed_behavior:
+      Applied a typing-oriented adjustment in the Hugging Face helper
+      without changing runtime behavior
+    public_impact: none
+    decision: internal
+    stale: false
+    evidence_subject: "chore: mypy"
+    notes: Implementation-only typing change
+  - sha: aca4fd159db89b84b50c7a2343600fa1436d6505
+    source_ref: git:aca4fd159db89b84b50c7a2343600fa1436d6505
+    short_sha: aca4fd1
+    changed_paths:
+      - README.md
+      - docs/api/manager.md
+      - docs/api/store.md
+      - docs/api/types.md
+      - docs/cli.md
+      - docs/python-api.md
+      - docs/storage.md
+      - onnxvoice/__init__.py
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - tests/test_cache_usage.py
+      - tests/test_docs_cli_coverage.py
+      - tests/test_public_api.py
+    stats:
+      files_changed: 15
+      insertions: 1976
+      deletions: 266
+    inspected: true
+    inspected_paths:
+      - onnxvoice/cli.py
+      - onnxvoice/manager.py
+      - onnxvoice/store.py
+      - onnxvoice/types.py
+      - README.md
+      - docs/cli.md
+      - docs/python-api.md
+      - docs/storage.md
+      - tests/test_cache_usage.py
+      - tests/test_public_api.py
+    observed_behavior:
+      Added cache inventory metrics and reclaim planning, richer installed-entry
+      sorting, explicit multi-variant removal controls, uninstall as a removal alias,
+      and documented the expanded store and manager APIs
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: better gc and model inventory"
+    target_entry_key: cache-inventory-and-gc
+    target_entry_id: entry-0001
+    notes: Reviewed implementation, public API/docs, and tests
+  - sha: 10a45fc368e7ecd09dcec302ea52211adb60bd48
+    source_ref: git:10a45fc368e7ecd09dcec302ea52211adb60bd48
+    short_sha: 10a45fc
+    changed_paths:
+      - README.md
+      - docs/cli.md
+      - docs/systems/index.md
+      - docs/systems/phonon.md
+      - docs/voices.md
+      - onnxvoice/__init__.py
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/systems/__init__.py
+      - onnxvoice/systems/phonon.py
+      - tests/test_phonon_catalog.py
+      - tests/test_phonon_integration.py
+      - tests/test_phonon_real_bundle.py
+      - tests/test_phonon_runtime.py
+    stats:
+      files_changed: 15
+      insertions: 3689
+      deletions: 35
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/cli.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/systems/phonon.py
+      - onnxvoice/__init__.py
+      - docs/systems/phonon.md
+      - docs/cli.md
+      - docs/voices.md
+      - tests/test_phonon_catalog.py
+      - tests/test_phonon_integration.py
+      - tests/test_phonon_runtime.py
+    observed_behavior:
+      Added the Phonon streaming ONNX engine with catalog validation,
+      managed and local loading, four-graph runtime support, voice and option discovery,
+      and documented opt-in real-bundle acceptance coverage
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: add support for phonon"
+    target_entry_key: phonon-streaming-engine
+    target_entry_id: entry-0002
+    notes: Reviewed adapter, catalog, CLI, documentation, and tests
+  - sha: 6f3e7f7287ce9b4127f8892ed94566856569da35
+    source_ref: git:6f3e7f7287ce9b4127f8892ed94566856569da35
+    short_sha: 6f3e7f7
+    changed_paths:
+      - docs/api/runtime.md
+      - docs/systems/chatterbox.md
+      - onnxvoice/runtime.py
+      - tests/test_runtime.py
+    stats:
+      files_changed: 4
+      insertions: 77
+      deletions: 1
+    inspected: true
+    inspected_paths:
+      - onnxvoice/runtime.py
+      - docs/api/runtime.md
+      - docs/systems/chatterbox.md
+      - tests/test_runtime.py
+    observed_behavior:
+      Expanded ONNX session-creation diagnostics with the graph component,
+      resolved providers, model filename, and preserved original exception cause
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: better session error message"
+    target_entry_key: session-creation-diagnostics
+    target_entry_id: entry-0003
+    notes: Reviewed runtime implementation, documentation, and tests
+  - sha: a591bf3068ad314437407135b1608474f8b2e513
+    source_ref: git:a591bf3068ad314437407135b1608474f8b2e513
+    short_sha: a591bf3
+    changed_paths:
+      - docs/systems/phonon.md
+      - onnxvoice/catalog.py
+      - onnxvoice/systems/phonon.py
+      - tests/test_phonon_catalog.py
+      - tests/test_phonon_runtime.py
+      - tests/test_store.py
+    stats:
+      files_changed: 6
+      insertions: 308
+      deletions: 16
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/systems/phonon.py
+      - docs/systems/phonon.md
+      - tests/test_phonon_catalog.py
+      - tests/test_phonon_runtime.py
+      - tests/test_store.py
+    observed_behavior:
+      Added Phonon catalog release-version propagation and compatibility
+      handling for runtime metadata, plus additional graph-state and local-runtime validation
+      coverage
+    public_impact: public
+    decision: accepted
+    stale: false
+    evidence_subject: "feat: add phonon"
+    target_entry_key: phonon-streaming-engine
+    target_entry_id: entry-0002
+    notes: Reviewed follow-up catalog and runtime behavior with tests

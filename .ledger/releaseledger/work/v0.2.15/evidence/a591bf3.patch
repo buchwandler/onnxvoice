@@ -1,0 +1,522 @@
+ docs/systems/phonon.md       | 19 ++++++----
+ onnxvoice/catalog.py         | 28 +++++++++++++++
+ onnxvoice/systems/phonon.py  | 51 ++++++++++++++++++++++-----
+ tests/test_phonon_catalog.py | 84 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_phonon_runtime.py | 77 ++++++++++++++++++++++++++++++++++++++++
+ tests/test_store.py          | 65 ++++++++++++++++++++++++++++++++++
+ 6 files changed, 308 insertions(+), 16 deletions(-)
+
+diff --git a/docs/systems/phonon.md b/docs/systems/phonon.md
+index 1cda9c3..1a4df62 100644
+--- a/docs/systems/phonon.md
++++ b/docs/systems/phonon.md
+@@ -2,7 +2,7 @@
+
+ Phonon support is a low-level, four-graph ONNX runtime for already-tokenized integer IDs to streaming mono `float32` PCM. ONNXVoice does not tokenize or normalize text, split long text, prepare application-level requests, or apply post-processing. Those tasks belong to a separate frontend.
+
+-The adapter is registered even when no model bundles are available. **The checked-in Phonon bundle catalog currently contains no installable targets or qualities.** The catalog is authoritative: discover current availability instead of assuming a model, language, voice, or precision exists. A source-model entry or a registered adapter does not make a downloadable release.
++The adapter is registered independently of the currently published model catalog. The catalog is authoritative: discover current availability instead of assuming a model, language, voice, or quality exists. It represents one active release set, not a historical-version resolver. When present, `release_version`, `release_tags`, and source revisions are provenance metadata; inspect the selected target and quality rather than relying on a fixed version.
+
+ ```bash
+ onnxvoice list --system phonon
+@@ -10,10 +10,11 @@ onnxvoice engines list --engine phonon --format json
+ onnxvoice engines options --engine phonon
+ ```
+
+-When the catalog contains targets, `engines list` and `onnxvoice list --system phonon` show only those entries. Use the target's reported `quality_profiles` when installing; do not infer additional precisions from the source model registry.
++Use only target-reported `quality_profiles`; do not infer additional precisions from the source model registry. Catalog results expose the active `release_version` and per-quality release tags. After quality resolution, `metadata` includes `selected_quality`, `release_version`, `release_tag`, and `source_revision`; aggregated targets also expose `release_versions` and `release_tags` maps.
+
+ ## Runtime graphs and boundary
+
++Catalog-managed bundles use the canonical published contract: `runtime.kind` must be `phonon-streaming-onnx-v1`, the declared graph inventory must be exact, and dimensions, state, voices, config/catalog equality, and graph signatures remain validated.
+ The adapter validates the installed config and each graph signature, then creates provider-configured ONNX Runtime sessions lazily as inference needs them.
+
+ | Component          | Relative graph path          |
+@@ -52,7 +53,7 @@ with manager.open(installation, providers="cpu") as runtime:
+         consume_pcm(chunk.audio, sample_rate=chunk.sample_rate)
+ ```
+
+-The example chooses from live catalog results; the current empty catalog means it stops before installation. `onnxvoice install phonon:<target-id> --quality <published-quality>` uses the ordinary managed, per-file artifact installer. It does not extract a ZIP. `open()` is local-only after installation; `--offline` also prevents catalog network access for discovery commands.
++The example chooses from live catalog results. `onnxvoice install phonon:<target-id> --quality <published-quality>` uses the ordinary managed, per-file artifact installer with direct HTTPS URLs, declared byte sizes, and SHA-256 checksums; GitHub Release URLs do not require Hugging Face transport or ZIP extraction. Installed files are cached, and `open()` is local-only after installation. `--offline` prevents catalog or artifact network access; cached artifacts can still be reopened.
+
+ A streaming consumer should preserve chunk order and use each chunk's `sample_rate`. `runtime.infer(token_ids, ...)` is available when a caller wants all frames in one contiguous result instead.
+
+@@ -60,6 +61,8 @@ A streaming consumer should preserve chunk order and use each chunk's `sample_ra
+
+ `OnnxVoice.open_local()` can open explicit Phonon files without copying them to or registering them in the managed store. Supply the config, four graph components, and a declared voice prompt using the same artifact-role names:
+
++For `open_local(system="phonon")`, a canonical config works as-is, and an exporter-native config may omit the runtime-kind marker when all other runtime fields and graph signatures are valid. A supplied conflicting `runtime.kind`, legacy `runtime_kind`, or top-level `kind` is rejected. Compatibility reads only explicit Phonon runtime fields and known aliases; unrelated nested `kind` values do not select the runtime.
++
+ The example assumes the local config declares the required generation defaults. Otherwise, supply explicit caller-selected values for each control that engine options report as required.
+
+ ```python
+@@ -89,9 +92,9 @@ Replace the voice name and paths with files declared by the local config. The pr
+
+ ## Voices, qualities, and licensing
+
+-Phonon voice IDs come only from the selected published bundle's declared prompt inventory. They appear as child voices in `OnnxVoice.list_voices(system="phonon")`; a semantic reference has the form `phonon:<catalog-target>/<declared-voice-id>`. The current empty bundle catalog exposes no Phonon voice references. See [catalog voice discovery](../voices.md#phonon-voices) for how this relates to semantic voice records.
++Phonon voice IDs come only from the selected published bundle's declared prompt inventory. They appear as child voices in `OnnxVoice.list_voices(system="phonon")`; a semantic reference has the form `phonon:<catalog-target>/<declared-voice-id>`. Availability follows the active catalog and selected bundle. See [catalog voice discovery](../voices.md#phonon-voices) for how this relates to semantic voice records.
+
+-The bundle producer records the 31M model line as Apache-2.0 and the 40M model line as CC-BY-NC-4.0. That license distinction does not mean either model or any quality is currently installable. For each actually published target, inspect its catalog license metadata and keep its bundled attribution and upstream notices. CC-BY-NC-4.0 is non-commercial; installation does not grant commercial-use rights. ONNXVoice source-code licensing is separate from model and voice licensing.
++The bundle producer records different licenses for model lines and distributions; inspect each selected target's catalog license metadata rather than assuming a fixed model or quality is available. Keep bundled attribution and upstream notices. CC-BY-NC-4.0 is non-commercial; installation does not grant commercial-use rights. ONNXVoice source-code licensing is separate from model and voice licensing.
+
+ ## Providers and diagnostics
+
+@@ -102,7 +105,9 @@ Install an ONNX Runtime distribution and provider supported by the selected plat
+ The managed-install, CPU inference, and offline-reopen acceptance test is opt-in and uses only published `fp32` catalog entries. It is skipped by default, so ordinary tests do not download model artifacts. Run it when release assets and `onnxruntime` are available:
+
+ ```bash
+-ONNXVOICE_PHONON_ACCEPTANCE=1 pytest -q tests/test_phonon_real_bundle.py
++ONNXVOICE_PHONON_ACCEPTANCE=1 \
++ONNXVOICE_REQUIRE_PHONON_ACCEPTANCE=1 \
++pytest -q tests/test_phonon_real_bundle.py
+ ```
+
+-Set `ONNXVOICE_REQUIRE_PHONON_ACCEPTANCE=1` as well to make the required 31M `fp32` case fail rather than skip when that target or runtime is unavailable. The 40M case is tested only when its `fp32` variant is actually published. A passing unit or fake-session test does not substitute for this real-bundle check.
++Set both acceptance flags as shown to make the required Apache-2.0 31M case fail rather than skip when that target, its assets, or the runtime is unavailable. The 40M case remains optional and is tested only when its `fp32` variant is published. A passing unit or fake-session test does not substitute for this real-bundle check.
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index b6f5d9d..5c5da56 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -3503,6 +3503,7 @@ def _phonon_artifact(
+     model_key: str,
+     precision: str,
+     tag: str,
++    release_version: str | None,
+     source_revision: str,
+     license_info: Mapping[str, Any],
+ ) -> Artifact:
+@@ -3558,6 +3559,7 @@ def _phonon_artifact(
+         metadata={
+             "path": path,
+             "release_tag": tag,
++            "release_version": release_version,
+             "model_key": model_key,
+             "precision": precision,
+             "source_revision": source_revision,
+@@ -3572,9 +3574,29 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
+         raise CatalogError("Phonon catalog must be an object")
+     if type(data.get("schema_version")) is not int or data["schema_version"] != 2:
+         raise CatalogError("Phonon catalog schema_version must be 2")
++    catalog_release_version = (
++        _require_phonon_safe_id(data["release_version"], "Phonon catalog release_version")
++        if "release_version" in data
++        else None
++    )
+     bundles = data.get("bundles")
+     if not isinstance(bundles, Sequence) or isinstance(bundles, (str, bytes)):
+         raise CatalogError("Phonon catalog bundles must be a sequence")
++    declared_release_versions: set[str] = set()
++    for index, raw_bundle in enumerate(bundles):
++        if not isinstance(raw_bundle, Mapping) or "release_version" not in raw_bundle:
++            continue
++        release_version = _require_phonon_safe_id(
++            raw_bundle["release_version"], f"Phonon bundle {index} release_version"
++        )
++        if catalog_release_version is not None and release_version != catalog_release_version:
++            raise CatalogError(
++                f"Phonon bundle {index}: release_version does not match catalog release_version"
++            )
++        declared_release_versions.add(release_version)
++    if len(declared_release_versions) > 1:
++        raise CatalogError("Phonon catalog rows contain multiple release_version values")
++    active_release_version = catalog_release_version or next(iter(declared_release_versions), None)
+
+     grouped: dict[str, dict[str, Any]] = {}
+     seen_variants: set[tuple[str, str]] = set()
+@@ -3658,6 +3680,7 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
+                     model_key=model_key,
+                     precision=precision,
+                     tag=tag,
++                    release_version=active_release_version,
+                     source_revision=source_revision,
+                     license_info=license_info,
+                 )
+@@ -3692,6 +3715,7 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
+
+         profile = {
+             "quality": precision,
++            "release_version": active_release_version,
+             "release_tag": tag,
+             "source_revision": source_revision,
+             "source_uri": source_uri,
+@@ -3742,6 +3766,10 @@ def _parse_phonon(data: Any) -> list[CatalogItem]:
+             "runtime": base["runtime"],
+             "generation": base["generation"],
+             "profiles": profiles,
++            "release_version": active_release_version,
++            "release_versions": {
++                quality: profiles[quality]["release_version"] for quality in qualities
++            },
+             "quality_profiles": qualities,
+             "source_revisions": {
+                 quality: profiles[quality]["source_revision"] for quality in qualities
+diff --git a/onnxvoice/systems/phonon.py b/onnxvoice/systems/phonon.py
+index 183b5fd..05ba8de 100644
+--- a/onnxvoice/systems/phonon.py
++++ b/onnxvoice/systems/phonon.py
+@@ -232,16 +232,44 @@ class PhononAdapter(SystemAdapter):
+         locale = "-".join(normalized)
+         return normalized[0], locale, locale
+
++    @staticmethod
++    def _runtime_section(config: Mapping[str, Any]) -> Mapping[str, Any]:
++        value = config.get("runtime")
++        return value if isinstance(value, Mapping) else {}
++
++    @staticmethod
++    def _runtime_value(
++        config: Mapping[str, Any], runtime: Mapping[str, Any], keys: Sequence[str]
++    ) -> Any:
++        """Read a known runtime field from explicit compatibility sections only."""
++        onnx = config.get("onnx")
++        sections = (runtime, onnx, config)
++        for section in sections:
++            if not isinstance(section, Mapping):
++                continue
++            for key in keys:
++                value = section.get(key)
++                if value is not None:
++                    return value
++        return None
++
+     @staticmethod
+     def _normalize_runtime(config: Mapping[str, Any]) -> dict[str, Any]:
+-        kind = PhononAdapter._find_value(config, ("kind", "runtime_kind"))
++        config_runtime = PhononAdapter._runtime_section(config)
++        kind = config_runtime.get("kind")
++        if kind is None:
++            kind = config.get("runtime_kind")
++        if kind is None:
++            kind = config.get("kind")
++        if kind is None:
++            kind = _RUNTIME_KIND
+         if kind != _RUNTIME_KIND:
+             raise RuntimeContractError(
+                 f"Phonon config runtime kind must be {_RUNTIME_KIND!r}, got {kind!r}"
+             )
+         runtime: dict[str, Any] = {"kind": kind, "graphs": list(_GRAPH_FILES.values())}
+         for field_name, aliases in _RUNTIME_ALIASES.items():
+-            value = PhononAdapter._find_value(config, aliases)
++            value = PhononAdapter._runtime_value(config, config_runtime, aliases)
+             if field_name == "mimi_state":
+                 if not isinstance(value, (Mapping, list, tuple)) or not value:
+                     raise RuntimeContractError(
+@@ -254,7 +282,12 @@ class PhononAdapter(SystemAdapter):
+                     raise RuntimeContractError("Phonon frame_rate must be positive")
+             else:
+                 runtime[field_name] = PhononAdapter._positive_int(value, field_name)
+-        declared_graphs = PhononAdapter._find_value(config, ("graphs",))
++        onnx = config.get("onnx")
++        declared_graphs = config_runtime.get("graphs")
++        if declared_graphs is None and isinstance(onnx, Mapping):
++            declared_graphs = onnx.get("graphs")
++        if declared_graphs is None:
++            declared_graphs = config.get("graphs")
+         if declared_graphs is not None:
+             if not isinstance(declared_graphs, Sequence) or isinstance(
+                 declared_graphs, (str, bytes)
+@@ -646,7 +679,7 @@ class PhononAdapter(SystemAdapter):
+             self._require_dtype(embed_spec, component, "floating")
+             self._require_dtype(output_specs["hidden"], component, "floating")
+             self._require_dtype(output_specs["eos_logit"], component, "floating")
+-            bindings: list[_KVBinding] = []
++            kv_bindings: list[_KVBinding] = []
+             for layer, kind in sorted(expected_state):
+                 input_spec = input_state[(layer, kind)]
+                 output_spec = output_state[(layer, kind)]
+@@ -682,7 +715,7 @@ class PhononAdapter(SystemAdapter):
+                 )
+                 if incompatible_shape:
+                     raise RuntimeContractError("Phonon past/present KV shapes are incompatible")
+-                bindings.append(
++                kv_bindings.append(
+                     _KVBinding(
+                         input_spec.name,
+                         output_spec.name,
+@@ -694,7 +727,7 @@ class PhononAdapter(SystemAdapter):
+                         kind,
+                     )
+                 )
+-            self._kv_bindings = tuple(bindings)
++            self._kv_bindings = tuple(kv_bindings)
+
+         elif component == "flow_lm_flow":
+             self._require_names(input_names, {"hidden", "noise", "duration_delta"}, component)
+@@ -738,7 +771,7 @@ class PhononAdapter(SystemAdapter):
+                 raise RuntimeContractError("Phonon Mimi offset input/output dtypes do not match")
+             if not self._compatible_static_shape(offset_input.shape, offset_output.shape):
+                 raise RuntimeContractError("Phonon Mimi offset input/output shapes do not match")
+-            bindings: list[_MimiStateBinding] = []
++            mimi_bindings: list[_MimiStateBinding] = []
+             for name, shape, configured_dtype in self._mimi_state_specs:
+                 input_name = f"state.{name}"
+                 output_name = f"next_state.{name}"
+@@ -756,7 +789,7 @@ class PhononAdapter(SystemAdapter):
+                     raise RuntimeContractError(
+                         f"Phonon Mimi next-state shape mismatch for {name!r}"
+                     )
+-                bindings.append(
++                mimi_bindings.append(
+                     _MimiStateBinding(
+                         name,
+                         input_name,
+@@ -767,7 +800,7 @@ class PhononAdapter(SystemAdapter):
+                         output_spec,
+                     )
+                 )
+-            self._mimi_bindings = tuple(bindings)
++            self._mimi_bindings = tuple(mimi_bindings)
+             self._offset_input_spec = offset_input
+             self._offset_output_spec = offset_output
+         else:
+diff --git a/tests/test_phonon_catalog.py b/tests/test_phonon_catalog.py
+index 926fdbd..9524db5 100644
+--- a/tests/test_phonon_catalog.py
++++ b/tests/test_phonon_catalog.py
+@@ -315,3 +315,87 @@ def test_noncommercial_license_cannot_be_mislabeled_as_commercial():
+     bundle["license"]["commercial_use"] = True
+     with pytest.raises(CatalogError, match="commercial-use status conflicts"):
+         _parse_phonon(_catalog(bundle))
++
++
++@pytest.mark.parametrize(
++    ("catalog_version", "row_version"),
++    [("0.2.0", "0.2.0"), ("0.2.0", None), (None, "0.2.0")],
++)
++def test_release_version_is_validated_and_propagated(
++    tmp_path: Path, catalog_version: str | None, row_version: str | None
++) -> None:
++    bundle = _bundle()
++    data = _catalog(bundle)
++    if catalog_version is not None:
++        data["release_version"] = catalog_version
++    if row_version is not None:
++        bundle["release_version"] = row_version
++
++    (item,) = _parse_phonon(data)
++
++    assert item.metadata["release_version"] == "0.2.0"
++    assert item.metadata["release_versions"] == {"fp32": "0.2.0"}
++    profile = item.metadata["profiles"]["fp32"]
++    assert profile["release_version"] == "0.2.0"
++    artifact = item.require_artifact("config")
++    assert artifact.metadata["release_version"] == "0.2.0"
++
++    catalog_path = tmp_path / "phonon.json"
++    catalog_path.write_text(json.dumps(data), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"phonon": str(catalog_path)})
++    selected = client.resolve("phonon:phonon-31m-en", quality="fp32")
++    assert selected.metadata["selected_quality"] == "fp32"
++    assert selected.metadata["release_version"] == "0.2.0"
++    assert selected.metadata["release_tag"] == bundle["tag"]
++    assert selected.metadata["source_revision"] == bundle["source_revision"]
++    selected_graph = selected.require_artifact("model", component="flow_lm_main")
++    assert selected_graph.metadata["release_version"] == "0.2.0"
++
++
++def test_release_versions_are_consistent_across_qualities() -> None:
++    fp32 = _bundle()
++    q4 = _bundle("phonon-31m-en", "q4", tag="phonon-31m-en-q4", revision="b" * 40)
++    fp32["release_version"] = "0.2.0"
++    q4["release_version"] = "0.2.0"
++
++    (item,) = _parse_phonon(_catalog(fp32, q4))
++
++    assert item.metadata["release_version"] == "0.2.0"
++    assert item.metadata["release_versions"] == {"fp32": "0.2.0", "q4": "0.2.0"}
++
++
++def test_mismatched_catalog_and_row_release_versions_are_rejected() -> None:
++    bundle = _bundle()
++    bundle["release_version"] = "0.3.0"
++    data = _catalog(bundle)
++    data["release_version"] = "0.2.0"
++
++    with pytest.raises(CatalogError, match="does not match catalog release_version"):
++        _parse_phonon(data)
++
++
++def test_multiple_active_row_release_versions_are_rejected() -> None:
++    fp32 = _bundle()
++    q4 = _bundle("phonon-31m-en", "q4", tag="phonon-31m-en-q4", revision="b" * 40)
++    fp32["release_version"] = "0.2.0"
++    q4["release_version"] = "0.3.0"
++
++    with pytest.raises(CatalogError, match="multiple release_version values"):
++        _parse_phonon(_catalog(fp32, q4))
++
++
++@pytest.mark.parametrize("release_version", [None, "", "unsafe version", "../0.2.0", 17])
++def test_unsafe_catalog_release_versions_are_rejected(release_version: Any) -> None:
++    data = _catalog(_bundle())
++    data["release_version"] = release_version
++
++    with pytest.raises(CatalogError, match="release_version is unsafe"):
++        _parse_phonon(data)
++
++
++def test_null_row_release_version_is_rejected() -> None:
++    bundle = _bundle()
++    bundle["release_version"] = None
++
++    with pytest.raises(CatalogError, match="release_version is unsafe"):
++        _parse_phonon(_catalog(bundle))
+diff --git a/tests/test_phonon_runtime.py b/tests/test_phonon_runtime.py
+index 0957579..8820739 100644
+--- a/tests/test_phonon_runtime.py
++++ b/tests/test_phonon_runtime.py
+@@ -540,3 +540,80 @@ def test_adapter_close_is_idempotent_and_closes_all_lazy_sessions(
+     adapter.close()
+     assert all(session.closed for session in fake.sessions.values())
+     assert adapter.diagnostics().sessions == ()
++
++
++def test_missing_runtime_kind_is_inferred_for_local_phonon_and_validates_graphs(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, fake = _make_adapter(tmp_path, monkeypatch)
++    config_path = adapter.installation.require_artifact("config").path
++    config = json.loads(config_path.read_text(encoding="utf-8"))
++    config["runtime"].pop("kind")
++    config["voice_metadata"] = {"kind": "character"}
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++
++    chunks = list(adapter.stream([1], duration_delta=0.25, max_frames=1))
++
++    assert chunks
++    assert adapter._runtime["kind"] == "phonon-streaming-onnx-v1"
++    assert set(fake.sessions) == set(_GRAPH_FILES)
++
++
++@pytest.mark.parametrize(
++    ("kind_location", "kind"),
++    [("runtime", "pocket"), ("runtime_kind", "other"), ("kind", "other")],
++)
++def test_conflicting_explicit_runtime_kind_is_rejected(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    kind_location: str,
++    kind: str,
++) -> None:
++    adapter, _ = _make_adapter(tmp_path, monkeypatch)
++    config_path = adapter.installation.require_artifact("config").path
++    config = json.loads(config_path.read_text(encoding="utf-8"))
++    if kind_location == "runtime":
++        config["runtime"]["kind"] = kind
++    else:
++        config["runtime"].pop("kind")
++        config[kind_location] = kind
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++
++    with pytest.raises(RuntimeContractError, match="runtime kind"):
++        adapter._load_contract()
++
++
++def test_canonical_runtime_config_needs_no_compatibility_fallbacks(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, _ = _make_adapter(tmp_path, monkeypatch)
++    config_path = adapter.installation.require_artifact("config").path
++    config = json.loads(config_path.read_text(encoding="utf-8"))
++
++    assert config["runtime"] == _RUNTIME
++    assert PhononAdapter._normalize_runtime(config) == _RUNTIME
++
++
++def test_runtime_fields_use_only_explicit_sections_and_known_aliases() -> None:
++    onnx = {
++        "frame_rate": _RUNTIME["frame_rate"],
++        "hidden_size": _RUNTIME["d_model"],
++        "latent_dim": _RUNTIME["latent_dim"],
++        "num_flow_layers": _RUNTIME["num_layers"],
++        "heads": _RUNTIME["num_heads"],
++        "head_dim": _RUNTIME["head_dim"],
++        "mimi_state": _RUNTIME["mimi_state"],
++    }
++    config = {
++        "runtime": {
++            "kind": _RUNTIME["kind"],
++            "sample_rate": _RUNTIME["sample_rate"],
++            "graphs": _RUNTIME["graphs"],
++        },
++        "onnx": onnx,
++        "frame_samples": _RUNTIME["frame_samples"],
++        "sampling_rate": 123,
++        "voice_metadata": {"kind": "unrelated"},
++    }
++
++    assert PhononAdapter._normalize_runtime(config) == _RUNTIME
+diff --git a/tests/test_store.py b/tests/test_store.py
+index 10fb149..c4d0486 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -495,3 +495,68 @@ def test_valid_xet_recovery_download_installs_through_store(
+     assert store.is_installed("pocket", f"good-xet-{recovery_path}")
+     assert store.manifest_path("pocket", f"good-xet-{recovery_path}").exists()
+     assert len(calls) == 2
++
++
++def test_phonon_github_release_artifacts_use_verified_download_cache_offline(
++    tmp_path, monkeypatch
++) -> None:
++    import onnxvoice.store as store_module
++
++    payload = b"verified Phonon release graph"
++    url = "https://github.com/example/phonon/releases/download/v1/graph.onnx"
++    sha256 = hashlib.sha256(payload).hexdigest()
++    item = CatalogItem(
++        system="phonon",
++        id="github-release",
++        kind="bundle",
++        artifacts=(Artifact("model", "graph.onnx", url, len(payload), sha256),),
++    )
++    calls = []
++
++    class Response(io.BytesIO):
++        def __init__(self) -> None:
++            super().__init__(payload)
++            self.headers = {"Content-Length": str(len(payload))}
++
++    def open_url(request, *, timeout):
++        calls.append(request.full_url)
++        assert timeout == 60
++        return Response()
++
++    monkeypatch.setattr(store_module.urllib.request, "urlopen", open_url)
++    monkeypatch.setattr(
++        store_module,
++        "download_huggingface_file",
++        lambda *_args, **_kwargs: pytest.fail("direct GitHub URL used Hugging Face transport"),
++    )
++    cache_dir = tmp_path / "cache"
++    store = AssetStore(cache_dir)
++    installed = store.install(item)
++    assert installed.artifact("model").path.read_bytes() == payload
++    assert calls == [url]
++
++    store.remove("phonon", "github-release")
++    offline_store = AssetStore(cache_dir, offline=True)
++    offline_store.install(item)
++    assert (
++        offline_store.get("phonon", "github-release").artifact("model").path.read_bytes() == payload
++    )
++    assert calls == [url]
++
++    bad_digest = CatalogItem(
++        system="phonon",
++        id="github-bad-digest",
++        kind="bundle",
++        artifacts=(Artifact("model", "graph.onnx", url, len(payload), "0" * 64),),
++    )
++    with pytest.raises(IntegrityError):
++        store.install(bad_digest)
++
++    bad_size = CatalogItem(
++        system="phonon",
++        id="github-bad-size",
++        kind="bundle",
++        artifacts=(Artifact("model", "graph.onnx", url, len(payload) + 1, sha256),),
++    )
++    with pytest.raises(IntegrityError):
++        store.install(bad_size)

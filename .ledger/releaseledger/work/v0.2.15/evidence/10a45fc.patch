@@ -1,0 +1,3999 @@
+ README.md                        |   29 +-
+ docs/cli.md                      |   24 +-
+ docs/systems/index.md            |   24 +-
+ docs/systems/phonon.md           |  108 +++
+ docs/voices.md                   |   14 +
+ onnxvoice/__init__.py            |    6 +
+ onnxvoice/catalog.py             |  551 ++++++++++++++-
+ onnxvoice/cli.py                 |    4 +
+ onnxvoice/engine_options.py      |  262 ++++++-
+ onnxvoice/systems/__init__.py    |    5 +
+ onnxvoice/systems/phonon.py      | 1420 ++++++++++++++++++++++++++++++++++++++
+ tests/test_phonon_catalog.py     |  317 +++++++++
+ tests/test_phonon_integration.py |  301 ++++++++
+ tests/test_phonon_real_bundle.py |  117 ++++
+ tests/test_phonon_runtime.py     |  542 +++++++++++++++
+ 15 files changed, 3689 insertions(+), 35 deletions(-)
+
+diff --git a/README.md b/README.md
+index cb61623..2cc1085 100644
+--- a/README.md
++++ b/README.md
+@@ -93,22 +93,25 @@ finally:
+
+ ## Supported systems
+
+-| System      | Built-in adapter | Catalog | Named voices                 |
+-| ----------- | ---------------- | ------- | ---------------------------- |
+-| Piper       | Yes              | Yes     | Yes                          |
+-| Kokoro      | Yes              | Yes     | Yes                          |
+-| Pocket      | Yes              | Yes     | Catalog-dependent            |
+-| Supertonic  | Yes              | Yes     | Yes                          |
+-| Kitten      | Yes              | Yes     | Yes                          |
+-| KittenTTS 2 | Yes              | Yes     | Catalog child voices         |
+-| Inflect     | Yes              | Yes     | Fixed `default` voice        |
+-| Sopro       | Yes (partial)    | Yes     | Zero-shot reference audio    |
+-| Qwen3-TTS   | Yes              | Yes     | No; VoiceDesign/Base bundles |
+-| Chatterbox  | Yes              | Yes     | Zero-shot reference audio    |
++| System      | Built-in adapter | Catalog               | Named voices                       |
++| ----------- | ---------------- | --------------------- | ---------------------------------- |
++| Piper       | Yes              | Yes                   | Yes                                |
++| Kokoro      | Yes              | Yes                   | Yes                                |
++| Pocket      | Yes              | Yes                   | Catalog-dependent                  |
++| Supertonic  | Yes              | Yes                   | Yes                                |
++| Kitten      | Yes              | Yes                   | Yes                                |
++| KittenTTS 2 | Yes              | Yes                   | Catalog child voices               |
++| Inflect     | Yes              | Yes                   | Fixed `default` voice              |
++| Sopro       | Yes (partial)    | Yes                   | Zero-shot reference audio          |
++| Qwen3-TTS   | Yes              | Yes                   | No; VoiceDesign/Base bundles       |
++| Chatterbox  | Yes              | Yes                   | Zero-shot reference audio          |
++| Phonon      | Yes              | Yes (currently empty) | Catalog-declared projected prompts |
+
+ Sopro currently provides bundle management, graph inspection, tokenization, and reference preparation only. End-to-end Python synthesis remains capability-gated pending the real native-runtime and parity gate; see [Sopro support](docs/systems/sopro.md).
+ Catalog contents determine which named voices are available. Discovery does not depend on a separate capability list. Adapters execute system-specific model contracts and do not imply text normalization or phonemization support.
+
++Phonon is a registered low-level token-ID-to-streaming-PCM engine, but the checked-in bundle catalog currently has no installable targets or qualities. Adapter registration does not imply model availability; see the [Phonon runtime guide](docs/systems/phonon.md) for discovery and licensing details.
++
+ ## Documentation
+
+ The [full documentation](docs/index.md) includes task-oriented CLI and Python guides, storage and update behavior, provider setup, local-model workflows, per-system runtime contracts, and the API reference.
+@@ -117,6 +120,8 @@ See [Qwen3-TTS WaveKat](docs/systems/qwen3.md) for the model-specific API and bu
+
+ See [Chatterbox](docs/systems/chatterbox.md) for its supported bundles, profiles, and runtime boundary.
+
++See [Phonon](docs/systems/phonon.md) for its token-ID/PCM boundary, catalog-driven availability, local opening, and model-license distinctions.
++
+ ## Development
+
+ ```bash
+diff --git a/docs/cli.md b/docs/cli.md
+index f776a54..2e53e12 100644
+--- a/docs/cli.md
++++ b/docs/cli.md
+@@ -36,10 +36,14 @@ onnxvoice engines options --engine piper
+ onnxvoice engines options --engine kokoro --target v1.0 --format json
+ onnxvoice engines options --engine qwen3 --target base-0.6b
+ onnxvoice --offline engines options --engine kokoro --target v1.0
++onnxvoice engines list --engine phonon --format json
++onnxvoice engines options --engine phonon
+ ```
+
+ `engines list` reports target/variant rows and accepts `--engine`, `--capability voice-cloning`, `--refresh`, and `--format`. `engines options` accepts an engine plus optional target ID or alias, `--quality`, `--distribution`, `--refresh`, and `--format`. Quality and distribution selectors require `--target`; valid values come from that target's catalog metadata. Without a target, the command reports the static adapter contract and known catalog targets. With a target, it resolves that target's parameter, input, capability, quality/distribution, and limit details. The supported output formats are `table`, `plain`, `json`, and `tsv`.
+
++Phonon is a token-ID-to-streaming-PCM adapter with no text normalization or tokenization. The registered adapter can be discovered even while its catalog has no installable entries; target and quality selectors become available only when they are published. See [Phonon](systems/phonon.md) for its controls and current availability.
++
+ Capability and limit rows are target-specific where metadata varies by model type, profile, distribution, or installed manifest. A `null` value with `not_declared`, `unknown`, or `unavailable` status is intentional: ONNXVoice does not infer undocumented limits. For example, Qwen3 Base supports reference-conditioned cloning, while VoiceDesign is instruction-conditioned voice design, not cloning. Kokoro cloning distributions require reference audio and transcript token IDs; stock voice styles and optional Inno enrollment on ordinary layouts are separate capabilities. Piper's numeric `speaker_id` selects an existing speaker and is not cloning. See the relevant [system pages](systems/index.md) for adapter boundaries and [voice records](voices.md) for catalog voice selection.
+
+ ## Inventory and filters
+@@ -62,16 +66,16 @@ onnxvoice list --system piper --format json
+ onnxvoice installed --format tsv
+ ```
+
+-| Flag                   | Accepted values or meaning                                              |
+-| ---------------------- | ----------------------------------------------------------------------- |
+-| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect`, `qwen3` |
+-| `--kind`               | `voice`, `model`, `bundle`                                              |
+-| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`                          |
+-| `--gender`             | `male`, `female`, `neutral`, `unknown`                                  |
+-| `--quality`            | Quality selection                                                       |
+-| `--distribution`       | Distribution identifier                                                 |
+-| `--status`             | `installed`, `available`, `local`                                       |
+-| `--format`             | `table`, `plain`, `json`, `tsv`                                         |
++| Flag                   | Accepted values or meaning                                                        |
++| ---------------------- | --------------------------------------------------------------------------------- |
++| `--system`             | `piper`, `kokoro`, `pocket`, `supertonic`, `kitten`, `inflect`, `qwen3`, `phonon` |
++| `--kind`               | `voice`, `model`, `bundle`                                                        |
++| `--lang`, `--language` | Language tag such as `en`, `en-US`, or `de-DE`                                    |
++| `--gender`             | `male`, `female`, `neutral`, `unknown`                                            |
++| `--quality`            | Quality selection                                                                 |
++| `--distribution`       | Distribution identifier                                                           |
++| `--status`             | `installed`, `available`, `local`                                                 |
++| `--format`             | `table`, `plain`, `json`, `tsv`                                                   |
+
+ Generic language tags match compatible specific locales. An `en` filter matches English locales such as `en-US` and `en-GB`. An `en-US` filter matches a generic `en` capability, but not a conflicting specific locale such as `en-GB`. Case and hyphen normalization are supported.
+
+diff --git a/docs/systems/index.md b/docs/systems/index.md
+index 30c6e37..869657e 100644
+--- a/docs/systems/index.md
++++ b/docs/systems/index.md
+@@ -2,17 +2,18 @@
+
+ Each system adapter owns the model-specific ONNX graph contract. It does not provide text normalization, G2P/phonemization, sentence planning, or application-level voice policy.
+
+-| System     | Built-in adapter | Built-in catalog | Voice data in normalized catalog items                   | Typical runtime inputs                                        |
+-| ---------- | ---------------- | ---------------- | -------------------------------------------------------- | ------------------------------------------------------------- |
+-| Piper      | Yes              | Yes              | Voice item IDs                                           | Token IDs and optional numeric speaker ID                     |
+-| Kokoro     | Yes              | Yes              | Child voice IDs on model items                           | Token IDs and caller-provided model-ready style               |
+-| Pocket     | Yes              | Yes              | IDs in each item's `voices` field                        | Token IDs and prepared voice state                            |
+-| Supertonic | Yes              | Yes              | Child voice IDs on model items                           | Token IDs, text mask, and caller-provided style tensors       |
+-| Kitten     | Yes              | Yes              | Child voice IDs on model items                           | Model-ready token IDs, style tensor, and speed                |
+-| Inflect    | Yes              | Yes              | One fixed `default` voice                                | Model-ready token IDs, speed, variation, and seed             |
+-| Sopro      | Yes (partial)    | Yes              | Zero-shot reference audio                                | One-segment token IDs and reference state; `wasm-uint8` + CPU |
+-| Qwen3-TTS  | Yes              | Yes              | No; VoiceDesign/Base bundles                             | Wrapped text/instruction IDs or Base voice state              |
+-| Chatterbox | Yes              | Yes              | Model-ready token IDs and prepared reference voice state |
++| System     | Built-in adapter | Built-in catalog     | Voice data in normalized catalog items | Typical runtime inputs                                             |
++| ---------- | ---------------- | -------------------- | -------------------------------------- | ------------------------------------------------------------------ |
++| Piper      | Yes              | Yes                  | Voice item IDs                         | Token IDs and optional numeric speaker ID                          |
++| Kokoro     | Yes              | Yes                  | Child voice IDs on model items         | Token IDs and caller-provided model-ready style                    |
++| Pocket     | Yes              | Yes                  | IDs in each item's `voices` field      | Token IDs and prepared voice state                                 |
++| Supertonic | Yes              | Yes                  | Child voice IDs on model items         | Token IDs, text mask, and caller-provided style tensors            |
++| Kitten     | Yes              | Yes                  | Child voice IDs on model items         | Model-ready token IDs, style tensor, and speed                     |
++| Inflect    | Yes              | Yes                  | One fixed `default` voice              | Model-ready token IDs, speed, variation, and seed                  |
++| Sopro      | Yes (partial)    | Yes                  | Zero-shot reference audio              | One-segment token IDs and reference state; `wasm-uint8` + CPU      |
++| Qwen3-TTS  | Yes              | Yes                  | No; VoiceDesign/Base bundles           | Wrapped text/instruction IDs or Base voice state                   |
++| Chatterbox | Yes              | Yes                  | No; prepared reference state           | Model-ready token IDs and prepared reference voice state           |
++| Phonon     | Yes              | Yes; currently empty | Catalog-declared projected prompt IDs  | Model-ready token IDs and generation controls → streaming mono PCM |
+
+ Sopro native offline inference is currently enabled only for the parity-tested `wasm-uint8` plus `CPUExecutionProvider` combination. See [Sopro](sopro.md) for the API boundary and native parity gate.
+ `OnnxVoice` discovers voices from the normalized catalog data shown above. A catalog item whose kind is `voice` contributes its own ID; items with child voices contribute the IDs already present in `CatalogItem.voices`. The catalog determines which voices are available.
+@@ -33,5 +34,6 @@ inflect
+ sopro
+ qwen3
+ chatterbox
++phonon
+ qwen3-release-validation
+ ```
+diff --git a/docs/systems/phonon.md b/docs/systems/phonon.md
+new file mode 100644
+index 0000000..1cda9c3
+--- /dev/null
++++ b/docs/systems/phonon.md
+@@ -0,0 +1,108 @@
++# Phonon
++
++Phonon support is a low-level, four-graph ONNX runtime for already-tokenized integer IDs to streaming mono `float32` PCM. ONNXVoice does not tokenize or normalize text, split long text, prepare application-level requests, or apply post-processing. Those tasks belong to a separate frontend.
++
++The adapter is registered even when no model bundles are available. **The checked-in Phonon bundle catalog currently contains no installable targets or qualities.** The catalog is authoritative: discover current availability instead of assuming a model, language, voice, or precision exists. A source-model entry or a registered adapter does not make a downloadable release.
++
++```bash
++onnxvoice list --system phonon
++onnxvoice engines list --engine phonon --format json
++onnxvoice engines options --engine phonon
++```
++
++When the catalog contains targets, `engines list` and `onnxvoice list --system phonon` show only those entries. Use the target's reported `quality_profiles` when installing; do not infer additional precisions from the source model registry.
++
++## Runtime graphs and boundary
++
++The adapter validates the installed config and each graph signature, then creates provider-configured ONNX Runtime sessions lazily as inference needs them.
++
++| Component          | Relative graph path          |
++| ------------------ | ---------------------------- |
++| `text_conditioner` | `onnx/text_conditioner.onnx` |
++| `flow_lm_main`     | `onnx/flow_lm_main.onnx`     |
++| `flow_lm_flow`     | `onnx/flow_lm_flow.onnx`     |
++| `mimi_decoder`     | `onnx/mimi_decoder.onnx`     |
++
++Each utterance gets fresh Flow key/value state and Mimi decoder state. A caller-provided seed controls request-local flow noise. The stream yields `PhononStreamChunk` values with one mono PCM frame, sample rate, frame index, and EOS information. `infer()` collects that stream into one `InferenceResult`; it does not convert text to IDs or alter audio levels.
++
++A bundle declares its sample rate, frame size, generation defaults, voice prompts, and frame limits. ONNXVoice does not fill missing controls with hidden family-wide defaults. Check target options before inference; supply any control marked required, including `max_frames` when the bundle declares no default. The frame cap is enforced by the runtime.
++
++Controls accepted by `stream()` and `infer()` are `voice`, `duration_delta`, `temperature`, `seed`, `eos_threshold`, `frames_after_eos`, `min_frames_before_eos`, and `max_frames`. Seed is optional. A declared voice selects a bundled projected prompt; this adapter does not support arbitrary reference-audio cloning (`voice_cloning` is false).
++
++## Managed install and streaming
++
++Once a target is published, use its canonical ID and one of its catalog-declared qualities:
++
++```python
++from onnxvoice import OnnxVoice
++
++manager = OnnxVoice()
++targets = manager.list("phonon")
++if not targets:
++    raise RuntimeError("No Phonon targets are published in the current catalog")
++
++target = targets[0]
++quality = target.metadata["quality_profiles"][0]
++installation = manager.install(f"phonon:{target.id}", quality=quality)
++
++with manager.open(installation, providers="cpu") as runtime:
++    # These are model-ready IDs supplied by the frontend, not text.
++    token_ids = [1, 2, 3, 4]
++    for chunk in runtime.stream(token_ids, voice=installation.default_voice, seed=17):
++        consume_pcm(chunk.audio, sample_rate=chunk.sample_rate)
++```
++
++The example chooses from live catalog results; the current empty catalog means it stops before installation. `onnxvoice install phonon:<target-id> --quality <published-quality>` uses the ordinary managed, per-file artifact installer. It does not extract a ZIP. `open()` is local-only after installation; `--offline` also prevents catalog network access for discovery commands.
++
++A streaming consumer should preserve chunk order and use each chunk's `sample_rate`. `runtime.infer(token_ids, ...)` is available when a caller wants all frames in one contiguous result instead.
++
++## Local files
++
++`OnnxVoice.open_local()` can open explicit Phonon files without copying them to or registering them in the managed store. Supply the config, four graph components, and a declared voice prompt using the same artifact-role names:
++
++The example assumes the local config declares the required generation defaults. Otherwise, supply explicit caller-selected values for each control that engine options report as required.
++
++```python
++from onnxvoice import OnnxVoice
++
++runtime = OnnxVoice.open_local(
++    system="phonon",
++    files={
++        "config": "/models/phonon/config.json",
++        "model:text_conditioner": "/models/phonon/onnx/text_conditioner.onnx",
++        "model:flow_lm_main": "/models/phonon/onnx/flow_lm_main.onnx",
++        "model:flow_lm_flow": "/models/phonon/onnx/flow_lm_flow.onnx",
++        "model:mimi_decoder": "/models/phonon/onnx/mimi_decoder.onnx",
++        "voice_prompt:<declared-voice>": "/models/phonon/voices/<declared-voice>.bin",
++    },
++    providers="cpu",
++)
++try:
++    chunks = runtime.stream(token_ids, voice="<declared-voice>", seed=17)
++    for chunk in chunks:
++        consume_pcm(chunk.audio, sample_rate=chunk.sample_rate)
++finally:
++    runtime.close()
++```
++
++Replace the voice name and paths with files declared by the local config. The prompt file contains little-endian float32 projected embeddings. If the local config leaves controls unknown, supply explicit caller-selected values for every required field before streaming. Local opening does not establish licensing rights or validate that required upstream attribution has been retained.
++
++## Voices, qualities, and licensing
++
++Phonon voice IDs come only from the selected published bundle's declared prompt inventory. They appear as child voices in `OnnxVoice.list_voices(system="phonon")`; a semantic reference has the form `phonon:<catalog-target>/<declared-voice-id>`. The current empty bundle catalog exposes no Phonon voice references. See [catalog voice discovery](../voices.md#phonon-voices) for how this relates to semantic voice records.
++
++The bundle producer records the 31M model line as Apache-2.0 and the 40M model line as CC-BY-NC-4.0. That license distinction does not mean either model or any quality is currently installable. For each actually published target, inspect its catalog license metadata and keep its bundled attribution and upstream notices. CC-BY-NC-4.0 is non-commercial; installation does not grant commercial-use rights. ONNXVoice source-code licensing is separate from model and voice licensing.
++
++## Providers and diagnostics
++
++Install an ONNX Runtime distribution and provider supported by the selected platform; ONNXVoice manages provider selection and session options but does not install the runtime. For example, the `cpu` extra provides CPU inference support. `runtime.diagnostics()` reports the Phonon streaming layout and per-graph session diagnostics for sessions that have been created. `close()` closes those sessions; they are recreated lazily if the adapter is used again.
++
++## Real-bundle acceptance
++
++The managed-install, CPU inference, and offline-reopen acceptance test is opt-in and uses only published `fp32` catalog entries. It is skipped by default, so ordinary tests do not download model artifacts. Run it when release assets and `onnxruntime` are available:
++
++```bash
++ONNXVOICE_PHONON_ACCEPTANCE=1 pytest -q tests/test_phonon_real_bundle.py
++```
++
++Set `ONNXVOICE_REQUIRE_PHONON_ACCEPTANCE=1` as well to make the required 31M `fp32` case fail rather than skip when that target or runtime is unavailable. The 40M case is tested only when its `fp32` variant is actually published. A passing unit or fake-session test does not substitute for this real-bundle check.
+diff --git a/docs/voices.md b/docs/voices.md
+index a31a8ca..9635ca8 100644
+--- a/docs/voices.md
++++ b/docs/voices.md
+@@ -49,6 +49,20 @@ This selects the backing asset without changing the semantic voice reference, fo
+
+ Pocket discovery is limited to voice IDs already present in normalized `CatalogItem.voices`. Predefined names or descriptive details outside that field are not added as voices by discovery.
+
++## Phonon voices
++
++A published Phonon bundle contributes only the child voice IDs declared by its prompt inventory. A semantic reference has the form `phonon:<catalog-target>/<declared-voice-id>`; it does not identify a locally invented target or voice. The checked-in Phonon bundle catalog currently has no targets, so it exposes no Phonon voice references.
++
++```python
++from onnxvoice import OnnxVoice
++
++manager = OnnxVoice()
++for record in manager.list_voices(system="phonon"):
++    print(record.ref, record.backing_ref)
++```
++
++At runtime, select a declared prompt name or a `PhononVoiceState`. Phonon uses bundled projected voice prompts and does not support arbitrary reference-audio cloning. See the [Phonon guide](systems/phonon.md) for its streaming boundary, controls, and license details.
++
+ ## Resolve a voice
+
+ Use `resolve_voice()` to look up a semantic reference in the current catalog:
+diff --git a/onnxvoice/__init__.py b/onnxvoice/__init__.py
+index 94b5752..3cd4444 100644
+--- a/onnxvoice/__init__.py
++++ b/onnxvoice/__init__.py
+@@ -37,6 +37,9 @@ from .systems import (
+     KokoroCloningRuntime,
+     KokoroReferenceState,
+     KokoroVoicePack,
++    PhononAdapter,
++    PhononStreamChunk,
++    PhononVoiceState,
+     Qwen3VoiceState,
+     SoproAdapter,
+     SoproGenerationDefaults,
+@@ -216,6 +219,9 @@ __all__ = [
+     "register_adapter",
+     "registered_systems",
+     "Kitten2Adapter",
++    "PhononAdapter",
++    "PhononVoiceState",
++    "PhononStreamChunk",
+     "SplitKokoroRuntime",
+     "Qwen3VoiceState",
+     "SoproAdapter",
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index a86734b..b6f5d9d 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -81,6 +81,7 @@ DEFAULT_SOURCES = {
+     "chatterbox": "https://raw.githubusercontent.com/buchwandler/chatterbox-onnx-bundles/main/catalog/bundles.json",
+     "qwen3": "https://raw.githubusercontent.com/buchwandler/qwen3-onnx-bundles/main/catalog/bundles.json",
+     "kitten2": "https://raw.githubusercontent.com/buchwandler/kitten2-onnx-bundles/main/catalog/bundles.json",
++    "phonon": "https://raw.githubusercontent.com/buchwandler/phonon-onnx-bundles/main/catalog/bundles.json",
+ }
+ _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
+     {
+@@ -252,6 +253,8 @@ class CatalogClient:
+             return _parse_sopro(raw)
+         if system == "inflect":
+             return _parse_inflect(raw)
++        if system == "phonon":
++            return _parse_phonon(raw)
+         raise CatalogError(f"No parser for system {system!r}")
+
+     def resolve(
+@@ -325,6 +328,8 @@ class CatalogClient:
+             return _select_sopro_profile(item, quality)
+         if item.system == "pocket":
+             return _select_pocket_profile(item, quality)
++        if item.system == "phonon":
++            return _select_phonon_profile(item, quality)
+         selected_quality = quality
+         model_artifacts = [
+             artifact
+@@ -3039,7 +3044,7 @@ def _select_pocket_profile(item: CatalogItem, quality: str | None) -> CatalogIte
+
+
+ def _item_supports_quality(item: CatalogItem, quality: str) -> bool:
+-    if item.system in {"pocket", "sopro", "chatterbox"}:
++    if item.system in {"pocket", "sopro", "chatterbox", "phonon"}:
+         profiles = item.metadata.get("profiles") or {}
+         return isinstance(profiles, Mapping) and quality in profiles
+     return bool(
+@@ -3263,3 +3268,547 @@ def _parse_kitten2(data: Any) -> list[CatalogItem]:
+             )
+         )
+     return result
++
++
++_PHONON_QUALITIES = frozenset({"fp32", "q8", "q4", "fp16"})
++_PHONON_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_PHONON_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
++_PHONON_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
++_PHONON_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
++_PHONON_GRAPHS = {
++    "onnx/text_conditioner.onnx": "text_conditioner",
++    "onnx/flow_lm_main.onnx": "flow_lm_main",
++    "onnx/flow_lm_flow.onnx": "flow_lm_flow",
++    "onnx/mimi_decoder.onnx": "mimi_decoder",
++}
++_PHONON_GENERATION_FIELDS = (
++    "temperature_default",
++    "eos_threshold_default",
++    "duration_delta_default",
++    "frames_after_eos",
++    "min_frames_before_eos",
++    "max_frames",
++)
++
++
++def _require_phonon_safe_id(value: Any, label: str) -> str:
++    if not isinstance(value, str) or _PHONON_SAFE_ID_RE.fullmatch(value) is None:
++        raise CatalogError(f"{label} is unsafe: {value!r}")
++    return value
++
++
++def _phonon_positive_int(value: Any, label: str) -> int:
++    if type(value) is not int or value <= 0:
++        raise CatalogError(f"{label} must be a positive integer")
++    return value
++
++
++def _phonon_optional_int(value: Any, label: str, *, minimum: int) -> int | None:
++    if value is None:
++        return None
++    if type(value) is not int or value < minimum:
++        raise CatalogError(f"{label} must be an integer >= {minimum} or null")
++    return value
++
++
++def _phonon_optional_number(
++    value: Any, label: str, *, minimum: float | None = None
++) -> float | None:
++    if value is None:
++        return None
++    if isinstance(value, bool) or not isinstance(value, (int, float)):
++        raise CatalogError(f"{label} must be a finite number or null")
++    number = float(value)
++    if not math.isfinite(number) or (minimum is not None and number < minimum):
++        raise CatalogError(f"{label} is outside its valid range")
++    return number
++
++
++def _phonon_https_url(value: Any, label: str, *, optional: bool = False) -> str | None:
++    if value is None and optional:
++        return None
++    if not isinstance(value, str) or not value:
++        raise CatalogError(f"{label} must be a non-empty HTTPS URL")
++    parsed = urllib.parse.urlsplit(value)
++    if parsed.scheme != "https" or not parsed.netloc:
++        raise CatalogError(f"{label} must be a non-empty HTTPS URL")
++    return value
++
++
++def _parse_phonon_runtime(raw: Any, bundle_id: str) -> dict[str, Any]:
++    if not isinstance(raw, Mapping):
++        raise CatalogError(f"{bundle_id}: runtime metadata must be an object")
++    runtime = dict(raw)
++    if runtime.get("kind") != "phonon-streaming-onnx-v1":
++        raise CatalogError(f"{bundle_id}: unsupported runtime.kind {runtime.get('kind')!r}")
++    graphs = runtime.get("graphs")
++    if not isinstance(graphs, Sequence) or isinstance(graphs, (str, bytes)):
++        raise CatalogError(f"{bundle_id}: runtime.graphs must be a sequence")
++    if tuple(graphs) != tuple(_PHONON_GRAPHS):
++        raise CatalogError(f"{bundle_id}: runtime.graphs do not match the Phonon ABI")
++    _phonon_positive_int(runtime.get("sample_rate"), f"{bundle_id}: runtime.sample_rate")
++    _phonon_positive_int(runtime.get("frame_samples"), f"{bundle_id}: runtime.frame_samples")
++    frame_rate = runtime.get("frame_rate")
++    if isinstance(frame_rate, bool) or not isinstance(frame_rate, (int, float)):
++        raise CatalogError(f"{bundle_id}: runtime.frame_rate must be positive")
++    if not math.isfinite(float(frame_rate)) or float(frame_rate) <= 0:
++        raise CatalogError(f"{bundle_id}: runtime.frame_rate must be positive")
++    for field in ("d_model", "latent_dim", "num_layers", "num_heads", "head_dim"):
++        _phonon_positive_int(runtime.get(field), f"{bundle_id}: runtime.{field}")
++    mimi_state = runtime.get("mimi_state")
++    if not isinstance(mimi_state, (Mapping, list, tuple)) or not mimi_state:
++        raise CatalogError(f"{bundle_id}: runtime.mimi_state must be a non-empty object or list")
++    return runtime
++
++
++def _parse_phonon_generation(raw: Any, bundle_id: str) -> dict[str, Any]:
++    if not isinstance(raw, Mapping):
++        raise CatalogError(f"{bundle_id}: generation metadata must be an object")
++    for field in _PHONON_GENERATION_FIELDS:
++        if field not in raw:
++            raise CatalogError(f"{bundle_id}: generation.{field} must be explicit (or null)")
++    result = dict(raw)
++    result["temperature_default"] = _phonon_optional_number(
++        raw["temperature_default"], f"{bundle_id}: generation.temperature_default", minimum=0.0
++    )
++    result["eos_threshold_default"] = _phonon_optional_number(
++        raw["eos_threshold_default"], f"{bundle_id}: generation.eos_threshold_default"
++    )
++    result["duration_delta_default"] = _phonon_optional_number(
++        raw["duration_delta_default"], f"{bundle_id}: generation.duration_delta_default"
++    )
++    result["frames_after_eos"] = _phonon_optional_int(
++        raw["frames_after_eos"], f"{bundle_id}: generation.frames_after_eos", minimum=0
++    )
++    result["min_frames_before_eos"] = _phonon_optional_int(
++        raw["min_frames_before_eos"], f"{bundle_id}: generation.min_frames_before_eos", minimum=0
++    )
++    result["max_frames"] = _phonon_optional_int(
++        raw["max_frames"], f"{bundle_id}: generation.max_frames", minimum=1
++    )
++    return result
++
++
++def _parse_phonon_voices(raw: Any, bundle_id: str) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
++    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or not raw:
++        raise CatalogError(f"{bundle_id}: voices must be a non-empty sequence")
++    names: list[str] = []
++    details: list[dict[str, Any]] = []
++    for index, voice in enumerate(raw):
++        if not isinstance(voice, Mapping):
++            raise CatalogError(f"{bundle_id}: voice {index} must be an object")
++        name = _require_phonon_safe_id(voice.get("name"), f"{bundle_id} voice name")
++        if name in names:
++            raise CatalogError(f"{bundle_id}: duplicate voice {name!r}")
++        names.append(name)
++        display_name = voice.get("display_name", name)
++        if not isinstance(display_name, str) or not display_name.strip():
++            raise CatalogError(f"{bundle_id}/{name}: display_name must be a non-empty string")
++        upstream_voice_id = voice.get("voice_id")
++        if upstream_voice_id is not None and (
++            not isinstance(upstream_voice_id, str) or not upstream_voice_id
++        ):
++            raise CatalogError(f"{bundle_id}/{name}: voice_id must be a non-empty string")
++        source_locale = voice.get("locale")
++        if source_locale is not None and not isinstance(source_locale, str):
++            raise CatalogError(f"{bundle_id}/{name}: locale must be a string")
++        locale = ""
++        if isinstance(source_locale, str) and _PHONON_LANGUAGE_RE.fullmatch(
++            source_locale.replace("_", "-")
++        ):
++            locale = normalize_language_tag(source_locale)
++        gender_source = voice.get("gender")
++        if gender_source is not None and not isinstance(gender_source, str):
++            raise CatalogError(f"{bundle_id}/{name}: gender must be a string")
++        gender = (
++            gender_source.lower()
++            if isinstance(gender_source, str) and gender_source.lower() in {"male", "female"}
++            else "unknown"
++        )
++        frames = voice.get("frames")
++        if frames is not None:
++            frames = _phonon_positive_int(frames, f"{bundle_id}/{name}: frames")
++        detail: dict[str, Any] = {
++            "id": name,
++            "name": display_name,
++            "display_name": display_name,
++            "language": language_base(locale),
++            "locale": locale,
++            "language_label": locale or language_base(locale) or "unknown",
++            "gender": gender,
++        }
++        if upstream_voice_id is not None:
++            detail["voice_id"] = upstream_voice_id
++            detail["upstream_voice_id"] = upstream_voice_id
++        if frames is not None:
++            detail["frames"] = frames
++        if source_locale and not locale:
++            detail["source_locale"] = source_locale
++        if gender_source is not None and gender == "unknown":
++            detail["source_gender"] = gender_source
++        details.append(detail)
++    return tuple(names), details
++
++
++def _parse_phonon_license(raw: Any, bundle_id: str) -> dict[str, Any]:
++    if not isinstance(raw, Mapping):
++        raise CatalogError(f"{bundle_id}: license metadata must be an object")
++    license_info = dict(raw)
++    spdx = license_info.get("spdx")
++    canonical = {
++        "Apache-2.0": ("https://www.apache.org/licenses/LICENSE-2.0", True),
++        "CC-BY-NC-4.0": ("https://creativecommons.org/licenses/by-nc/4.0/", False),
++    }
++    if not isinstance(spdx, str) or spdx not in canonical:
++        raise CatalogError(f"{bundle_id}: unsupported license.spdx {spdx!r}")
++    expected_uri, expected_commercial_use = canonical[spdx]
++    uri = _phonon_https_url(license_info.get("uri"), f"{bundle_id}: license.uri")
++    if uri != expected_uri:
++        raise CatalogError(f"{bundle_id}: license.uri is not canonical for {spdx}")
++    if type(license_info.get("commercial_use")) is not bool:
++        raise CatalogError(f"{bundle_id}: license.commercial_use must be boolean")
++    if license_info["commercial_use"] is not expected_commercial_use:
++        raise CatalogError(f"{bundle_id}: license commercial-use status conflicts with {spdx}")
++    restrictions = license_info.get("restrictions")
++    if not isinstance(restrictions, Sequence) or isinstance(restrictions, (str, bytes)):
++        raise CatalogError(f"{bundle_id}: license.restrictions must be a sequence")
++    if any(not isinstance(value, str) for value in restrictions):
++        raise CatalogError(f"{bundle_id}: license restrictions must be strings")
++    attribution_path = license_info.get("attribution_path")
++    if attribution_path != "ATTRIBUTION.md":
++        raise CatalogError(f"{bundle_id}: license.attribution_path must be ATTRIBUTION.md")
++    if spdx == "CC-BY-NC-4.0":
++        legalcode_uri = _phonon_https_url(
++            license_info.get("legalcode_uri"), f"{bundle_id}: license.legalcode_uri"
++        )
++        if legalcode_uri != "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en":
++            raise CatalogError(f"{bundle_id}: CC-BY-NC-4.0 legal-code URI is not canonical")
++        if license_info.get("warranty_disclaimer_section") != "Section 5":
++            raise CatalogError(
++                f"{bundle_id}: CC-BY-NC-4.0 warranty disclaimer must refer to Section 5"
++            )
++        if "non-commercial" not in restrictions:
++            raise CatalogError(
++                f"{bundle_id}: CC-BY-NC-4.0 must preserve its non-commercial restriction"
++            )
++    elif "legalcode_uri" in license_info or "warranty_disclaimer_section" in license_info:
++        raise CatalogError(f"{bundle_id}: Apache-2.0 metadata must not include CC-specific fields")
++    return license_info
++
++
++def _phonon_artifact(
++    raw: Mapping[str, Any],
++    *,
++    bundle_id: str,
++    model_key: str,
++    precision: str,
++    tag: str,
++    source_revision: str,
++    license_info: Mapping[str, Any],
++) -> Artifact:
++    path = raw.get("path")
++    if not isinstance(path, str):
++        raise CatalogError(f"{bundle_id}: artifact path must be a string")
++    try:
++        validate_relative_path(path, field_name=f"{bundle_id} artifact path")
++    except ValueError as exc:
++        raise CatalogError(str(exc)) from exc
++    size = raw.get("bytes")
++    _phonon_positive_int(size, f"{bundle_id}/{path}: bytes")
++    checksum = raw.get("sha256")
++    if not isinstance(checksum, str) or _PHONON_SHA256_RE.fullmatch(checksum) is None:
++        raise CatalogError(
++            f"{bundle_id}/{path}: sha256 must be 64 lowercase hexadecimal characters"
++        )
++    url = _phonon_https_url(raw.get("download_url"), f"{bundle_id}/{path}: download_url")
++    assert url is not None
++
++    component: str | None = None
++    if path in _PHONON_GRAPHS:
++        role, component = "model", _PHONON_GRAPHS[path]
++    elif path == "config.json":
++        role = "config"
++    elif path == "tokenizer.json":
++        role = "tokenizer"
++    elif path == "ATTRIBUTION.md":
++        role = "attribution"
++    elif path == "export-provenance.json":
++        role = "provenance"
++    elif path.startswith("voices/"):
++        relative = path.removeprefix("voices/")
++        if "/" in relative or not relative.endswith(".bin"):
++            raise CatalogError(f"{bundle_id}: invalid voice prompt path {path!r}")
++        component = _require_phonon_safe_id(relative[:-4], f"{bundle_id} voice prompt name")
++        role = "voice_prompt"
++    elif path.startswith("third_party/"):
++        role = "notice"
++        component = path.removeprefix("third_party/")
++    else:
++        raise CatalogError(f"{bundle_id}: unsupported bundle artifact path {path!r}")
++
++    return Artifact(
++        role=role,
++        filename=path,
++        url=url,
++        size=size,
++        sha256=checksum,
++        quality=precision,
++        component=component,
++        format=Path(path).suffix.lower().lstrip("."),
++        metadata={
++            "path": path,
++            "release_tag": tag,
++            "model_key": model_key,
++            "precision": precision,
++            "source_revision": source_revision,
++            "license": dict(license_info),
++        },
++    )
++
++
++def _parse_phonon(data: Any) -> list[CatalogItem]:
++    """Parse installable Phonon catalog v2 rows into one target per model key."""
++    if not isinstance(data, Mapping):
++        raise CatalogError("Phonon catalog must be an object")
++    if type(data.get("schema_version")) is not int or data["schema_version"] != 2:
++        raise CatalogError("Phonon catalog schema_version must be 2")
++    bundles = data.get("bundles")
++    if not isinstance(bundles, Sequence) or isinstance(bundles, (str, bytes)):
++        raise CatalogError("Phonon catalog bundles must be a sequence")
++
++    grouped: dict[str, dict[str, Any]] = {}
++    seen_variants: set[tuple[str, str]] = set()
++    for index, raw_bundle in enumerate(bundles):
++        if not isinstance(raw_bundle, Mapping):
++            raise CatalogError(f"Phonon bundle {index} must be an object")
++        model_key = _require_phonon_safe_id(raw_bundle.get("model_key"), "Phonon model_key")
++        precision = raw_bundle.get("precision")
++        if not isinstance(precision, str) or precision not in _PHONON_QUALITIES:
++            raise CatalogError(f"{model_key}: unsupported precision {precision!r}")
++        variant = (model_key, precision)
++        if variant in seen_variants:
++            raise CatalogError(f"duplicate published Phonon variant {model_key}/{precision}")
++        seen_variants.add(variant)
++        tag = _require_phonon_safe_id(raw_bundle.get("tag"), f"{model_key} release tag")
++        source_revision = raw_bundle.get("source_revision")
++        if (
++            not isinstance(source_revision, str)
++            or _PHONON_REVISION_RE.fullmatch(source_revision) is None
++        ):
++            raise CatalogError(
++                f"{model_key}/{precision}: source_revision must be an immutable 40-character SHA"
++            )
++        source_uri = _phonon_https_url(
++            raw_bundle.get("source_uri"), f"{model_key}/{precision}: source_uri", optional=True
++        )
++        if source_uri is not None:
++            source_path = urllib.parse.urlsplit(source_uri)
++            if (
++                source_path.query
++                or source_path.fragment
++                or not source_path.path.endswith(f"/tree/{source_revision}")
++            ):
++                raise CatalogError(f"{model_key}/{precision}: source_uri must pin source_revision")
++        runtime = _parse_phonon_runtime(raw_bundle.get("runtime"), f"{model_key}/{precision}")
++        generation = _parse_phonon_generation(
++            raw_bundle.get("generation"), f"{model_key}/{precision}"
++        )
++        license_info = _parse_phonon_license(raw_bundle.get("license"), f"{model_key}/{precision}")
++        voices, voice_details = _parse_phonon_voices(
++            raw_bundle.get("voices"), f"{model_key}/{precision}"
++        )
++        default_voice = raw_bundle.get("default_voice")
++        if not isinstance(default_voice, str) or default_voice not in voices:
++            raise CatalogError(f"{model_key}/{precision}: default_voice must name a bundled voice")
++        raw_languages = raw_bundle.get("languages")
++        if (
++            not isinstance(raw_languages, Sequence)
++            or isinstance(raw_languages, (str, bytes))
++            or not raw_languages
++        ):
++            raise CatalogError(f"{model_key}/{precision}: languages must be a non-empty sequence")
++        languages: list[str] = []
++        for value in raw_languages:
++            if (
++                not isinstance(value, str)
++                or _PHONON_LANGUAGE_RE.fullmatch(value.replace("_", "-")) is None
++            ):
++                raise CatalogError(f"{model_key}/{precision}: invalid language tag {value!r}")
++            normalized = normalize_language_tag(value)
++            if normalized not in languages:
++                languages.append(normalized)
++
++        raw_artifacts = raw_bundle.get("artifacts")
++        if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, (str, bytes)):
++            raise CatalogError(f"{model_key}/{precision}: artifacts must be a sequence")
++        artifacts: list[Artifact] = []
++        paths: set[str] = set()
++        for raw_artifact in raw_artifacts:
++            if not isinstance(raw_artifact, Mapping):
++                raise CatalogError(f"{model_key}/{precision}: artifact must be an object")
++            path = raw_artifact.get("path")
++            if not isinstance(path, str):
++                raise CatalogError(f"{model_key}/{precision}: artifact path must be a string")
++            if path in paths:
++                raise CatalogError(f"{model_key}/{precision}: duplicate artifact path {path!r}")
++            artifacts.append(
++                _phonon_artifact(
++                    raw_artifact,
++                    bundle_id=f"{model_key}/{precision}",
++                    model_key=model_key,
++                    precision=precision,
++                    tag=tag,
++                    source_revision=source_revision,
++                    license_info=license_info,
++                )
++            )
++            paths.add(path)
++
++        required_paths = {
++            "config.json",
++            "tokenizer.json",
++            "ATTRIBUTION.md",
++            "export-provenance.json",
++            *_PHONON_GRAPHS,
++            *(f"voices/{voice}.bin" for voice in voices),
++        }
++        if license_info["spdx"] == "CC-BY-NC-4.0":
++            required_paths.update({"third_party/model/README.md", "third_party/voices/README.md"})
++        missing = required_paths - paths
++        if missing:
++            raise CatalogError(
++                f"{model_key}/{precision}: missing required artifacts: {', '.join(sorted(missing))}"
++            )
++        prompt_names = {
++            artifact.component for artifact in artifacts if artifact.role == "voice_prompt"
++        }
++        if prompt_names != set(voices):
++            raise CatalogError(
++                f"{model_key}/{precision}: voice prompt inventory does not match voices"
++            )
++        attribution_path = license_info["attribution_path"]
++        if attribution_path not in paths:
++            raise CatalogError(f"{model_key}/{precision}: bundled attribution file is missing")
++
++        profile = {
++            "quality": precision,
++            "release_tag": tag,
++            "source_revision": source_revision,
++            "source_uri": source_uri,
++            "runtime": runtime,
++            "generation": generation,
++            "license": license_info,
++            "languages": languages,
++            "voices": voices,
++            "voice_details": voice_details,
++            "default_voice": default_voice,
++        }
++        current = grouped.get(model_key)
++        if current is None:
++            grouped[model_key] = {
++                "profile_signature": {
++                    "runtime": runtime,
++                    "generation": generation,
++                    "license": license_info,
++                    "languages": languages,
++                    "voices": voices,
++                    "voice_details": voice_details,
++                    "default_voice": default_voice,
++                },
++                "profiles": {precision: profile},
++                "artifacts": list(artifacts),
++            }
++        else:
++            if current["profile_signature"] != {
++                "runtime": runtime,
++                "generation": generation,
++                "license": license_info,
++                "languages": languages,
++                "voices": voices,
++                "voice_details": voice_details,
++                "default_voice": default_voice,
++            }:
++                raise CatalogError(f"{model_key}: published quality metadata is inconsistent")
++            current["profiles"][precision] = profile
++            current["artifacts"].extend(artifacts)
++
++    result: list[CatalogItem] = []
++    for model_key, group in sorted(grouped.items()):
++        profiles = group["profiles"]
++        qualities = sorted(profiles)
++        base = profiles.get("fp32", profiles[qualities[0]])
++        license_info = base["license"]
++        metadata = {
++            "runtime": base["runtime"],
++            "generation": base["generation"],
++            "profiles": profiles,
++            "quality_profiles": qualities,
++            "source_revisions": {
++                quality: profiles[quality]["source_revision"] for quality in qualities
++            },
++            "release_tags": {quality: profiles[quality]["release_tag"] for quality in qualities},
++            "source_uri": base["source_uri"],
++            "source_revision": base["source_revision"],
++            "license": license_info,
++            "license_spdx": license_info["spdx"],
++            "license_uri": license_info["uri"],
++            "commercial_use": license_info["commercial_use"],
++            "restrictions": list(license_info["restrictions"]),
++            "attribution_path": license_info["attribution_path"],
++            "languages": list(base["languages"]),
++            "language_codes": list(base["languages"]),
++            "voice_details": base["voice_details"],
++            "voice_cloning": False,
++            "streaming": True,
++            "named_voices": True,
++        }
++        result.append(
++            CatalogItem(
++                system="phonon",
++                id=model_key,
++                kind="bundle",
++                artifacts=tuple(group["artifacts"]),
++                sample_rate=base["runtime"]["sample_rate"],
++                voices=tuple(base["voices"]),
++                default_voice=base["default_voice"],
++                metadata=metadata,
++            )
++        )
++    return result
++
++
++def _select_phonon_profile(item: CatalogItem, quality: str | None) -> CatalogItem:
++    profiles = item.metadata.get("profiles")
++    if not isinstance(profiles, Mapping) or not profiles:
++        raise CatalogError(f"Phonon target {item.id!r} has no quality profiles")
++    selected_quality = (
++        quality if quality is not None else ("fp32" if "fp32" in profiles else sorted(profiles)[0])
++    )
++    profile = profiles.get(selected_quality)
++    if not isinstance(profile, Mapping):
++        available = ", ".join(sorted(str(value) for value in profiles)) or "none"
++        raise AssetNotFoundError(
++            f"Unknown Phonon quality {selected_quality!r} for {item.id!r}; available: {available}"
++        )
++    artifacts = tuple(
++        artifact for artifact in item.artifacts if artifact.quality == selected_quality
++    )
++    if not artifacts:
++        raise CatalogError(f"Phonon profile {item.id}/{selected_quality} has no artifacts")
++    return CatalogItem(
++        system=item.system,
++        id=item.id,
++        kind=item.kind,
++        artifacts=artifacts,
++        aliases=item.aliases,
++        sample_rate=profile["runtime"]["sample_rate"],
++        voices=tuple(profile["voices"]),
++        default_voice=profile["default_voice"],
++        metadata={
++            **item.metadata,
++            **profile,
++            "profiles": profiles,
++            "quality_profiles": sorted(profiles),
++            "selected_quality": selected_quality,
++        },
++    )
+diff --git a/onnxvoice/cli.py b/onnxvoice/cli.py
+index 5ad0ff1..8b72b00 100644
+--- a/onnxvoice/cli.py
++++ b/onnxvoice/cli.py
+@@ -695,6 +695,8 @@ def _cmd_engines(args: argparse.Namespace) -> int:
+                 "DISTRIBUTION",
+                 "LAYOUT",
+                 "SAMPLE_RATE",
++                "LICENSE",
++                "COMMERCIAL_USE",
+                 "VOICE_CLONING",
+                 "MODE",
+                 "DISCOVERY",
+@@ -708,6 +710,8 @@ def _cmd_engines(args: argparse.Namespace) -> int:
+                     _engine_display_value(row.get("distribution")),
+                     _engine_display_value(row.get("layout")),
+                     _engine_display_value(row.get("sample_rate")),
++                    _engine_display_value(row.get("license_spdx")),
++                    _engine_display_value(row.get("commercial_use")),
+                     _engine_display_value(row.get("voice_cloning")),
+                     _engine_display_value(row.get("cloning_mode")),
+                     _engine_display_value(row.get("target_discovery")),
+diff --git a/onnxvoice/engine_options.py b/onnxvoice/engine_options.py
+index 00d8ba7..486415f 100644
+--- a/onnxvoice/engine_options.py
++++ b/onnxvoice/engine_options.py
+@@ -727,6 +727,140 @@ ENGINE_CONTRACTS: Mapping[str, EngineContract] = MappingProxyType(
+                 ),
+             ),
+         ),
++        "phonon": EngineContract(
++            engine="phonon",
++            inputs=(_TOKEN_IDS,),
++            parameters=(
++                _control(
++                    "voice",
++                    "string",
++                    "Bundled projected voice prompt; no reference-audio cloning is supported.",
++                    default_status="unknown",
++                    availability="Installed or catalog voice metadata.",
++                ),
++                _control(
++                    "duration_delta",
++                    "number",
++                    "Text-conditioner duration offset; default is bundle metadata dependent.",
++                    default_status="unknown",
++                ),
++                _control(
++                    "temperature",
++                    "number",
++                    "Flow noise temperature; noise scale is sqrt(temperature).",
++                    default_status="unknown",
++                    minimum=0.0,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "seed",
++                    "integer",
++                    "Optional non-negative seed for reproducible per-utterance flow noise.",
++                    default=None,
++                    minimum=0,
++                    minimum_inclusive=True,
++                ),
++                _control(
++                    "eos_threshold",
++                    "number",
++                    "EOS-logit threshold; the default is bundle metadata dependent.",
++                    default_status="unknown",
++                ),
++                _control(
++                    "frames_after_eos",
++                    "integer",
++                    "Decoded frames to append after detecting EOS.",
++                    default_status="unknown",
++                    minimum=0,
++                    minimum_inclusive=True,
++                    unit="frames",
++                ),
++                _control(
++                    "min_frames_before_eos",
++                    "integer",
++                    "Earliest frame index at which EOS may terminate generation.",
++                    default_status="unknown",
++                    minimum=0,
++                    minimum_inclusive=True,
++                    unit="frames",
++                ),
++                _control(
++                    "max_frames",
++                    "integer",
++                    "Mandatory hard cap on generated frames.",
++                    default_status="unknown",
++                    minimum=1,
++                    minimum_inclusive=True,
++                    unit="frames",
++                ),
++            ),
++            limits=(
++                _limit(
++                    "max_frames",
++                    None,
++                    "unknown",
++                    "frames",
++                    "bundle_generation_metadata",
++                    "The selected bundle may declare a hard frame cap; otherwise callers must provide one.",
++                    constraint_status="model_declared",
++                ),
++                _limit(
++                    "max_input_tokens",
++                    None,
++                    "not_declared",
++                    "tokens",
++                    "adapter_contract",
++                    "ONNXVoice accepts caller-prepared IDs and does not tokenize or chunk text.",
++                    constraint_status="not_enforced_by_adapter",
++                ),
++            ),
++            capabilities=(
++                _capability(
++                    "voice_cloning",
++                    False,
++                    "not_supported",
++                    reason="Phonon selects bundled projected voice prompts; reference-audio enrollment is not implemented.",
++                ),
++                _capability(
++                    "streaming",
++                    True,
++                    "supported",
++                    mode="frame_streaming",
++                    reason="The adapter yields decoded PCM frames from the four-graph runtime.",
++                ),
++                _capability(
++                    "named_voices",
++                    True,
++                    "supported",
++                    mode="bundled_voice_prompt",
++                    reason="The selected bundle declares its available voice prompts.",
++                ),
++            ),
++            selection_metadata=(
++                _input(
++                    "voices",
++                    "string[]",
++                    "Voice names declared by the selected bundle.",
++                    required=False,
++                    group="selection_metadata",
++                    status="target_dependent",
++                    availability="catalog or installed config",
++                ),
++                _input(
++                    "default_voice",
++                    "string",
++                    "Bundle-declared default voice, if any.",
++                    required=False,
++                    group="selection_metadata",
++                    status="target_dependent",
++                    availability="catalog or installed config",
++                ),
++            ),
++            notes=(
++                "The runtime accepts model-ready token IDs and returns streaming PCM; tokenization and long-text chunking belong to a frontend.",
++                "Generation defaults are resolved from the selected bundle; controls without defaults remain required.",
++            ),
++        ),
+         "qwen3": EngineContract(
+             engine="qwen3",
+             inputs=(
+@@ -1744,6 +1878,99 @@ def _apply_target_rules(
+             )
+         result["layout"] = layout
+
++    elif engine == "phonon":
++        generation_mapping, generation_source = _target_mapping(metadata, "generation")
++        generation = dict(_mapping(_lookup(roots, ("generation",), ("onnx", "generation"))))
++        if generation_mapping:
++            generation.update(generation_mapping)
++        elif generation:
++            generation_source = "installed_manifest"
++        for option_name, field_name in (
++            ("duration_delta", "duration_delta_default"),
++            ("temperature", "temperature_default"),
++            ("eos_threshold", "eos_threshold_default"),
++            ("frames_after_eos", "frames_after_eos"),
++            ("min_frames_before_eos", "min_frames_before_eos"),
++            ("max_frames", "max_frames"),
++        ):
++            value = generation.get(field_name)
++            source = _target_value_source(metadata, "generation", field_name)
++            if source == "unknown":
++                source = generation_source
++            if value is None:
++                _set_option(
++                    result,
++                    option_name,
++                    default=None,
++                    default_status="unknown",
++                    required=True,
++                    status="required",
++                    source=source,
++                    availability="No default is declared; supply this control for inference.",
++                )
++            else:
++                _set_option(
++                    result,
++                    option_name,
++                    default=value,
++                    default_status="known",
++                    required=False,
++                    status="supported",
++                    source=source,
++                )
++            if option_name == "max_frames" and type(value) is int and value > 0:
++                _install_value(
++                    result,
++                    "max_frames",
++                    value,
++                    source=source,
++                    unit="frames",
++                    description="Selected bundle's enforced maximum output frame count.",
++                    constraint_status="enforced",
++                )
++
++        voices = metadata.get("voices")
++        if not isinstance(voices, (list, tuple)) or not voices:
++            configured_voices = _lookup(roots, ("voices",))
++            if isinstance(configured_voices, Mapping):
++                voices = tuple(configured_voices)
++            elif isinstance(configured_voices, (list, tuple)):
++                voice_entries = [
++                    entry.get("name") if isinstance(entry, Mapping) else entry
++                    for entry in configured_voices
++                ]
++                voices = tuple(name for name in voice_entries if isinstance(name, str) and name)
++        voice_names = (
++            sorted(str(name) for name in voices) if isinstance(voices, (list, tuple)) else []
++        )
++        default_voice = metadata.get("default_voice")
++        if not isinstance(default_voice, str) or not default_voice:
++            configured_default = _lookup(roots, ("default_voice",), ("voices", "default"))
++            default_voice = configured_default if isinstance(configured_default, str) else None
++        if voice_names:
++            voice_source = _fact_source(metadata, "voices")
++            if voice_source == "unknown":
++                voice_source = (
++                    "installed_manifest"
++                    if metadata.get("_manifest_loaded")
++                    else "catalog_metadata"
++                    if isinstance(metadata.get("_catalog_metadata"), Mapping)
++                    else "unknown"
++                )
++            _set_option(
++                result,
++                "voice",
++                choices=voice_names,
++                default=default_voice,
++                default_status="known" if default_voice in voice_names else "unknown",
++                required=default_voice not in voice_names,
++                status="supported" if default_voice in voice_names else "required",
++                source=voice_source,
++                availability="Declared bundled voice prompts.",
++            )
++        result["layout"] = "phonon-four-graph-streaming-v1"
++        result["field_status"]["layout"] = "known"
++
+     elif engine == "sopro":
+         generation_mapping, generation_source = _target_mapping(metadata, "generation")
+         generation = dict(_mapping(_lookup(roots, ("generation",))))
+@@ -1998,7 +2225,11 @@ def _variant_response(
+     if not isinstance(resolved_layout, str):
+         resolved_layout = _lookup(manifest_roots, ("layout",), ("runtime", "layout"))
+     manifest_sample_rate = _lookup(
+-        manifest_roots, ("sample_rate",), ("audio", "sample_rate"), ("model", "sample_rate")
++        manifest_roots,
++        ("sample_rate",),
++        ("runtime", "sample_rate"),
++        ("audio", "sample_rate"),
++        ("model", "sample_rate"),
+     )
+     sample_rate = (
+         getattr(item, "sample_rate", None)
+@@ -2064,6 +2295,12 @@ def _variant_response(
+         "contract_status": contract.contract_status,
+         "contract_reason": contract.contract_reason,
+     }
++    if engine == "phonon":
++        license_info = metadata.get("license")
++        if not isinstance(license_info, Mapping):
++            license_info = _lookup(manifest_roots, ("license",))
++        if isinstance(license_info, Mapping):
++            result["license"] = dict(license_info)
+     voices = (
+         getattr(item, "voices", None)
+         or getattr(installation, "voices", None)
+@@ -2076,6 +2313,19 @@ def _variant_response(
+         or metadata.get("default_voice")
+         or ("default" if engine == "inflect" else None)
+     )
++    if engine == "phonon":
++        if not voices:
++            configured_voices = _lookup(manifest_roots, ("voices",))
++            if isinstance(configured_voices, (list, tuple)):
++                names = [
++                    entry.get("name") if isinstance(entry, Mapping) else entry
++                    for entry in configured_voices
++                ]
++                voices = tuple(name for name in names if isinstance(name, str) and name)
++        if not default_voice:
++            configured_default = _lookup(manifest_roots, ("default_voice",), ("voices", "default"))
++            if isinstance(configured_default, str) and configured_default:
++                default_voice = configured_default
+     choices = (
+         _item_choices(item, "distribution_choices")
+         if item is not None
+@@ -2206,6 +2456,9 @@ def _generic_response(
+                     ),
+                     "default_voice": getattr(item, "default_voice", None)
+                     or metadata.get("default_voice"),
++                    "license": dict(metadata["license"])
++                    if isinstance(metadata.get("license"), Mapping)
++                    else None,
+                     "field_status": {
+                         "target": "known",
+                         "ref": "known",
+@@ -2498,6 +2751,13 @@ def list_engine_targets(
+                         "distribution": variant.get("distribution"),
+                         "layout": variant.get("layout"),
+                         "sample_rate": variant.get("sample_rate"),
++                        "license_spdx": variant.get("license", {}).get("spdx")
++                        if isinstance(variant.get("license"), Mapping)
++                        else None,
++                        "commercial_use": variant.get("license", {}).get("commercial_use")
++                        if isinstance(variant.get("license"), Mapping)
++                        else None,
++                        "license": variant.get("license"),
+                         "voice_cloning": clone.get("status", "unknown"),
+                         "cloning_mode": clone.get("mode"),
+                         "reason": clone.get("reason"),
+diff --git a/onnxvoice/systems/__init__.py b/onnxvoice/systems/__init__.py
+index 5bbd754..893e44e 100644
+--- a/onnxvoice/systems/__init__.py
++++ b/onnxvoice/systems/__init__.py
+@@ -10,6 +10,7 @@ from .kokoro import KokoroAdapter
+ from .kokoro_cloning import KokoroCloningRuntime, KokoroReferenceState
+ from .kokoro_inno import KokoroVoicePack
+ from .kokoro_split import SplitKokoroRuntime
++from .phonon import PhononAdapter, PhononStreamChunk, PhononVoiceState
+ from .piper import PiperAdapter
+ from .pocket import PocketAdapter
+ from .qwen3 import Qwen3Adapter
+@@ -24,6 +25,7 @@ _ADAPTERS: dict[str, type[SystemAdapter]] = {
+     PiperAdapter.system: PiperAdapter,
+     KokoroAdapter.system: KokoroAdapter,
+     PocketAdapter.system: PocketAdapter,
++    PhononAdapter.system: PhononAdapter,
+     SupertonicAdapter.system: SupertonicAdapter,
+     SoproAdapter.system: SoproAdapter,
+     KittenAdapter.system: KittenAdapter,
+@@ -54,6 +56,9 @@ __all__ = [
+     "PiperAdapter",
+     "KokoroAdapter",
+     "PocketAdapter",
++    "PhononAdapter",
++    "PhononVoiceState",
++    "PhononStreamChunk",
+     "SupertonicAdapter",
+     "SoproAdapter",
+     "SoproRun",
+diff --git a/onnxvoice/systems/phonon.py b/onnxvoice/systems/phonon.py
+new file mode 100644
+index 0000000..183b5fd
+--- /dev/null
++++ b/onnxvoice/systems/phonon.py
+@@ -0,0 +1,1420 @@
++"""Low-level streaming ONNX runtime for Phonon token IDs to PCM."""
++
++from __future__ import annotations
++
++import json
++import math
++import re
++from collections.abc import Iterator, Mapping, Sequence
++from dataclasses import dataclass, field
++from numbers import Integral, Real
++from types import MappingProxyType
++from typing import Any
++
++import numpy as np
++
++from ..errors import RuntimeContractError
++from ..runtime import OnnxSession
++from ..types import (
++    InferenceResult,
++    Installation,
++    RuntimeDiagnostic,
++    TensorSpec,
++    validate_safe_component,
++)
++from .base import SystemAdapter
++
++_GRAPH_FILES = {
++    "text_conditioner": "onnx/text_conditioner.onnx",
++    "flow_lm_main": "onnx/flow_lm_main.onnx",
++    "flow_lm_flow": "onnx/flow_lm_flow.onnx",
++    "mimi_decoder": "onnx/mimi_decoder.onnx",
++}
++_GRAPH_COMPONENTS = tuple(_GRAPH_FILES)
++_RUNTIME_KIND = "phonon-streaming-onnx-v1"
++_SUPPORTED_DTYPES: dict[str, np.dtype[Any]] = {
++    "tensor(float)": np.dtype(np.float32),
++    "tensor(float16)": np.dtype(np.float16),
++    "tensor(double)": np.dtype(np.float64),
++    "tensor(int64)": np.dtype(np.int64),
++    "tensor(int32)": np.dtype(np.int32),
++    "tensor(int16)": np.dtype(np.int16),
++    "tensor(int8)": np.dtype(np.int8),
++    "tensor(uint64)": np.dtype(np.uint64),
++    "tensor(uint32)": np.dtype(np.uint32),
++    "tensor(uint16)": np.dtype(np.uint16),
++    "tensor(uint8)": np.dtype(np.uint8),
++    "tensor(bool)": np.dtype(np.bool_),
++}
++_STATE_DTYPE_NAMES = {dtype.name: dtype for dtype in _SUPPORTED_DTYPES.values()}
++_KV_INPUT_RE = re.compile(r"^past_key_values\.(\d+)\.(key|value)$")
++_KV_OUTPUT_RE = re.compile(r"^present\.(\d+)\.(key|value)$")
++_STATE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
++_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
++_GENERATION_ALIASES = {
++    "temperature_default": ("temperature_default", "temperature"),
++    "eos_threshold_default": ("eos_threshold_default", "eos_threshold"),
++    "duration_delta_default": ("duration_delta_default", "duration_delta"),
++    "frames_after_eos": ("frames_after_eos",),
++    "min_frames_before_eos": ("min_frames_before_eos",),
++    "max_frames": ("max_frames", "max_frames_default"),
++}
++_RUNTIME_ALIASES = {
++    "sample_rate": ("sample_rate", "sampling_rate"),
++    "frame_samples": ("frame_samples",),
++    "frame_rate": ("frame_rate",),
++    "d_model": ("d_model", "hidden_size"),
++    "latent_dim": ("latent_dim",),
++    "num_layers": ("num_layers", "flow_layers", "num_flow_layers"),
++    "num_heads": ("num_heads", "heads"),
++    "head_dim": ("head_dim",),
++    "mimi_state": ("mimi_state",),
++}
++
++
++@dataclass(frozen=True, slots=True)
++class PhononVoiceState:
++    """A validated, reusable projected Phonon voice prompt."""
++
++    name: str
++    embeddings: np.ndarray
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if not isinstance(self.name, str) or not self.name:
++            raise RuntimeContractError("Phonon voice state name must be a non-empty string")
++        embeddings = np.array(self.embeddings, dtype=np.float32, order="C", copy=True)
++        if (
++            embeddings.ndim != 3
++            or embeddings.shape[0] != 1
++            or embeddings.shape[1] <= 0
++            or embeddings.shape[2] <= 0
++        ):
++            raise RuntimeContractError(
++                "Phonon voice embeddings must have shape [1, frames, d_model]"
++            )
++        if not np.isfinite(embeddings).all():
++            raise RuntimeContractError("Phonon voice embeddings must contain only finite values")
++        embeddings.setflags(write=False)
++        if not isinstance(self.metadata, Mapping):
++            raise RuntimeContractError("Phonon voice metadata must be a mapping")
++        object.__setattr__(self, "embeddings", embeddings)
++        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
++
++
++@dataclass(frozen=True, slots=True)
++class PhononStreamChunk:
++    """One decoded mono PCM frame produced by :meth:`PhononAdapter.stream`."""
++
++    audio: np.ndarray
++    sample_rate: int
++    frame_index: int
++    eos_detected: bool
++    eos_logit: float | None = None
++
++    def __post_init__(self) -> None:
++        audio = np.array(self.audio, dtype=np.float32, order="C", copy=True)
++        if audio.ndim != 1 or not np.isfinite(audio).all():
++            raise RuntimeContractError("Phonon chunk audio must be finite mono float32")
++        if type(self.sample_rate) is not int or self.sample_rate <= 0:
++            raise RuntimeContractError("Phonon chunk sample_rate must be a positive integer")
++        if type(self.frame_index) is not int or self.frame_index < 0:
++            raise RuntimeContractError("Phonon chunk frame_index must be a non-negative integer")
++        if type(self.eos_detected) is not bool:
++            raise RuntimeContractError("Phonon chunk eos_detected must be boolean")
++        if self.eos_logit is not None and (
++            isinstance(self.eos_logit, bool)
++            or not isinstance(self.eos_logit, Real)
++            or not math.isfinite(float(self.eos_logit))
++        ):
++            raise RuntimeContractError("Phonon chunk eos_logit must be finite or null")
++        audio.setflags(write=False)
++        object.__setattr__(self, "audio", audio)
++        if self.eos_logit is not None:
++            object.__setattr__(self, "eos_logit", float(self.eos_logit))
++
++
++@dataclass(frozen=True, slots=True)
++class _KVBinding:
++    input_name: str
++    output_name: str
++    input_spec: TensorSpec
++    output_spec: TensorSpec
++    sequence_axis: int
++    dtype: np.dtype[Any]
++    layer: int
++    kind: str
++
++
++@dataclass(frozen=True, slots=True)
++class _MimiStateBinding:
++    name: str
++    input_name: str
++    output_name: str
++    shape: tuple[int, ...]
++    dtype: np.dtype[Any]
++    input_spec: TensorSpec
++    output_spec: TensorSpec
++
++
++class PhononAdapter(SystemAdapter):
++    """Provider-configured, lazy four-graph Phonon runtime."""
++
++    system = "phonon"
++
++    def __init__(self, installation: Installation, **kwargs: Any) -> None:
++        super().__init__(installation, **kwargs)
++        self._sessions: dict[str, OnnxSession] = {}
++        self._config: dict[str, Any] | None = None
++        self._runtime: dict[str, Any] = {}
++        self._generation: dict[str, Any] = {}
++        self._voices: dict[str, dict[str, Any]] = {}
++        self._default_voice: str | None = None
++        self._mimi_state_specs: tuple[tuple[str, tuple[int, ...], np.dtype[Any]], ...] = ()
++        self._mimi_bindings: tuple[_MimiStateBinding, ...] = ()
++        self._offset_input_spec: TensorSpec | None = None
++        self._offset_output_spec: TensorSpec | None = None
++        self._kv_bindings: tuple[_KVBinding, ...] = ()
++        self._validated_contracts: set[str] = set()
++        self._voice_states: dict[str, PhononVoiceState] = {}
++
++    @staticmethod
++    def _find_value(value: Any, keys: Sequence[str]) -> Any:
++        if isinstance(value, Mapping):
++            for key in keys:
++                if key in value:
++                    return value[key]
++            for child in value.values():
++                found = PhononAdapter._find_value(child, keys)
++                if found is not None:
++                    return found
++        elif isinstance(value, (list, tuple)):
++            for child in value:
++                found = PhononAdapter._find_value(child, keys)
++                if found is not None:
++                    return found
++        return None
++
++    @staticmethod
++    def _finite_number(value: Any, label: str, *, minimum: float | None = None) -> float:
++        if isinstance(value, bool) or not isinstance(value, Real):
++            raise RuntimeContractError(f"Phonon {label} must be a finite number")
++        try:
++            number = float(value)
++        except (OverflowError, ValueError) as exc:
++            raise RuntimeContractError(f"Phonon {label} must be a finite number") from exc
++        if not math.isfinite(number) or (minimum is not None and number < minimum):
++            raise RuntimeContractError(f"Phonon {label} is outside its valid range")
++        return number
++
++    @staticmethod
++    def _positive_int(value: Any, label: str) -> int:
++        if type(value) is not int or value <= 0:
++            raise RuntimeContractError(f"Phonon {label} must be a positive integer")
++        return value
++
++    @staticmethod
++    def _normalize_locale(value: Any) -> tuple[str, str, str]:
++        if not isinstance(value, str):
++            return "", "", ""
++        candidate = value.replace("_", "-")
++        if _LANGUAGE_RE.fullmatch(candidate) is None:
++            return "", "", ""
++        parts = candidate.split("-")
++        normalized = [parts[0].lower()]
++        for part in parts[1:]:
++            if len(part) == 2 and part.isalpha():
++                normalized.append(part.upper())
++            elif len(part) == 4 and part.isalpha():
++                normalized.append(part.title())
++            else:
++                normalized.append(part.lower())
++        locale = "-".join(normalized)
++        return normalized[0], locale, locale
++
++    @staticmethod
++    def _normalize_runtime(config: Mapping[str, Any]) -> dict[str, Any]:
++        kind = PhononAdapter._find_value(config, ("kind", "runtime_kind"))
++        if kind != _RUNTIME_KIND:
++            raise RuntimeContractError(
++                f"Phonon config runtime kind must be {_RUNTIME_KIND!r}, got {kind!r}"
++            )
++        runtime: dict[str, Any] = {"kind": kind, "graphs": list(_GRAPH_FILES.values())}
++        for field_name, aliases in _RUNTIME_ALIASES.items():
++            value = PhononAdapter._find_value(config, aliases)
++            if field_name == "mimi_state":
++                if not isinstance(value, (Mapping, list, tuple)) or not value:
++                    raise RuntimeContractError(
++                        "Phonon config must declare non-empty Mimi decoder state"
++                    )
++                runtime[field_name] = value
++            elif field_name == "frame_rate":
++                runtime[field_name] = PhononAdapter._finite_number(value, field_name, minimum=0.0)
++                if runtime[field_name] <= 0:
++                    raise RuntimeContractError("Phonon frame_rate must be positive")
++            else:
++                runtime[field_name] = PhononAdapter._positive_int(value, field_name)
++        declared_graphs = PhononAdapter._find_value(config, ("graphs",))
++        if declared_graphs is not None:
++            if not isinstance(declared_graphs, Sequence) or isinstance(
++                declared_graphs, (str, bytes)
++            ):
++                raise RuntimeContractError("Phonon config graphs must be a sequence")
++            if tuple(declared_graphs) != tuple(_GRAPH_FILES.values()):
++                raise RuntimeContractError(
++                    "Phonon config graph inventory does not match the runtime ABI"
++                )
++        return runtime
++
++    @staticmethod
++    def _normalize_generation(config: Mapping[str, Any]) -> dict[str, Any]:
++        raw: Any = config.get("generation")
++        if not isinstance(raw, Mapping):
++            onnx = config.get("onnx")
++            raw = onnx.get("generation") if isinstance(onnx, Mapping) else None
++        raw = raw if isinstance(raw, Mapping) else {}
++        result: dict[str, Any] = {}
++        for field_name, aliases in _GENERATION_ALIASES.items():
++            value = PhononAdapter._find_value(raw, aliases)
++            if value is None:
++                result[field_name] = None
++            elif field_name == "temperature_default":
++                result[field_name] = PhononAdapter._finite_number(value, field_name, minimum=0.0)
++            elif field_name in {"frames_after_eos", "min_frames_before_eos", "max_frames"}:
++                minimum = 1 if field_name == "max_frames" else 0
++                if type(value) is not int or value < minimum:
++                    raise RuntimeContractError(f"Phonon {field_name} is invalid")
++                result[field_name] = value
++            else:
++                result[field_name] = PhononAdapter._finite_number(value, field_name)
++        return result
++
++    @staticmethod
++    def _parse_mimi_state(raw: Any) -> tuple[tuple[str, tuple[int, ...], np.dtype[Any]], ...]:
++        if isinstance(raw, Mapping):
++            if "name" in raw and "shape" in raw:
++                entries = [raw]
++            else:
++                entries = []
++                for name, value in raw.items():
++                    if not isinstance(value, Mapping):
++                        raise RuntimeContractError("Phonon Mimi state entries must be objects")
++                    entries.append({"name": name, **value})
++        elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
++            entries = list(raw)
++        else:
++            raise RuntimeContractError("Phonon Mimi state must be a sequence or mapping")
++        result: list[tuple[str, tuple[int, ...], np.dtype[Any]]] = []
++        names: set[str] = set()
++        for index, entry in enumerate(entries):
++            if not isinstance(entry, Mapping):
++                raise RuntimeContractError(f"Phonon Mimi state entry {index} must be an object")
++            name = entry.get("name") or entry.get("id")
++            if not isinstance(name, str) or _STATE_NAME_RE.fullmatch(name) is None:
++                raise RuntimeContractError(f"Phonon Mimi state entry {index} has an invalid name")
++            if name in names:
++                raise RuntimeContractError(f"Phonon Mimi state has duplicate name {name!r}")
++            shape = entry.get("shape")
++            if not isinstance(shape, Sequence) or isinstance(shape, (str, bytes)):
++                raise RuntimeContractError(f"Phonon Mimi state {name!r} must declare a shape")
++            if any(type(dimension) is not int or dimension < 0 for dimension in shape):
++                raise RuntimeContractError(f"Phonon Mimi state {name!r} has an invalid shape")
++            dtype_name = entry.get("dtype")
++            if not isinstance(dtype_name, str):
++                raise RuntimeContractError(f"Phonon Mimi state {name!r} must declare a dtype")
++            dtype = _STATE_DTYPE_NAMES.get(dtype_name)
++            if dtype is None:
++                raise RuntimeContractError(
++                    f"Phonon Mimi state {name!r} has unsupported dtype {dtype_name!r}"
++                )
++            names.add(name)
++            result.append((name, tuple(shape), dtype))
++        if not result:
++            raise RuntimeContractError("Phonon Mimi state inventory cannot be empty")
++        return tuple(result)
++
++    @classmethod
++    def _parse_voices(cls, raw: Any) -> dict[str, dict[str, Any]]:
++        if isinstance(raw, Mapping):
++            entries: list[Any] = []
++            for name, value in raw.items():
++                if not isinstance(value, Mapping):
++                    raise RuntimeContractError("Phonon config voice entries must be objects")
++                entries.append({"name": name, **value})
++        elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
++            entries = list(raw)
++        else:
++            raise RuntimeContractError("Phonon config must declare bundled voices")
++        voices: dict[str, dict[str, Any]] = {}
++        for index, entry in enumerate(entries):
++            if not isinstance(entry, Mapping):
++                raise RuntimeContractError(f"Phonon config voice entry {index} must be an object")
++            name = entry.get("name") or entry.get("id")
++            if not isinstance(name, str):
++                raise RuntimeContractError(f"Phonon config voice entry {index} has no name")
++            try:
++                validate_safe_component(name, field_name="Phonon voice name")
++            except ValueError as exc:
++                raise RuntimeContractError(str(exc)) from exc
++            if name in voices:
++                raise RuntimeContractError(f"Phonon config has duplicate voice {name!r}")
++            display_name = entry.get("display_name", name)
++            if not isinstance(display_name, str) or not display_name.strip():
++                raise RuntimeContractError(f"Phonon voice {name!r} has an invalid display_name")
++            voice_id = entry.get("voice_id")
++            if voice_id is not None and (not isinstance(voice_id, str) or not voice_id):
++                raise RuntimeContractError(f"Phonon voice {name!r} has an invalid voice_id")
++            source_locale = entry.get("locale")
++            if source_locale is not None and not isinstance(source_locale, str):
++                raise RuntimeContractError(f"Phonon voice {name!r} has an invalid locale")
++            language, locale, language_label = cls._normalize_locale(source_locale)
++            source_gender = entry.get("gender")
++            if source_gender is not None and not isinstance(source_gender, str):
++                raise RuntimeContractError(f"Phonon voice {name!r} has an invalid gender")
++            gender = (
++                source_gender.lower()
++                if isinstance(source_gender, str) and source_gender.lower() in {"male", "female"}
++                else "unknown"
++            )
++            frames = entry.get("frames")
++            if frames is not None:
++                frames = cls._positive_int(frames, f"voices.{name}.frames")
++            detail: dict[str, Any] = {
++                "id": name,
++                "name": display_name,
++                "display_name": display_name,
++                "language": language,
++                "locale": locale,
++                "language_label": language_label or language or "unknown",
++                "gender": gender,
++            }
++            if voice_id is not None:
++                detail["voice_id"] = voice_id
++                detail["upstream_voice_id"] = voice_id
++            if frames is not None:
++                detail["frames"] = frames
++            if source_locale and not locale:
++                detail["source_locale"] = source_locale
++            if source_gender is not None and gender == "unknown":
++                detail["source_gender"] = source_gender
++            voices[name] = detail
++        if not voices:
++            raise RuntimeContractError("Phonon config voice inventory cannot be empty")
++        return voices
++
++    def _load_contract(self) -> dict[str, Any]:
++        if self._config is not None:
++            return self._config
++        try:
++            artifact = self.installation.require_artifact("config")
++        except KeyError as exc:
++            raise RuntimeContractError("Phonon installation is missing config.json") from exc
++        try:
++            config_data = json.loads(artifact.path.read_text(encoding="utf-8"))
++        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
++            raise RuntimeContractError(f"Could not read Phonon config.json: {exc}") from exc
++        if not isinstance(config_data, Mapping):
++            raise RuntimeContractError("Phonon config.json must contain an object")
++        config = dict(config_data)
++        runtime = self._normalize_runtime(config)
++        generation = self._normalize_generation(config)
++        mimi_specs = self._parse_mimi_state(runtime["mimi_state"])
++        voices = self._parse_voices(config.get("voices"))
++        raw_default = config.get("default_voice")
++        if raw_default is not None and (
++            not isinstance(raw_default, str) or raw_default not in voices
++        ):
++            raise RuntimeContractError("Phonon config default_voice must name a bundled voice")
++
++        catalog_runtime = self.installation.metadata.get("runtime")
++        if isinstance(catalog_runtime, Mapping):
++            for field_name in (
++                "kind",
++                "graphs",
++                "sample_rate",
++                "frame_samples",
++                "frame_rate",
++                "d_model",
++                "latent_dim",
++                "num_layers",
++                "num_heads",
++                "head_dim",
++                "mimi_state",
++            ):
++                if (
++                    field_name in catalog_runtime
++                    and catalog_runtime[field_name] != runtime[field_name]
++                ):
++                    raise RuntimeContractError(
++                        f"Phonon catalog/config runtime mismatch for {field_name}"
++                    )
++        catalog_generation = self.installation.metadata.get("generation")
++        if isinstance(catalog_generation, Mapping):
++            for field_name, value in generation.items():
++                if field_name in catalog_generation and catalog_generation[field_name] != value:
++                    raise RuntimeContractError(
++                        f"Phonon catalog/config generation mismatch for {field_name}"
++                    )
++        if (
++            self.installation.sample_rate is not None
++            and self.installation.sample_rate != runtime["sample_rate"]
++        ):
++            raise RuntimeContractError("Phonon catalog/config sample_rate mismatch")
++
++        catalog_voices = tuple(self.installation.voices)
++        metadata_voices = self.installation.metadata.get("voices")
++        if (
++            not catalog_voices
++            and isinstance(metadata_voices, Sequence)
++            and not isinstance(metadata_voices, (str, bytes))
++        ):
++            catalog_voices = tuple(metadata_voices)
++        if catalog_voices and catalog_voices != tuple(voices):
++            raise RuntimeContractError("Phonon catalog/config voice inventory mismatch")
++        catalog_default = self.installation.default_voice
++        metadata_default = self.installation.metadata.get("default_voice")
++        if catalog_default is not None and catalog_default not in voices:
++            raise RuntimeContractError("Phonon installation default_voice is not bundled")
++        if isinstance(metadata_default, str) and metadata_default not in voices:
++            raise RuntimeContractError("Phonon catalog default_voice is not bundled")
++        if (
++            raw_default is not None
++            and catalog_default is not None
++            and raw_default != catalog_default
++        ):
++            raise RuntimeContractError("Phonon catalog/config default_voice mismatch")
++        if (
++            raw_default is not None
++            and isinstance(metadata_default, str)
++            and raw_default != metadata_default
++        ):
++            raise RuntimeContractError("Phonon catalog/config default_voice mismatch")
++
++        self._runtime = runtime
++        self._generation = generation
++        self._voices = voices
++        self._default_voice = catalog_default or raw_default
++        self._mimi_state_specs = mimi_specs
++        self._config = config
++        return config
++
++    @staticmethod
++    def _specs(session: Any, attribute: str, component: str) -> tuple[TensorSpec, ...]:
++        specs = getattr(session, attribute, None)
++        if not isinstance(specs, (tuple, list)) or not specs:
++            raise RuntimeContractError(f"Phonon {component} graph does not expose {attribute}")
++        if any(not isinstance(spec, TensorSpec) for spec in specs):
++            raise RuntimeContractError(f"Phonon {component} graph has malformed tensor metadata")
++        names = [spec.name for spec in specs]
++        if len(names) != len(set(names)) or any(not name for name in names):
++            raise RuntimeContractError(
++                f"Phonon {component} graph has duplicate or empty tensor names"
++            )
++        return tuple(specs)
++
++    @staticmethod
++    def _dtype(spec: TensorSpec, component: str) -> np.dtype[Any]:
++        dtype = _SUPPORTED_DTYPES.get(spec.ort_type)
++        if dtype is None:
++            raise RuntimeContractError(
++                f"Phonon {component} tensor {spec.name!r} uses unsupported dtype {spec.ort_type!r}"
++            )
++        return dtype
++
++    @classmethod
++    def _require_dtype(cls, spec: TensorSpec, component: str, category: str) -> np.dtype[Any]:
++        dtype = cls._dtype(spec, component)
++        if category == "floating":
++            valid = np.issubdtype(dtype, np.floating)
++        elif category == "integer":
++            valid = np.issubdtype(dtype, np.integer)
++        else:
++            raise ValueError(f"Unknown Phonon dtype category {category!r}")
++        if not valid:
++            raise RuntimeContractError(
++                f"Phonon {component} tensor {spec.name!r} must use a {category} dtype"
++            )
++        return dtype
++
++    @staticmethod
++    def _require_names(actual: set[str], expected: set[str], component: str) -> None:
++        if actual != expected:
++            missing = sorted(expected - actual)
++            extra = sorted(actual - expected)
++            details = []
++            if missing:
++                details.append(f"missing {', '.join(missing)}")
++            if extra:
++                details.append(f"unexpected {', '.join(extra)}")
++            raise RuntimeContractError(
++                f"Phonon {component} graph signature mismatch: {'; '.join(details)}"
++            )
++
++    @staticmethod
++    def _state_name(name: str, pattern: re.Pattern[str], component: str) -> tuple[int, str]:
++        match = pattern.fullmatch(name)
++        if match is None:
++            raise RuntimeContractError(f"Phonon {component} has invalid state tensor name {name!r}")
++        return int(match.group(1)), match.group(2)
++
++    @staticmethod
++    def _compatible_static_shape(actual: Sequence[Any], expected: Sequence[Any]) -> bool:
++        return len(actual) == len(expected) and all(
++            not isinstance(left, int) or not isinstance(right, int) or left == right
++            for left, right in zip(actual, expected, strict=True)
++        )
++
++    def _validate_contract(self, component: str, session: Any) -> None:
++        if component in self._validated_contracts:
++            return
++        inputs = self._specs(session, "input_specs", component)
++        outputs = self._specs(session, "output_specs", component)
++        input_specs = {spec.name: spec for spec in inputs}
++        output_specs = {spec.name: spec for spec in outputs}
++        input_names = set(input_specs)
++        output_names = set(output_specs)
++
++        if component == "text_conditioner":
++            self._require_names(input_names, {"input_ids", "duration_delta"}, component)
++            self._require_names(output_names, {"inputs_embeds", "bos_embeds"}, component)
++            self._require_dtype(input_specs["input_ids"], component, "integer")
++            if self._dtype(input_specs["duration_delta"], component) != np.dtype(np.float32):
++                raise RuntimeContractError("Phonon duration_delta input must be float32")
++            self._require_dtype(output_specs["inputs_embeds"], component, "floating")
++            self._require_dtype(output_specs["bos_embeds"], component, "floating")
++            if len(input_specs["input_ids"].shape) != 2:
++                raise RuntimeContractError("Phonon text_conditioner input_ids must be rank 2")
++            if len(input_specs["duration_delta"].shape) != 1:
++                raise RuntimeContractError(
++                    "Phonon text_conditioner duration_delta must have shape [1]"
++                )
++            if len(output_specs["inputs_embeds"].shape) != 3 or len(
++                output_specs["bos_embeds"].shape
++            ) not in {2, 3}:
++                raise RuntimeContractError("Phonon text embeddings have an unsupported rank")
++            for spec in (output_specs["inputs_embeds"], output_specs["bos_embeds"]):
++                if isinstance(spec.shape[-1], int) and spec.shape[-1] != self._runtime["d_model"]:
++                    raise RuntimeContractError(
++                        "Phonon text conditioner d_model does not match config"
++                    )
++
++        elif component == "flow_lm_main":
++            input_state: dict[tuple[int, str], TensorSpec] = {}
++            output_state: dict[tuple[int, str], TensorSpec] = {}
++            for spec in inputs:
++                if spec.name.startswith("past_key_values."):
++                    key = self._state_name(spec.name, _KV_INPUT_RE, component)
++                    if key in input_state:
++                        raise RuntimeContractError(
++                            "Phonon flow_lm_main has duplicate past-KV inputs"
++                        )
++                    input_state[key] = spec
++            for spec in outputs:
++                if spec.name.startswith("present."):
++                    key = self._state_name(spec.name, _KV_OUTPUT_RE, component)
++                    if key in output_state:
++                        raise RuntimeContractError(
++                            "Phonon flow_lm_main has duplicate present-KV outputs"
++                        )
++                    output_state[key] = spec
++            expected_layers = set(range(self._runtime["num_layers"]))
++            expected_state = {
++                (layer, kind) for layer in expected_layers for kind in ("key", "value")
++            }
++            if set(input_state) != expected_state or set(output_state) != expected_state:
++                raise RuntimeContractError(
++                    "Phonon flow_lm_main KV signature must contain configured key/value layers"
++                )
++            self._require_names(
++                input_names,
++                {"inputs_embeds", *(spec.name for spec in input_state.values())},
++                component,
++            )
++            self._require_names(
++                output_names,
++                {"hidden", "eos_logit", *(spec.name for spec in output_state.values())},
++                component,
++            )
++            embed_spec = input_specs["inputs_embeds"]
++            if len(embed_spec.shape) != 3:
++                raise RuntimeContractError("Phonon flow_lm_main inputs_embeds must be rank 3")
++            if (
++                isinstance(embed_spec.shape[-1], int)
++                and embed_spec.shape[-1] != self._runtime["d_model"]
++            ):
++                raise RuntimeContractError("Phonon flow_lm_main d_model does not match config")
++            self._require_dtype(embed_spec, component, "floating")
++            self._require_dtype(output_specs["hidden"], component, "floating")
++            self._require_dtype(output_specs["eos_logit"], component, "floating")
++            bindings: list[_KVBinding] = []
++            for layer, kind in sorted(expected_state):
++                input_spec = input_state[(layer, kind)]
++                output_spec = output_state[(layer, kind)]
++                input_dtype = self._require_dtype(input_spec, component, "floating")
++                output_dtype = self._require_dtype(output_spec, component, "floating")
++                if input_dtype != output_dtype:
++                    raise RuntimeContractError(
++                        f"Phonon past/present dtype mismatch for layer {layer} {kind}"
++                    )
++                if len(input_spec.shape) < 3:
++                    raise RuntimeContractError(
++                        f"Phonon KV tensor {input_spec.name!r} must have rank >= 3"
++                    )
++                sequence_axis = len(input_spec.shape) - 2
++                input_sequence = input_spec.shape[sequence_axis]
++                if isinstance(input_sequence, int):
++                    raise RuntimeContractError(
++                        f"Phonon past-KV sequence axis must be dynamic: {input_spec.name}"
++                    )
++                incompatible_shape = not self._compatible_static_shape(
++                    input_spec.shape, output_spec.shape
++                ) and (
++                    len(input_spec.shape) != len(output_spec.shape)
++                    or any(
++                        index != sequence_axis
++                        and isinstance(left, int)
++                        and isinstance(right, int)
++                        and left != right
++                        for index, (left, right) in enumerate(
++                            zip(input_spec.shape, output_spec.shape, strict=True)
++                        )
++                    )
++                )
++                if incompatible_shape:
++                    raise RuntimeContractError("Phonon past/present KV shapes are incompatible")
++                bindings.append(
++                    _KVBinding(
++                        input_spec.name,
++                        output_spec.name,
++                        input_spec,
++                        output_spec,
++                        sequence_axis,
++                        input_dtype,
++                        layer,
++                        kind,
++                    )
++                )
++            self._kv_bindings = tuple(bindings)
++
++        elif component == "flow_lm_flow":
++            self._require_names(input_names, {"hidden", "noise", "duration_delta"}, component)
++            self._require_names(output_names, {"latent", "next_embeds"}, component)
++            for name in ("hidden", "noise", "duration_delta"):
++                self._require_dtype(input_specs[name], component, "floating")
++            if self._dtype(input_specs["noise"], component) != np.dtype(np.float32):
++                raise RuntimeContractError("Phonon flow noise input must be float32")
++            if self._dtype(input_specs["duration_delta"], component) != np.dtype(np.float32):
++                raise RuntimeContractError("Phonon flow duration_delta input must be float32")
++            self._require_dtype(output_specs["latent"], component, "floating")
++            self._require_dtype(output_specs["next_embeds"], component, "floating")
++            if len(input_specs["noise"].shape) < 2:
++                raise RuntimeContractError(
++                    "Phonon flow noise input must include batch and latent dimensions"
++                )
++            if (
++                isinstance(input_specs["noise"].shape[-1], int)
++                and input_specs["noise"].shape[-1] != self._runtime["latent_dim"]
++            ):
++                raise RuntimeContractError("Phonon flow noise latent_dim does not match config")
++
++        elif component == "mimi_decoder":
++            state_inputs = {f"state.{name}" for name, _, _ in self._mimi_state_specs}
++            state_outputs = {f"next_state.{name}" for name, _, _ in self._mimi_state_specs}
++            self._require_names(input_names, {"latent", "offset", *state_inputs}, component)
++            self._require_names(output_names, {"audio", "next_offset", *state_outputs}, component)
++            self._require_dtype(input_specs["latent"], component, "floating")
++            self._require_dtype(output_specs["audio"], component, "floating")
++            if len(input_specs["latent"].shape) < 2:
++                raise RuntimeContractError("Phonon Mimi latent input has unsupported rank")
++            if (
++                isinstance(input_specs["latent"].shape[-1], int)
++                and input_specs["latent"].shape[-1] != self._runtime["latent_dim"]
++            ):
++                raise RuntimeContractError("Phonon Mimi latent_dim does not match config")
++            offset_input = input_specs["offset"]
++            offset_output = output_specs["next_offset"]
++            offset_dtype = self._dtype(offset_input, component)
++            if self._dtype(offset_output, component) != offset_dtype:
++                raise RuntimeContractError("Phonon Mimi offset input/output dtypes do not match")
++            if not self._compatible_static_shape(offset_input.shape, offset_output.shape):
++                raise RuntimeContractError("Phonon Mimi offset input/output shapes do not match")
++            bindings: list[_MimiStateBinding] = []
++            for name, shape, configured_dtype in self._mimi_state_specs:
++                input_name = f"state.{name}"
++                output_name = f"next_state.{name}"
++                input_spec = input_specs[input_name]
++                output_spec = output_specs[output_name]
++                input_dtype = self._dtype(input_spec, component)
++                if (
++                    input_dtype != configured_dtype
++                    or self._dtype(output_spec, component) != configured_dtype
++                ):
++                    raise RuntimeContractError(f"Phonon Mimi state dtype mismatch for {name!r}")
++                if not self._compatible_static_shape(input_spec.shape, shape):
++                    raise RuntimeContractError(f"Phonon Mimi state shape mismatch for {name!r}")
++                if not self._compatible_static_shape(output_spec.shape, shape):
++                    raise RuntimeContractError(
++                        f"Phonon Mimi next-state shape mismatch for {name!r}"
++                    )
++                bindings.append(
++                    _MimiStateBinding(
++                        name,
++                        input_name,
++                        output_name,
++                        shape,
++                        configured_dtype,
++                        input_spec,
++                        output_spec,
++                    )
++                )
++            self._mimi_bindings = tuple(bindings)
++            self._offset_input_spec = offset_input
++            self._offset_output_spec = offset_output
++        else:
++            raise RuntimeContractError(f"Unknown Phonon graph component {component!r}")
++        self._validated_contracts.add(component)
++
++    def _get_session(self, component: str) -> OnnxSession:
++        existing = self._sessions.get(component)
++        if existing is not None:
++            return existing
++        if component not in _GRAPH_FILES:
++            raise RuntimeContractError(f"Unknown Phonon graph component {component!r}")
++        self._load_contract()
++        try:
++            artifact = self.installation.require_artifact("model", component=component)
++        except KeyError as exc:
++            raise RuntimeContractError(
++                f"Phonon installation is missing graph {component!r}"
++            ) from exc
++        session = OnnxSession(
++            artifact.path,
++            component=component,
++            providers=self.providers,
++            provider_options=self.provider_options,
++            session_options=self.session_options,
++        )
++        try:
++            self._validate_contract(component, session)
++        except Exception:
++            session.close()
++            raise
++        self._sessions[component] = session
++        return session
++
++    @classmethod
++    def _cast_feed(
++        cls,
++        value: Any,
++        spec: TensorSpec,
++        component: str,
++        *,
++        category: str | None = None,
++    ) -> np.ndarray:
++        dtype = cls._dtype(spec, component)
++        if category is not None:
++            cls._require_dtype(spec, component, category)
++        try:
++            array = np.asarray(value, dtype=dtype)
++        except (TypeError, ValueError, OverflowError) as exc:
++            raise RuntimeContractError(
++                f"Phonon {component} could not cast feed {spec.name!r} to {dtype.name}"
++            ) from exc
++        if array.ndim != len(spec.shape):
++            raise RuntimeContractError(
++                f"Phonon {component} feed {spec.name!r} has rank {array.ndim}, expected {len(spec.shape)}"
++            )
++        for axis, (actual, expected) in enumerate(zip(array.shape, spec.shape, strict=True)):
++            if isinstance(expected, int) and expected != actual:
++                raise RuntimeContractError(
++                    f"Phonon {component} feed {spec.name!r} axis {axis} has size {actual}, expected {expected}"
++                )
++        if np.issubdtype(array.dtype, np.floating) and not np.isfinite(array).all():
++            raise RuntimeContractError(f"Phonon {component} feed {spec.name!r} must be finite")
++        return np.ascontiguousarray(array)
++
++    @classmethod
++    def _fit_feature(cls, value: Any, spec: TensorSpec, component: str) -> np.ndarray:
++        array = np.asarray(value)
++        target_rank = len(spec.shape)
++        if array.ndim == 2 and target_rank == 3 and array.shape[0] == 1:
++            array = array[:, None, :]
++        elif array.ndim == 3 and target_rank == 2 and array.shape[0] == 1 and array.shape[1] == 1:
++            array = array[:, 0, :]
++        return cls._cast_feed(array, spec, component, category="floating")
++
++    @staticmethod
++    def _named_outputs(session: Any, values: Any, component: str) -> dict[str, np.ndarray]:
++        names = tuple(getattr(session, "output_names", ()))
++        if isinstance(values, Mapping):
++            named = {str(name): np.asarray(value) for name, value in values.items()}
++        elif isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
++            if len(values) != len(names):
++                raise RuntimeContractError(
++                    f"Phonon {component} returned {len(values)} outputs for {len(names)} names"
++                )
++            named = {name: np.asarray(value) for name, value in zip(names, values, strict=True)}
++        else:
++            raise RuntimeContractError(f"Phonon {component} returned invalid outputs")
++        if set(named) != set(names):
++            raise RuntimeContractError(
++                f"Phonon {component} returned outputs that do not match its signature"
++            )
++        return named
++
++    @classmethod
++    def _run(
++        cls, session: Any, feeds: dict[str, np.ndarray], component: str
++    ) -> dict[str, np.ndarray]:
++        try:
++            values = session.run(feeds)
++        except Exception as exc:
++            raise RuntimeContractError(f"Phonon {component} inference failed: {exc}") from exc
++        return cls._named_outputs(session, values, component)
++
++    def _initial_cache_tensor(self, binding: _KVBinding) -> np.ndarray:
++        shape: list[int] = []
++        rank = len(binding.input_spec.shape)
++        for axis, dimension in enumerate(binding.input_spec.shape):
++            if axis == binding.sequence_axis:
++                shape.append(0)
++            elif isinstance(dimension, int):
++                shape.append(dimension)
++            elif axis == 0:
++                shape.append(1)
++            elif rank == 4 and axis == 1:
++                shape.append(self._runtime["num_heads"])
++            elif axis == rank - 1:
++                shape.append(self._runtime["head_dim"])
++            else:
++                shape.append(1)
++        return np.zeros(tuple(shape), dtype=binding.dtype)
++
++    def _initial_dynamic_tensor(self, spec: TensorSpec, component: str) -> np.ndarray:
++        shape = tuple(dimension if isinstance(dimension, int) else 1 for dimension in spec.shape)
++        return np.zeros(shape, dtype=self._dtype(spec, component))
++
++    @staticmethod
++    def _normalize_embeddings(value: Any, label: str, d_model: int) -> np.ndarray:
++        embeddings = np.asarray(value, dtype=np.float32)
++        if embeddings.ndim == 2 and embeddings.shape[0] == 1:
++            embeddings = embeddings[:, None, :]
++        if (
++            embeddings.ndim != 3
++            or embeddings.shape[0] != 1
++            or embeddings.shape[1] <= 0
++            or embeddings.shape[2] != d_model
++            or not np.isfinite(embeddings).all()
++        ):
++            raise RuntimeContractError(
++                f"Phonon {label} must be finite [1, sequence, {d_model}] float embeddings"
++            )
++        return np.ascontiguousarray(embeddings, dtype=np.float32)
++
++    @staticmethod
++    def _scalar(value: Any, label: str) -> float:
++        array = np.asarray(value)
++        if array.size != 1 or not np.issubdtype(array.dtype, np.number):
++            raise RuntimeContractError(f"Phonon {label} must contain exactly one number")
++        number = float(array.reshape(-1)[0])
++        if not math.isfinite(number):
++            raise RuntimeContractError(f"Phonon {label} must be finite")
++        return number
++
++    @staticmethod
++    def _audio(value: Any, *, frame_samples: int, component: str) -> np.ndarray:
++        try:
++            audio = np.asarray(value, dtype=np.float32)
++        except (TypeError, ValueError, OverflowError) as exc:
++            raise RuntimeContractError(
++                f"Phonon {component} audio cannot be converted to float32"
++            ) from exc
++        if audio.ndim == 0 or any(dimension != 1 for dimension in audio.shape[:-1]):
++            raise RuntimeContractError(
++                "Phonon Mimi audio must be mono with only singleton batch axes"
++            )
++        audio = np.ascontiguousarray(audio.reshape(-1), dtype=np.float32)
++        if audio.size != frame_samples:
++            raise RuntimeContractError(
++                f"Phonon Mimi audio frame has {audio.size} samples, expected {frame_samples}"
++            )
++        if not np.isfinite(audio).all():
++            raise RuntimeContractError("Phonon Mimi audio contains NaN or infinity")
++        return audio
++
++    def _resolve_voice(self, voice: str | PhononVoiceState | None) -> PhononVoiceState:
++        self._load_contract()
++        if voice is None:
++            if self._default_voice is None:
++                raise RuntimeContractError(
++                    "Phonon has no default voice; select a bundled voice explicitly"
++                )
++            voice = self._default_voice
++        if isinstance(voice, str):
++            return self.prepare_voice(voice)
++        if not isinstance(voice, PhononVoiceState):
++            raise RuntimeContractError("Phonon voice must be a bundled name or PhononVoiceState")
++        detail = self._voices.get(voice.name)
++        if detail is None:
++            raise RuntimeContractError(f"Unknown Phonon voice state {voice.name!r}")
++        if voice.embeddings.shape[2] != self._runtime["d_model"]:
++            raise RuntimeContractError("Phonon voice-state d_model does not match installed config")
++        expected_frames = detail.get("frames")
++        if expected_frames is not None and voice.embeddings.shape[1] != expected_frames:
++            raise RuntimeContractError(
++                "Phonon voice-state frame count does not match voice metadata"
++            )
++        return voice
++
++    def prepare_voice(self, name: str | None = None) -> PhononVoiceState:
++        """Load a declared little-endian float32 projected voice prompt."""
++        self._load_contract()
++        selected = self._default_voice if name is None else name
++        if selected is None:
++            raise RuntimeContractError(
++                "Phonon default voice is not declared; select a voice explicitly"
++            )
++        if not isinstance(selected, str) or selected not in self._voices:
++            available = ", ".join(self._voices) or "none"
++            raise RuntimeContractError(
++                f"Unknown Phonon voice {selected!r}; available voices: {available}"
++            )
++        cached = self._voice_states.get(selected)
++        if cached is not None:
++            return cached
++        try:
++            artifact = self.installation.require_artifact("voice_prompt", component=selected)
++        except KeyError as exc:
++            raise RuntimeContractError(
++                f"Phonon installation is missing voice prompt {selected!r}"
++            ) from exc
++        if not artifact.path.is_file():
++            raise RuntimeContractError(f"Phonon voice prompt {selected!r} is not a regular file")
++        try:
++            values = np.fromfile(artifact.path, dtype="<f4")
++        except OSError as exc:
++            raise RuntimeContractError(
++                f"Could not load Phonon voice prompt {selected!r}: {exc}"
++            ) from exc
++        d_model = self._runtime["d_model"]
++        if values.size == 0 or values.size % d_model:
++            raise RuntimeContractError(
++                f"Phonon voice prompt {selected!r} byte count is not divisible by d_model * 4"
++            )
++        frames = values.size // d_model
++        expected_frames = self._voices[selected].get("frames")
++        if expected_frames is not None and frames != expected_frames:
++            raise RuntimeContractError(
++                f"Phonon voice prompt {selected!r} has {frames} frames, expected {expected_frames}"
++            )
++        embeddings = np.ascontiguousarray(values.reshape(1, frames, d_model), dtype=np.float32)
++        if not np.isfinite(embeddings).all():
++            raise RuntimeContractError(f"Phonon voice prompt {selected!r} contains NaN or infinity")
++        state = PhononVoiceState(selected, embeddings, self._voices[selected])
++        self._voice_states[selected] = state
++        return state
++
++    def _generation_control(
++        self,
++        provided: Any,
++        field_name: str,
++        *,
++        kind: str,
++        minimum: int | float | None = None,
++    ) -> float | int:
++        value = self._generation[field_name] if provided is None else provided
++        if value is None:
++            raise RuntimeContractError(
++                f"Phonon {field_name} has no bundle default; provide it explicitly"
++            )
++        if kind == "number":
++            return self._finite_number(value, field_name, minimum=minimum)
++        if isinstance(value, bool) or not isinstance(value, Integral):
++            raise RuntimeContractError(f"Phonon {field_name} must be an integer")
++        number = int(value)
++        if minimum is not None and number < minimum:
++            raise RuntimeContractError(f"Phonon {field_name} must be >= {minimum}")
++        return number
++
++    def _controls(
++        self,
++        *,
++        duration_delta: Any,
++        temperature: Any,
++        seed: Any,
++        eos_threshold: Any,
++        frames_after_eos: Any,
++        min_frames_before_eos: Any,
++        max_frames: Any,
++    ) -> dict[str, Any]:
++        duration = self._generation_control(duration_delta, "duration_delta_default", kind="number")
++        temp = self._generation_control(
++            temperature, "temperature_default", kind="number", minimum=0.0
++        )
++        threshold = self._generation_control(eos_threshold, "eos_threshold_default", kind="number")
++        tail = self._generation_control(
++            frames_after_eos, "frames_after_eos", kind="integer", minimum=0
++        )
++        minimum = self._generation_control(
++            min_frames_before_eos,
++            "min_frames_before_eos",
++            kind="integer",
++            minimum=0,
++        )
++        maximum = self._generation_control(max_frames, "max_frames", kind="integer", minimum=1)
++        if seed is not None:
++            if isinstance(seed, bool) or not isinstance(seed, Integral) or int(seed) < 0:
++                raise RuntimeContractError("Phonon seed must be a non-negative integer or null")
++            seed = int(seed)
++        return {
++            "duration_delta": float(duration),
++            "temperature": float(temp),
++            "seed": seed,
++            "eos_threshold": float(threshold),
++            "frames_after_eos": int(tail),
++            "min_frames_before_eos": int(minimum),
++            "max_frames": int(maximum),
++        }
++
++    @staticmethod
++    def _token_ids(token_ids: Sequence[int]) -> np.ndarray:
++        try:
++            values = np.asarray(token_ids)
++        except (TypeError, ValueError) as exc:
++            raise RuntimeContractError(
++                "Phonon token_ids must be a one-dimensional integer sequence"
++            ) from exc
++        if values.ndim != 1 or values.size == 0 or values.dtype.kind not in {"i", "u"}:
++            raise RuntimeContractError(
++                "Phonon token_ids must be a non-empty one-dimensional integer sequence"
++            )
++        if np.any(values < 0):
++            raise RuntimeContractError("Phonon token_ids must be non-negative")
++        return values
++
++    @staticmethod
++    def _resolve_noise_shape(spec: TensorSpec, runtime: Mapping[str, Any]) -> tuple[int, ...]:
++        shape: list[int] = []
++        rank = len(spec.shape)
++        for axis, dimension in enumerate(spec.shape):
++            if isinstance(dimension, int):
++                shape.append(dimension)
++            elif axis == 0:
++                shape.append(1)
++            elif axis == rank - 1:
++                shape.append(int(runtime["latent_dim"]))
++            else:
++                shape.append(1)
++        if not shape or shape[0] != 1 or shape[-1] != runtime["latent_dim"]:
++            raise RuntimeContractError(
++                "Phonon flow noise shape does not match configured latent_dim"
++            )
++        if any(dimension <= 0 for dimension in shape):
++            raise RuntimeContractError("Phonon flow noise shape must be positive")
++        return tuple(shape)
++
++    def _main_step(
++        self,
++        session: Any,
++        embedding: np.ndarray,
++        cache: Mapping[str, np.ndarray],
++        *,
++        capture_eos: bool = True,
++    ) -> tuple[np.ndarray, float | None, dict[str, np.ndarray]]:
++        input_specs = {
++            spec.name: spec for spec in self._specs(session, "input_specs", "flow_lm_main")
++        }
++        output_specs = {
++            spec.name: spec for spec in self._specs(session, "output_specs", "flow_lm_main")
++        }
++        feeds = {
++            "inputs_embeds": self._fit_feature(
++                embedding, input_specs["inputs_embeds"], "flow_lm_main"
++            ),
++        }
++        expected_cache = {binding.input_name for binding in self._kv_bindings}
++        if set(cache) != expected_cache:
++            raise RuntimeContractError("Phonon flow-LM cache does not match graph inputs")
++        for binding in self._kv_bindings:
++            feeds[binding.input_name] = self._cast_feed(
++                cache[binding.input_name], binding.input_spec, "flow_lm_main"
++            )
++        outputs = self._run(session, feeds, "flow_lm_main")
++        hidden = self._fit_feature(outputs["hidden"], output_specs["hidden"], "flow_lm_main")
++        if hidden.shape[-1] != self._runtime["d_model"]:
++            raise RuntimeContractError("Phonon flow-LM hidden d_model does not match config")
++        eos_logit = self._scalar(outputs["eos_logit"], "eos_logit") if capture_eos else None
++        next_cache: dict[str, np.ndarray] = {}
++        for binding in self._kv_bindings:
++            value = self._cast_feed(
++                outputs[binding.output_name], binding.output_spec, "flow_lm_main"
++            )
++            next_cache[binding.input_name] = value
++        return hidden, eos_logit, next_cache
++
++    def _one_stream(
++        self,
++        token_ids: np.ndarray,
++        voice: PhononVoiceState,
++        controls: Mapping[str, Any],
++    ) -> Iterator[PhononStreamChunk]:
++        text_session = self._get_session("text_conditioner")
++        main_session = self._get_session("flow_lm_main")
++        flow_session = self._get_session("flow_lm_flow")
++        mimi_session = self._get_session("mimi_decoder")
++        text_inputs = {
++            spec.name: spec for spec in self._specs(text_session, "input_specs", "text_conditioner")
++        }
++        flow_inputs = {
++            spec.name: spec for spec in self._specs(flow_session, "input_specs", "flow_lm_flow")
++        }
++        mimi_inputs = {
++            spec.name: spec for spec in self._specs(mimi_session, "input_specs", "mimi_decoder")
++        }
++        main_inputs = {
++            spec.name: spec for spec in self._specs(main_session, "input_specs", "flow_lm_main")
++        }
++
++        ids_spec = text_inputs["input_ids"]
++        ids_dtype = self._dtype(ids_spec, "text_conditioner")
++        limits = np.iinfo(ids_dtype)
++        if int(token_ids.min()) < limits.min or int(token_ids.max()) > limits.max:
++            raise RuntimeContractError(f"Phonon token_ids exceed graph dtype {ids_dtype.name}")
++        ids = self._cast_feed(token_ids[None, :], ids_spec, "text_conditioner", category="integer")
++        duration = np.asarray([controls["duration_delta"]], dtype=np.float32)
++        duration = self._cast_feed(duration, text_inputs["duration_delta"], "text_conditioner")
++
++        cache: dict[str, np.ndarray] = {
++            binding.input_name: self._initial_cache_tensor(binding) for binding in self._kv_bindings
++        }
++        _, _, cache = self._main_step(main_session, voice.embeddings, cache, capture_eos=False)
++
++        conditioned = self._run(
++            text_session,
++            {"input_ids": ids, "duration_delta": duration},
++            "text_conditioner",
++        )
++        text_embeddings = self._normalize_embeddings(
++            conditioned["inputs_embeds"], "text embeddings", self._runtime["d_model"]
++        )
++        bos_embeddings = self._normalize_embeddings(
++            conditioned["bos_embeds"], "BOS embeddings", self._runtime["d_model"]
++        )
++        text_embeddings = self._fit_feature(
++            text_embeddings, main_inputs["inputs_embeds"], "flow_lm_main"
++        )
++        _, _, cache = self._main_step(main_session, text_embeddings, cache, capture_eos=False)
++        current = self._fit_feature(bos_embeddings, main_inputs["inputs_embeds"], "flow_lm_main")
++
++        offset_spec = self._offset_input_spec
++        offset_output_spec = self._offset_output_spec
++        if offset_spec is None or offset_output_spec is None:
++            raise RuntimeContractError("Phonon Mimi offset contract was not initialized")
++        offset = self._initial_dynamic_tensor(offset_spec, "mimi_decoder")
++        mimi_state = {
++            binding.input_name: np.zeros(binding.shape, dtype=binding.dtype)
++            for binding in self._mimi_bindings
++        }
++        rng = np.random.default_rng(controls["seed"])
++        noise_spec = flow_inputs["noise"]
++        noise_shape = self._resolve_noise_shape(noise_spec, self._runtime)
++        eos_frame: int | None = None
++
++        for frame_index in range(controls["max_frames"]):
++            hidden, eos_logit, cache = self._main_step(main_session, current, cache)
++            if eos_logit is None:
++                raise RuntimeContractError("Phonon generation step did not capture eos_logit")
++            hidden_feed = self._fit_feature(hidden, flow_inputs["hidden"], "flow_lm_flow")
++            if controls["temperature"] == 0:
++                noise = np.zeros(noise_shape, dtype=np.float32)
++            else:
++                scale = math.sqrt(controls["temperature"])
++                noise = np.asarray(rng.standard_normal(noise_shape) * scale, dtype=np.float32)
++            noise = self._cast_feed(noise, noise_spec, "flow_lm_flow")
++            flow_duration = self._cast_feed(duration, flow_inputs["duration_delta"], "flow_lm_flow")
++            flow_result = self._run(
++                flow_session,
++                {"hidden": hidden_feed, "noise": noise, "duration_delta": flow_duration},
++                "flow_lm_flow",
++            )
++            latent = self._fit_feature(flow_result["latent"], mimi_inputs["latent"], "mimi_decoder")
++            next_embedding = self._normalize_embeddings(
++                flow_result["next_embeds"], "next embedding", self._runtime["d_model"]
++            )
++            next_embedding = self._fit_feature(
++                next_embedding, main_inputs["inputs_embeds"], "flow_lm_main"
++            )
++
++            decoder_feeds: dict[str, np.ndarray] = {
++                "latent": latent,
++                "offset": self._cast_feed(offset, mimi_inputs["offset"], "mimi_decoder"),
++            }
++            decoder_feeds.update(
++                {
++                    binding.input_name: self._cast_feed(
++                        mimi_state[binding.input_name], binding.input_spec, "mimi_decoder"
++                    )
++                    for binding in self._mimi_bindings
++                }
++            )
++            decoded = self._run(mimi_session, decoder_feeds, "mimi_decoder")
++            audio = self._audio(
++                decoded["audio"],
++                frame_samples=self._runtime["frame_samples"],
++                component="mimi_decoder",
++            )
++            offset = self._cast_feed(decoded["next_offset"], offset_output_spec, "mimi_decoder")
++            for binding in self._mimi_bindings:
++                value = self._cast_feed(
++                    decoded[binding.output_name], binding.output_spec, "mimi_decoder"
++                )
++                mimi_state[binding.input_name] = value
++
++            detected = False
++            if (
++                frame_index >= controls["min_frames_before_eos"]
++                and eos_logit > controls["eos_threshold"]
++                and eos_frame is None
++            ):
++                eos_frame = frame_index
++                detected = True
++            yield PhononStreamChunk(
++                audio=audio,
++                sample_rate=self._runtime["sample_rate"],
++                frame_index=frame_index,
++                eos_detected=detected,
++                eos_logit=eos_logit,
++            )
++            current = next_embedding
++            if eos_frame is not None and frame_index >= eos_frame + controls["frames_after_eos"]:
++                break
++
++    def stream(
++        self,
++        token_ids: Sequence[int],
++        *,
++        voice: str | PhononVoiceState | None = None,
++        duration_delta: float | None = None,
++        temperature: float | None = None,
++        seed: int | None = None,
++        eos_threshold: float | None = None,
++        frames_after_eos: int | None = None,
++        min_frames_before_eos: int | None = None,
++        max_frames: int | None = None,
++    ) -> Iterator[PhononStreamChunk]:
++        """Stream decoded mono PCM for already-tokenized IDs."""
++        self._load_contract()
++        tokens = self._token_ids(token_ids)
++        controls = self._controls(
++            duration_delta=duration_delta,
++            temperature=temperature,
++            seed=seed,
++            eos_threshold=eos_threshold,
++            frames_after_eos=frames_after_eos,
++            min_frames_before_eos=min_frames_before_eos,
++            max_frames=max_frames,
++        )
++        selected_voice = self._resolve_voice(voice)
++        yield from self._one_stream(tokens, selected_voice, controls)
++
++    def infer(
++        self,
++        token_ids: Sequence[int],
++        *,
++        voice: str | PhononVoiceState | None = None,
++        duration_delta: float | None = None,
++        temperature: float | None = None,
++        seed: int | None = None,
++        eos_threshold: float | None = None,
++        frames_after_eos: int | None = None,
++        min_frames_before_eos: int | None = None,
++        max_frames: int | None = None,
++        **kwargs: Any,
++    ) -> InferenceResult:
++        """Collect :meth:`stream` PCM into one contiguous inference result."""
++        if kwargs:
++            unexpected = ", ".join(sorted(kwargs))
++            raise RuntimeContractError(f"Unexpected Phonon infer option(s): {unexpected}")
++        chunks = list(
++            self.stream(
++                token_ids,
++                voice=voice,
++                duration_delta=duration_delta,
++                temperature=temperature,
++                seed=seed,
++                eos_threshold=eos_threshold,
++                frames_after_eos=frames_after_eos,
++                min_frames_before_eos=min_frames_before_eos,
++                max_frames=max_frames,
++            )
++        )
++        audio = (
++            np.ascontiguousarray(
++                np.concatenate([chunk.audio for chunk in chunks]), dtype=np.float32
++            )
++            if chunks
++            else np.empty(0, dtype=np.float32)
++        )
++        controls = self._controls(
++            duration_delta=duration_delta,
++            temperature=temperature,
++            seed=seed,
++            eos_threshold=eos_threshold,
++            frames_after_eos=frames_after_eos,
++            min_frames_before_eos=min_frames_before_eos,
++            max_frames=max_frames,
++        )
++        eos_index = next((chunk.frame_index for chunk in chunks if chunk.eos_detected), None)
++        ended_by_eos = (
++            eos_index is not None
++            and bool(chunks)
++            and chunks[-1].frame_index >= eos_index + controls["frames_after_eos"]
++        )
++        metadata = {
++            "system": self.system,
++            "voice": voice.name
++            if isinstance(voice, PhononVoiceState)
++            else voice or self._default_voice,
++            "frames": len(chunks),
++            "duration_delta": controls["duration_delta"],
++            "temperature": controls["temperature"],
++            "seed": controls["seed"],
++            "eos_threshold": controls["eos_threshold"],
++            "frames_after_eos": controls["frames_after_eos"],
++            "min_frames_before_eos": controls["min_frames_before_eos"],
++            "max_frames": controls["max_frames"],
++            "eos_detected": eos_index is not None,
++            "terminated_by": "eos" if ended_by_eos else "max_frames",
++            "terminated_by_frame_cap": not ended_by_eos,
++            "quality": self.installation.selected_quality
++            or self.installation.metadata.get("selected_quality"),
++        }
++        return InferenceResult(
++            audio=audio, sample_rate=self._runtime["sample_rate"], metadata=metadata
++        )
++
++    def diagnostics(self) -> RuntimeDiagnostic:
++        """Report per-graph sessions and the fixed four-graph runtime layout."""
++        base = super().diagnostics()
++        return RuntimeDiagnostic(
++            system=base.system,
++            ref=base.ref,
++            layout="phonon-four-graph-streaming-v1",
++            sessions=base.sessions,
++            properties={
++                **base.properties,
++                "runtime_kind": _RUNTIME_KIND,
++                "graph_components": list(_GRAPH_COMPONENTS),
++                "created_graphs": sorted(self._sessions),
++                "selected_quality": self.installation.selected_quality,
++            },
++        )
++
++    def close(self) -> None:
++        """Close created graph sessions and allow validated sessions to be reopened."""
++        super().close()
++        self._validated_contracts.clear()
++        self._kv_bindings = ()
++        self._mimi_bindings = ()
++        self._offset_input_spec = None
++        self._offset_output_spec = None
+diff --git a/tests/test_phonon_catalog.py b/tests/test_phonon_catalog.py
+new file mode 100644
+index 0000000..926fdbd
+--- /dev/null
++++ b/tests/test_phonon_catalog.py
+@@ -0,0 +1,317 @@
++from __future__ import annotations
++
++import copy
++import json
++from pathlib import Path
++from typing import Any
++
++import pytest
++
++from onnxvoice.catalog import CatalogClient, _parse_phonon
++from onnxvoice.errors import AssetNotFoundError, CatalogError
++
++GRAPHS = {
++    "onnx/text_conditioner.onnx": "text_conditioner",
++    "onnx/flow_lm_main.onnx": "flow_lm_main",
++    "onnx/flow_lm_flow.onnx": "flow_lm_flow",
++    "onnx/mimi_decoder.onnx": "mimi_decoder",
++}
++
++
++def _license(model_key: str) -> dict[str, Any]:
++    if model_key == "phonon-31m-en":
++        return {
++            "spdx": "Apache-2.0",
++            "uri": "https://www.apache.org/licenses/LICENSE-2.0",
++            "commercial_use": True,
++            "restrictions": [],
++            "attribution_path": "ATTRIBUTION.md",
++        }
++    return {
++        "spdx": "CC-BY-NC-4.0",
++        "uri": "https://creativecommons.org/licenses/by-nc/4.0/",
++        "legalcode_uri": "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en",
++        "warranty_disclaimer_section": "Section 5",
++        "commercial_use": False,
++        "restrictions": ["non-commercial"],
++        "attribution_path": "ATTRIBUTION.md",
++    }
++
++
++def _bundle(
++    model_key: str = "phonon-31m-en",
++    precision: str = "fp32",
++    *,
++    tag: str | None = None,
++    revision: str | None = None,
++) -> dict[str, Any]:
++    tag = tag or f"{model_key}-onnx-{precision}-files-v1"
++    revision = revision or ("a" if precision == "fp32" else "b") * 40
++    paths = [
++        "config.json",
++        "tokenizer.json",
++        *GRAPHS,
++        "voices/easton.bin",
++        "ATTRIBUTION.md",
++        "export-provenance.json",
++        "third_party/model/README.md",
++    ]
++    if model_key == "phonon-40m-en":
++        paths.append("third_party/voices/README.md")
++    artifacts = [
++        {
++            "path": path,
++            "bytes": 100 + index,
++            "sha256": f"{index + 1:064x}",
++            "download_url": f"https://github.com/example/{tag}/download/{path.replace('/', '--')}",
++        }
++        for index, path in enumerate(paths)
++    ]
++    return {
++        "tag": tag,
++        "model_key": model_key,
++        "precision": precision,
++        "source_revision": revision,
++        "source_uri": f"https://huggingface.co/gradium/{model_key}/tree/{revision}",
++        "runtime": {
++            "kind": "phonon-streaming-onnx-v1",
++            "graphs": list(GRAPHS),
++            "sample_rate": 24000,
++            "frame_samples": 1920,
++            "frame_rate": 12.5,
++            "d_model": 512,
++            "latent_dim": 32,
++            "num_layers": 6,
++            "num_heads": 8,
++            "head_dim": 64,
++            "mimi_state": [{"name": "cache", "shape": [1, 2], "dtype": "float32"}],
++        },
++        "generation": {
++            "temperature_default": 0.8,
++            "eos_threshold_default": 4.0,
++            "duration_delta_default": 0.0,
++            "frames_after_eos": 5,
++            "min_frames_before_eos": 2,
++            "max_frames": 500,
++        },
++        "license": _license(model_key),
++        "voices": [
++            {
++                "name": "easton",
++                "display_name": "Easton",
++                "voice_id": "LMDIYE0Oa377Qh6Z",
++                "locale": "en-US",
++                "gender": "male",
++                "frames": 125,
++            }
++        ],
++        "default_voice": "easton",
++        "languages": ["en"],
++        "artifacts": artifacts,
++    }
++
++
++def _catalog(*bundles: dict[str, Any]) -> dict[str, Any]:
++    return {"schema_version": 2, "bundles": list(bundles)}
++
++
++def test_current_partial_catalog_lists_only_published_target_qualities():
++    items = _parse_phonon(
++        _catalog(_bundle("phonon-31m-en"), _bundle("phonon-40m-en", revision="c" * 40))
++    )
++    assert [(item.id, item.system, item.kind) for item in items] == [
++        ("phonon-31m-en", "phonon", "bundle"),
++        ("phonon-40m-en", "phonon", "bundle"),
++    ]
++    assert [item.metadata["quality_profiles"] for item in items] == [["fp32"], ["fp32"]]
++    assert items[0].metadata["commercial_use"] is True
++    assert items[1].metadata["commercial_use"] is False
++    assert items[1].metadata["license"]["spdx"] == "CC-BY-NC-4.0"
++
++
++def test_new_precision_aggregates_on_existing_target_and_resolves_only_its_assets(tmp_path: Path):
++    fp32 = _bundle("phonon-31m-en", "fp32")
++    q4 = _bundle("phonon-31m-en", "q4", tag="phonon-31m-en-onnx-q4-files-v1", revision="b" * 40)
++    fp16 = _bundle(
++        "phonon-31m-en", "fp16", tag="phonon-31m-en-onnx-fp16-files-v1", revision="c" * 40
++    )
++    (item,) = _parse_phonon(_catalog(fp32, q4, fp16))
++    assert item.id == "phonon-31m-en"
++    assert item.metadata["quality_profiles"] == ["fp16", "fp32", "q4"]
++
++    catalog_path = tmp_path / "phonon.json"
++    catalog_path.write_text(json.dumps(_catalog(fp32, q4, fp16)), encoding="utf-8")
++    client = CatalogClient(cache_dir=tmp_path / "cache", sources={"phonon": str(catalog_path)})
++    selected = client.resolve("phonon:phonon-31m-en", quality="q4")
++    default = client.resolve("phonon:phonon-31m-en")
++    assert default.metadata["selected_quality"] == "fp32"
++    assert item.metadata["source_revision"] == "a" * 40
++    assert selected.metadata["selected_quality"] == "q4"
++    assert selected.metadata["release_tag"] == "phonon-31m-en-onnx-q4-files-v1"
++    assert {artifact.quality for artifact in selected.artifacts} == {"q4"}
++    assert (
++        selected.require_artifact("model", component="flow_lm_main").filename
++        == "onnx/flow_lm_main.onnx"
++    )
++    with pytest.raises(AssetNotFoundError, match="available: fp16, fp32, q4"):
++        client.resolve("phonon:phonon-31m-en", quality="q8")
++
++
++def test_artifact_roles_paths_voice_details_and_default_voice_are_normalized():
++    (item,) = _parse_phonon(_catalog(_bundle()))
++    by_path = {artifact.filename: artifact for artifact in item.artifacts}
++    assert by_path["config.json"].role == "config"
++    assert by_path["tokenizer.json"].role == "tokenizer"
++    assert by_path["onnx/text_conditioner.onnx"].role == "model"
++    assert by_path["onnx/text_conditioner.onnx"].component == "text_conditioner"
++    assert by_path["voices/easton.bin"].role == "voice_prompt"
++    assert by_path["voices/easton.bin"].component == "easton"
++    assert by_path["ATTRIBUTION.md"].role == "attribution"
++    assert by_path["export-provenance.json"].role == "provenance"
++    assert by_path["third_party/model/README.md"].role == "notice"
++    assert item.voices == ("easton",)
++    assert item.default_voice == "easton"
++    assert item.metadata["voice_details"] == [
++        {
++            "id": "easton",
++            "name": "Easton",
++            "display_name": "Easton",
++            "language": "en",
++            "locale": "en-US",
++            "language_label": "en-US",
++            "gender": "male",
++            "voice_id": "LMDIYE0Oa377Qh6Z",
++            "upstream_voice_id": "LMDIYE0Oa377Qh6Z",
++            "frames": 125,
++        }
++    ]
++
++
++def test_descriptive_voice_locale_is_preserved_without_inventing_language():
++    bundle = _bundle()
++    bundle["voices"].append(
++        {
++            "name": "character",
++            "display_name": "Character",
++            "locale": "storybook voice",
++            "gender": "other",
++        }
++    )
++    bundle["artifacts"].append(
++        {
++            "path": "voices/character.bin",
++            "bytes": 20,
++            "sha256": "f" * 64,
++            "download_url": "https://github.com/example/character.bin",
++        }
++    )
++    (item,) = _parse_phonon(_catalog(bundle))
++    detail = next(value for value in item.metadata["voice_details"] if value["id"] == "character")
++    assert detail["source_locale"] == "storybook voice"
++    assert detail["locale"] == ""
++    assert detail["language"] == ""
++    assert detail["gender"] == "unknown"
++
++
++def test_future_catalog_fields_are_ignored_and_partial_availability_is_valid():
++    bundle = _bundle()
++    bundle["future_runtime_hint"] = {"unrecognized": True}
++    data = _catalog(bundle)
++    data["future_schema_note"] = "ignored"
++    items = _parse_phonon(data)
++    assert len(items) == 1
++    assert items[0].metadata["quality_profiles"] == ["fp32"]
++
++
++def test_missing_unpublished_qualities_and_models_do_not_fail_discovery():
++    items = _parse_phonon(_catalog(_bundle("phonon-31m-en")))
++    assert len(items) == 1
++    assert items[0].metadata["quality_profiles"] == ["fp32"]
++
++
++@pytest.mark.parametrize(
++    ("change", "message"),
++    [
++        (lambda row: row.update(precision="q16"), "unsupported precision"),
++        (lambda row: row.update(source_revision="main"), "immutable 40-character SHA"),
++        (
++            lambda row: row.update(
++                source_uri="https://huggingface.co/gradium/phonon-31m-en/tree/main"
++            ),
++            "source_uri must pin source_revision",
++        ),
++        (lambda row: row["runtime"].update(kind="pocket"), "unsupported runtime.kind"),
++        (
++            lambda row: row["runtime"].update(sample_rate=0),
++            "sample_rate must be a positive integer",
++        ),
++        (lambda row: row["generation"].pop("frames_after_eos"), "must be explicit"),
++        (lambda row: row["license"].pop("spdx"), "unsupported license.spdx"),
++        (lambda row: row.update(default_voice="missing"), "default_voice must name"),
++        (lambda row: row["artifacts"].pop(2), "missing required artifacts"),
++        (lambda row: row["artifacts"][0].update(sha256="bad"), "sha256 must be 64"),
++        (lambda row: row["artifacts"][0].update(bytes=0), "bytes must be a positive integer"),
++        (
++            lambda row: row["artifacts"][0].update(path="../escape"),
++            "Unsafe phonon-31m-en/fp32 artifact path",
++        ),
++        (
++            lambda row: row["artifacts"][0].update(download_url="http://example.com/file"),
++            "HTTPS URL",
++        ),
++        (
++            lambda row: row["artifacts"].append(copy.deepcopy(row["artifacts"][0])),
++            "duplicate artifact path",
++        ),
++    ],
++)
++def test_catalog_rejects_invalid_runtime_contract(change, message):
++    bundle = _bundle()
++    change(bundle)
++    with pytest.raises(CatalogError, match=message):
++        _parse_phonon(_catalog(bundle))
++
++
++def test_duplicate_model_precision_pair_is_rejected():
++    with pytest.raises(CatalogError, match="duplicate published Phonon variant"):
++        _parse_phonon(_catalog(_bundle(), _bundle()))
++
++
++def test_duplicate_quality_rows_with_inconsistent_voice_or_license_metadata_fail():
++    q4 = _bundle("phonon-31m-en", "q4", tag="phonon-31m-en-q4", revision="b" * 40)
++    q4["voices"][0]["display_name"] = "Different"
++    with pytest.raises(CatalogError, match="metadata is inconsistent"):
++        _parse_phonon(_catalog(_bundle(), q4))
++
++
++def test_catalog_schema_version_and_bundle_shape_are_checked():
++    with pytest.raises(CatalogError, match="schema_version must be 2"):
++        _parse_phonon({"schema_version": 1, "bundles": []})
++    with pytest.raises(CatalogError, match="bundles must be a sequence"):
++        _parse_phonon({"schema_version": 2, "bundles": {}})
++
++
++def test_noncommercial_license_provenance_and_required_upstream_notices_are_preserved():
++    bundle = _bundle("phonon-40m-en")
++    (item,) = _parse_phonon(_catalog(bundle))
++    license_info = item.metadata["license"]
++    assert license_info["spdx"] == "CC-BY-NC-4.0"
++    assert license_info["commercial_use"] is False
++    assert license_info["restrictions"] == ["non-commercial"]
++    assert license_info["legalcode_uri"].endswith("legalcode.en")
++    assert license_info["warranty_disclaimer_section"] == "Section 5"
++
++    bundle["artifacts"] = [
++        artifact
++        for artifact in bundle["artifacts"]
++        if artifact["path"] != "third_party/voices/README.md"
++    ]
++    with pytest.raises(CatalogError, match="third_party/voices/README.md"):
++        _parse_phonon(_catalog(bundle))
++
++
++def test_noncommercial_license_cannot_be_mislabeled_as_commercial():
++    bundle = _bundle("phonon-40m-en")
++    bundle["license"]["commercial_use"] = True
++    with pytest.raises(CatalogError, match="commercial-use status conflicts"):
++        _parse_phonon(_catalog(bundle))
+diff --git a/tests/test_phonon_integration.py b/tests/test_phonon_integration.py
+new file mode 100644
+index 0000000..3a203da
+--- /dev/null
++++ b/tests/test_phonon_integration.py
+@@ -0,0 +1,301 @@
++from __future__ import annotations
++
++import json
++from collections.abc import Sequence
++from dataclasses import replace
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import pytest
++
++import onnxvoice
++from onnxvoice import cli
++from onnxvoice.engine_options import contract_coverage, resolve_engine_options
++from onnxvoice.inventory import query_inventory
++from onnxvoice.manager import OnnxVoice
++from onnxvoice.systems import get_adapter, registered_systems
++from onnxvoice.systems.phonon import PhononAdapter, PhononStreamChunk, PhononVoiceState
++from onnxvoice.types import CatalogItem
++
++_GRAPH_PATHS = {
++    "text_conditioner": "onnx/text_conditioner.onnx",
++    "flow_lm_main": "onnx/flow_lm_main.onnx",
++    "flow_lm_flow": "onnx/flow_lm_flow.onnx",
++    "mimi_decoder": "onnx/mimi_decoder.onnx",
++}
++_RUNTIME = {
++    "kind": "phonon-streaming-onnx-v1",
++    "graphs": list(_GRAPH_PATHS.values()),
++    "sample_rate": 24000,
++    "frame_samples": 1920,
++    "frame_rate": 12.5,
++    "d_model": 4,
++    "latent_dim": 3,
++    "num_layers": 2,
++    "num_heads": 2,
++    "head_dim": 2,
++    "mimi_state": [{"name": "cache", "shape": [1, 2], "dtype": "float32"}],
++}
++_GENERATION = {
++    "duration_delta_default": 0.0,
++    "temperature_default": 0.8,
++    "eos_threshold_default": 4.0,
++    "frames_after_eos": 5,
++    "min_frames_before_eos": 2,
++    "max_frames": 500,
++}
++_APACHE = {
++    "spdx": "Apache-2.0",
++    "uri": "https://www.apache.org/licenses/LICENSE-2.0",
++    "commercial_use": True,
++    "restrictions": [],
++    "attribution_path": "ATTRIBUTION.md",
++}
++_CC_BY_NC = {
++    "spdx": "CC-BY-NC-4.0",
++    "uri": "https://creativecommons.org/licenses/by-nc/4.0/",
++    "legalcode_uri": "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en",
++    "warranty_disclaimer_section": "Section 5",
++    "commercial_use": False,
++    "restrictions": ["non-commercial"],
++    "attribution_path": "ATTRIBUTION.md",
++}
++
++
++class _Catalog:
++    def __init__(self, items: Sequence[CatalogItem]) -> None:
++        self.items = list(items)
++
++    def list(self, system: str, refresh: bool = False) -> Sequence[CatalogItem]:
++        del refresh
++        return [item for item in self.items if item.system == system]
++
++    def resolve(
++        self,
++        ref: str,
++        *,
++        refresh: bool = False,
++        quality: str | None = None,
++        distribution: str | None = None,
++    ) -> CatalogItem:
++        del refresh, distribution
++        system, target = ref.split(":", 1)
++        item = next(row for row in self.list(system) if row.id == target)
++        profiles = item.metadata["profiles"]
++        selected = quality or "fp32"
++        profile = profiles[selected]
++        return replace(
++            item,
++            metadata={
++                **item.metadata,
++                **profile,
++                "selected_quality": selected,
++                "quality": selected,
++            },
++        )
++
++
++class _Manager:
++    def __init__(self, items: Sequence[CatalogItem]) -> None:
++        self.catalog = _Catalog(items)
++
++    def installed(self, system: str | None = None) -> list[Any]:
++        del system
++        return []
++
++
++def _catalog_item() -> CatalogItem:
++    profile = {"generation": dict(_GENERATION), "license": dict(_APACHE)}
++    metadata = {
++        "runtime": dict(_RUNTIME),
++        "generation": dict(_GENERATION),
++        "profiles": {"fp32": profile},
++        "quality_profiles": ["fp32"],
++        "license": dict(_APACHE),
++        "license_spdx": "Apache-2.0",
++        "commercial_use": True,
++        "restrictions": [],
++        "languages": ["en"],
++        "language_codes": ["en"],
++        "voices": ["easton"],
++        "voice_details": [{"id": "easton", "name": "Easton", "locale": "en-US", "language": "en"}],
++        "default_voice": "easton",
++        "voice_cloning": False,
++        "streaming": True,
++        "named_voices": True,
++    }
++    return CatalogItem(
++        system="phonon",
++        id="phonon-31m-en",
++        kind="bundle",
++        artifacts=(),
++        sample_rate=24000,
++        voices=("easton",),
++        default_voice="easton",
++        metadata=metadata,
++    )
++
++
++def test_adapter_and_public_types_are_registered_and_exported() -> None:
++    assert get_adapter("phonon") is PhononAdapter
++    assert "phonon" in registered_systems()
++    assert contract_coverage()["missing"] == []
++    for name, value in (
++        ("PhononAdapter", PhononAdapter),
++        ("PhononVoiceState", PhononVoiceState),
++        ("PhononStreamChunk", PhononStreamChunk),
++    ):
++        assert name in onnxvoice.__all__
++        assert getattr(onnxvoice, name) is value
++        assert getattr(onnxvoice.systems, name) is value
++
++
++def test_generic_local_open_reads_config_and_prompts_without_store_or_network(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    root = tmp_path / "local-phonon"
++    config_path = root / "config.json"
++    config_path.parent.mkdir(parents=True)
++    config_path.write_text(
++        json.dumps(
++            {
++                "runtime": _RUNTIME,
++                "generation": _GENERATION,
++                "voices": [{"name": "easton", "locale": "en-US", "frames": 2}],
++                "default_voice": "easton",
++            }
++        ),
++        encoding="utf-8",
++    )
++    artifacts: dict[str, Path] = {"config": config_path}
++    for component, relative in _GRAPH_PATHS.items():
++        graph = root / relative
++        graph.parent.mkdir(parents=True, exist_ok=True)
++        graph.write_bytes(b"fake-onnx")
++        artifacts[f"model:{component}"] = graph
++    prompt = root / "voices" / "easton.bin"
++    prompt.parent.mkdir(parents=True)
++    np.arange(8, dtype="<f4").tofile(prompt)
++    artifacts["voice_prompt:easton"] = prompt
++    cache = tmp_path / "must-not-exist"
++    monkeypatch.setenv("ONNXVOICE_CACHE_DIR", str(cache))
++
++    adapter = OnnxVoice.open_local(
++        system="phonon",
++        artifacts=artifacts,
++        metadata={"license": _CC_BY_NC},
++    )
++    assert isinstance(adapter, PhononAdapter)
++    assert adapter.installation.metadata["managed"] is False
++    assert adapter.installation.metadata["license"] == _CC_BY_NC
++    assert adapter.installation.path == root / "onnx"
++    assert (
++        adapter.installation.artifact("model", component="flow_lm_flow").path
++        == root / _GRAPH_PATHS["flow_lm_flow"]
++    )
++    voice = adapter.prepare_voice()
++    assert voice.name == "easton"
++    assert voice.embeddings.shape == (1, 2, 4)
++    assert adapter.diagnostics().layout == "phonon-four-graph-streaming-v1"
++    assert adapter.diagnostics().sessions == ()
++    assert not cache.exists()
++
++    class LocalManager:
++        def __init__(self, installation: Any) -> None:
++            self.installation = installation
++            self.catalog = _Catalog([])
++
++        def installed(self, system: str | None = None) -> list[Any]:
++            return [self.installation] if system in {None, "phonon"} else []
++
++    local_options = resolve_engine_options(
++        LocalManager(adapter.installation), "phonon", target=adapter.installation.id
++    )
++    assert local_options["sample_rate"] == 24000
++    assert local_options["license"] == _CC_BY_NC
++    local_parameters = {parameter["name"]: parameter for parameter in local_options["parameters"]}
++    assert local_parameters["temperature"]["default"] == 0.8
++    assert local_parameters["voice"]["choices"] == ["easton"]
++
++
++def test_options_are_target_sensitive_and_preserve_capability_and_license_facts() -> None:
++    manager = _Manager([_catalog_item()])
++    data = resolve_engine_options(manager, "phonon", target="phonon-31m-en")
++    assert data["quality"] == "fp32"
++    assert data["sample_rate"] == 24000
++    assert data["layout"] == "phonon-four-graph-streaming-v1"
++    assert data["capabilities"]["voice_cloning"]["supported"] is False
++    assert data["capabilities"]["streaming"]["supported"] is True
++    assert data["capabilities"]["named_voices"]["supported"] is True
++    assert data["license"] == _APACHE
++    parameters = {parameter["name"]: parameter for parameter in data["parameters"]}
++    assert parameters["temperature"]["default"] == 0.8
++    assert parameters["temperature"]["source"] == "catalog_metadata"
++    assert parameters["max_frames"]["default"] == 500
++    assert parameters["max_frames"]["required"] is False
++    assert parameters["voice"]["choices"] == ["easton"]
++    assert parameters["voice"]["default"] == "easton"
++    limits = {limit["name"]: limit for limit in data["limits"]}
++    assert limits["max_frames"]["value"] == 500
++    assert limits["max_input_tokens"]["status"] == "not_declared"
++
++    unavailable_default = _catalog_item()
++    updated_generation = {**_GENERATION, "duration_delta_default": None}
++    unavailable_metadata = {
++        **unavailable_default.metadata,
++        "generation": updated_generation,
++        "profiles": {"fp32": {"generation": updated_generation, "license": _APACHE}},
++    }
++    unavailable = replace(unavailable_default, metadata=unavailable_metadata)
++    required = resolve_engine_options(_Manager([unavailable]), "phonon", target="phonon-31m-en")
++    duration = next(
++        parameter for parameter in required["parameters"] if parameter["name"] == "duration_delta"
++    )
++    assert duration["required"] is True
++    assert duration["default_status"] == "unknown"
++
++
++def test_inventory_and_cli_discover_only_catalog_targets_and_show_license(
++    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
++) -> None:
++    item = _catalog_item()
++    records = query_inventory([], [item])
++    assert [(record.system, record.id) for record in records] == [("phonon", "phonon-31m-en")]
++    assert records[0].language_codes == ("en",)
++    catalog_item = records[0].catalog_item
++    assert catalog_item is not None
++    assert catalog_item.metadata["license"]["spdx"] == "Apache-2.0"
++
++    fake_manager = _Manager([item])
++
++    def manager_factory(args: Any) -> _Manager:
++        del args
++        return fake_manager
++
++    monkeypatch.setattr(cli, "_manager", manager_factory)
++    result = cli.main(["engines", "list", "--engine", "phonon", "--format", "json"])
++    assert result == 0
++    listing = json.loads(capsys.readouterr().out)
++    assert [(row["target"], row["quality_choices"]) for row in listing["rows"]] == [
++        ("phonon-31m-en", ["fp32"])
++    ]
++    assert listing["rows"][0]["license_spdx"] == "Apache-2.0"
++    assert listing["rows"][0]["commercial_use"] is True
++
++    result = cli.main(
++        [
++            "engines",
++            "options",
++            "--engine",
++            "phonon",
++            "--target",
++            "phonon-31m-en",
++            "--format",
++            "json",
++        ]
++    )
++    assert result == 0
++    options = json.loads(capsys.readouterr().out)
++    assert options["capabilities"]["voice_cloning"]["supported"] is False
++    assert options["license"]["commercial_use"] is True
+diff --git a/tests/test_phonon_real_bundle.py b/tests/test_phonon_real_bundle.py
+new file mode 100644
+index 0000000..ccc1209
+--- /dev/null
++++ b/tests/test_phonon_real_bundle.py
+@@ -0,0 +1,117 @@
++from __future__ import annotations
++
++import importlib.util
++import os
++from collections.abc import Mapping
++from pathlib import Path
++from typing import NoReturn
++
++import numpy as np
++import pytest
++
++from onnxvoice import OnnxVoice
++from onnxvoice.types import CatalogItem
++
++pytestmark = [pytest.mark.integration, pytest.mark.resource_heavy]
++
++_RUN_ACCEPTANCE = os.environ.get("ONNXVOICE_PHONON_ACCEPTANCE") == "1"
++_REQUIRE_ACCEPTANCE = os.environ.get("ONNXVOICE_REQUIRE_PHONON_ACCEPTANCE") == "1"
++
++
++def _unavailable(message: str, *, required: bool = False) -> NoReturn:
++    if required and _REQUIRE_ACCEPTANCE:
++        pytest.fail(message)
++    pytest.skip(message)
++
++
++@pytest.mark.parametrize(
++    ("model_key", "expected_license", "required"),
++    [
++        ("phonon-31m-en", "Apache-2.0", True),
++        ("phonon-40m-en", "CC-BY-NC-4.0", False),
++    ],
++)
++def test_phonon_real_bundle_managed_install_inference_and_offline_reopen(
++    tmp_path: Path, model_key: str, expected_license: str, required: bool
++) -> None:
++    """Exercise only published fp32 targets when explicitly opted in."""
++    if not _RUN_ACCEPTANCE:
++        pytest.skip("set ONNXVOICE_PHONON_ACCEPTANCE=1 to download and test real Phonon bundles")
++    if importlib.util.find_spec("onnxruntime") is None:
++        _unavailable(
++            "onnxruntime is required for the Phonon real-bundle acceptance check",
++            required=required,
++        )
++
++    cache_dir = tmp_path / model_key
++    manager = OnnxVoice(cache_dir=cache_dir)
++    try:
++        items = manager.list("phonon")
++    except Exception as exc:
++        _unavailable(f"could not load the published Phonon catalog: {exc}", required=required)
++
++    item = next(
++        (
++            candidate
++            for candidate in items
++            if isinstance(candidate, CatalogItem) and candidate.id == model_key
++        ),
++        None,
++    )
++    if item is None:
++        _unavailable(
++            f"{model_key} is not currently published in the Phonon catalog", required=required
++        )
++    quality_profiles = item.metadata.get("quality_profiles", ())
++    if "fp32" not in quality_profiles:
++        _unavailable(f"{model_key} has no published fp32 bundle", required=required)
++
++    installation = manager.install(f"phonon:{model_key}", quality="fp32")
++    license_info = installation.metadata.get("license")
++    assert isinstance(license_info, Mapping)
++    assert license_info["spdx"] == expected_license
++    assert installation.require_artifact("config").path.is_file()
++    assert installation.require_artifact("attribution").path.is_file()
++    assert {
++        installation.require_artifact("model", component=component).path.name
++        for component in ("text_conditioner", "flow_lm_main", "flow_lm_flow", "mimi_decoder")
++    } == {
++        "text_conditioner.onnx",
++        "flow_lm_main.onnx",
++        "flow_lm_flow.onnx",
++        "mimi_decoder.onnx",
++    }
++    if expected_license == "CC-BY-NC-4.0":
++        assert license_info["commercial_use"] is False
++        assert installation.require_artifact("notice", component="model").path.is_file()
++        assert installation.require_artifact("notice", component="voices").path.is_file()
++
++    token_ids = (1, 2, 3, 4)
++    generation = {
++        "voice": installation.default_voice,
++        "duration_delta": 0.0,
++        "temperature": 0.8,
++        "seed": 17,
++        "eos_threshold": 4.0,
++        "frames_after_eos": 1,
++        "min_frames_before_eos": 2,
++        "max_frames": 3,
++    }
++    with manager.open(installation, providers="cpu") as runtime:
++        chunks = list(runtime.stream(token_ids, **generation))
++        assert chunks
++        assert len(chunks) <= generation["max_frames"]
++        assert all(chunk.audio.dtype == np.float32 for chunk in chunks)
++        assert all(chunk.audio.ndim == 1 and np.isfinite(chunk.audio).all() for chunk in chunks)
++        assert all(chunk.sample_rate == installation.sample_rate for chunk in chunks)
++
++    offline_manager = OnnxVoice(cache_dir=cache_dir, offline=True)
++    with offline_manager.open(f"phonon:{model_key}", quality="fp32", providers="cpu") as runtime:
++        result = runtime.infer(token_ids, **generation)
++        assert result.sample_rate == installation.sample_rate
++        assert result.audio.dtype == np.float32
++        assert result.audio.ndim == 1 and result.audio.size > 0
++        assert np.isfinite(result.audio).all()
++        frame_samples = installation.metadata["runtime"]["frame_samples"]
++        assert result.audio.size <= frame_samples * generation["max_frames"]
++        assert result.metadata["quality"] == "fp32"
+diff --git a/tests/test_phonon_runtime.py b/tests/test_phonon_runtime.py
+new file mode 100644
+index 0000000..0957579
+--- /dev/null
++++ b/tests/test_phonon_runtime.py
+@@ -0,0 +1,542 @@
++from __future__ import annotations
++
++import json
++from collections.abc import Mapping
++from pathlib import Path
++from typing import Any, cast
++
++import numpy as np
++import pytest
++
++from onnxvoice.errors import RuntimeContractError
++from onnxvoice.systems.phonon import PhononAdapter, PhononStreamChunk, PhononVoiceState
++from onnxvoice.types import Installation, InstalledArtifact, SessionDiagnostic, TensorSpec
++
++_GRAPH_FILES = {
++    "text_conditioner": "onnx/text_conditioner.onnx",
++    "flow_lm_main": "onnx/flow_lm_main.onnx",
++    "flow_lm_flow": "onnx/flow_lm_flow.onnx",
++    "mimi_decoder": "onnx/mimi_decoder.onnx",
++}
++_RUNTIME = {
++    "kind": "phonon-streaming-onnx-v1",
++    "graphs": list(_GRAPH_FILES.values()),
++    "sample_rate": 8,
++    "frame_samples": 4,
++    "frame_rate": 2.0,
++    "d_model": 4,
++    "latent_dim": 3,
++    "num_layers": 2,
++    "num_heads": 2,
++    "head_dim": 2,
++    "mimi_state": [{"name": "cache", "shape": [1, 2], "dtype": "float32"}],
++}
++_GENERATION = {
++    "duration_delta_default": 0.25,
++    "temperature_default": 0.5,
++    "eos_threshold_default": 1.0,
++    "frames_after_eos": 2,
++    "min_frames_before_eos": 1,
++    "max_frames": 5,
++}
++
++
++def _spec(name: str, ort_type: str, *shape: Any) -> TensorSpec:
++    return TensorSpec(name, ort_type, tuple(shape))
++
++
++class _FakeSession:
++    def __init__(
++        self,
++        component: str,
++        input_specs: tuple[TensorSpec, ...],
++        output_specs: tuple[TensorSpec, ...],
++        run: Any,
++        owner: _FakeGraphs,
++        model_path: Path,
++        kwargs: Mapping[str, Any],
++    ) -> None:
++        self.component = component
++        self.input_specs = input_specs
++        self.output_specs = output_specs
++        self.input_names = tuple(spec.name for spec in input_specs)
++        self.output_names = tuple(spec.name for spec in output_specs)
++        self._run = run
++        self.owner = owner
++        self.model_path = model_path
++        self.kwargs = dict(kwargs)
++        self.calls: list[dict[str, np.ndarray]] = []
++        self.closed = False
++
++    def run(self, feeds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
++        captured = {name: np.array(value, copy=True) for name, value in feeds.items()}
++        self.calls.append(captured)
++        return self._run(feeds)
++
++    def close(self) -> None:
++        self.closed = True
++
++    def diagnostics(self) -> SessionDiagnostic:
++        return SessionDiagnostic(
++            component=self.component,
++            model_path=self.model_path,
++            providers_requested=tuple(self.kwargs.get("providers") or ()),
++            providers_active=(),
++            inputs=self.input_names,
++            outputs=self.output_names,
++        )
++
++
++class _FakeGraphs:
++    def __init__(
++        self,
++        *,
++        eos_values: tuple[float, ...] = (-1.0, 5.0, 5.0, 5.0, 5.0),
++        invalid_audio: bool = False,
++        invalid_main_signature: bool = False,
++    ) -> None:
++        self.eos_values = eos_values
++        self.invalid_audio = invalid_audio
++        self.invalid_main_signature = invalid_main_signature
++        self.sessions: dict[str, _FakeSession] = {}
++        self.events: list[tuple[str, str]] = []
++        self.main_stage = ""
++        self.generation_step = 0
++        self.main_calls: list[dict[str, np.ndarray]] = []
++        self.flow_calls: list[dict[str, np.ndarray]] = []
++        self.mimi_calls: list[dict[str, np.ndarray]] = []
++
++    def create(self, model_path: Path, *, component: str, **kwargs: Any) -> _FakeSession:
++        if component == "text_conditioner":
++            inputs = (
++                _spec("input_ids", "tensor(int64)", 1, "sequence"),
++                _spec("duration_delta", "tensor(float)", 1),
++            )
++            outputs = (
++                _spec("inputs_embeds", "tensor(float)", 1, "sequence", 4),
++                _spec("bos_embeds", "tensor(float)", 1, 1, 4),
++            )
++
++            def run(feeds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
++                self.events.append((component, "text"))
++                ids = feeds["input_ids"][0].astype(np.float32)
++                embeddings = np.repeat(ids[None, :, None], 4, axis=2)
++                return {
++                    "inputs_embeds": embeddings,
++                    "bos_embeds": np.full((1, 1, 4), 9.0, dtype=np.float32),
++                }
++
++        elif component == "flow_lm_main":
++            kv_inputs = tuple(
++                _spec(f"past_key_values.{layer}.{kind}", "tensor(float)", 1, 2, "past", 2)
++                for layer in range(2)
++                for kind in ("key", "value")
++            )
++            inputs = (_spec("inputs_embeds", "tensor(float)", 1, "sequence", 4), *kv_inputs)
++            kv_outputs = tuple(
++                _spec(f"present.{layer}.{kind}", "tensor(float)", 1, 2, "total", 2)
++                for layer in range(2)
++                for kind in ("key", "value")
++            )
++            outputs = (
++                _spec("hidden", "tensor(float)", 1, "sequence", 4),
++                _spec("eos_logit", "tensor(float)", 1, 1),
++                *kv_outputs,
++            )
++            if self.invalid_main_signature:
++                outputs = tuple(spec for spec in outputs if spec.name != "eos_logit")
++
++            def run(feeds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
++                embeds = feeds["inputs_embeds"]
++                past = feeds["past_key_values.0.key"]
++                past_length = past.shape[-2]
++                if past_length == 0:
++                    self.main_stage = "voice"
++                    self.generation_step = 0
++                elif self.main_stage == "voice":
++                    self.main_stage = "text"
++                else:
++                    self.main_stage = "generation"
++                self.events.append((component, self.main_stage))
++                self.main_calls.append(
++                    {name: np.array(value, copy=True) for name, value in feeds.items()}
++                )
++                if self.main_stage == "generation":
++                    index = min(self.generation_step, len(self.eos_values) - 1)
++                    eos = self.eos_values[index]
++                    self.generation_step += 1
++                else:
++                    eos = 0.0
++                result = {
++                    "hidden": embeds[:, -1:, :].astype(np.float32, copy=True),
++                    "eos_logit": np.asarray([[eos]], dtype=np.float32),
++                }
++                extension = np.full(
++                    (1, 2, embeds.shape[1], 2), len(self.main_calls), dtype=np.float32
++                )
++                for layer in range(2):
++                    for kind in ("key", "value"):
++                        name = f"past_key_values.{layer}.{kind}"
++                        result[f"present.{layer}.{kind}"] = np.concatenate(
++                            (feeds[name], extension), axis=2
++                        )
++                return result
++
++        elif component == "flow_lm_flow":
++            inputs = (
++                _spec("hidden", "tensor(float)", 1, 1, 4),
++                _spec("noise", "tensor(float)", 1, 1, 3),
++                _spec("duration_delta", "tensor(float)", 1),
++            )
++            outputs = (
++                _spec("latent", "tensor(float)", 1, 1, 3),
++                _spec("next_embeds", "tensor(float)", 1, 1, 4),
++            )
++
++            def run(feeds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
++                self.events.append((component, "flow"))
++                self.flow_calls.append(
++                    {name: np.array(value, copy=True) for name, value in feeds.items()}
++                )
++                delta = np.float32(feeds["noise"].mean())
++                return {
++                    "latent": feeds["noise"].copy(),
++                    "next_embeds": feeds["hidden"] + delta,
++                }
++
++        elif component == "mimi_decoder":
++            inputs = (
++                _spec("latent", "tensor(float)", 1, 1, 3),
++                _spec("offset", "tensor(int64)", 1),
++                _spec("state.cache", "tensor(float)", 1, 2),
++            )
++            outputs = (
++                _spec("audio", "tensor(float)", 1, 4),
++                _spec("next_offset", "tensor(int64)", 1),
++                _spec("next_state.cache", "tensor(float)", 1, 2),
++            )
++
++            def run(feeds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
++                self.events.append((component, "mimi"))
++                self.mimi_calls.append(
++                    {name: np.array(value, copy=True) for name, value in feeds.items()}
++                )
++                if self.invalid_audio:
++                    audio = np.full((1, 4), np.nan, dtype=np.float32)
++                else:
++                    audio = np.full((1, 4), float(feeds["offset"][0] + 1), dtype=np.float32)
++                return {
++                    "audio": audio,
++                    "next_offset": feeds["offset"] + 1,
++                    "next_state.cache": feeds["state.cache"] + 1,
++                }
++
++        else:
++            raise AssertionError(f"unexpected graph component {component!r}")
++
++        session = _FakeSession(
++            component, tuple(inputs), tuple(outputs), run, self, model_path, kwargs
++        )
++        self.sessions[component] = session
++        return session
++
++
++def _make_adapter(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    *,
++    fake: _FakeGraphs | None = None,
++    default_voice: str | None = "easton",
++    voice_data: np.ndarray | None = None,
++    generation_overrides: Mapping[str, Any] | None = None,
++    runtime_overrides: Mapping[str, Any] | None = None,
++) -> tuple[PhononAdapter, _FakeGraphs]:
++    root = tmp_path / "installation"
++    root.mkdir(parents=True)
++    runtime = {**_RUNTIME, **(runtime_overrides or {})}
++    generation = {**_GENERATION, **(generation_overrides or {})}
++    voices = [{"name": "easton", "display_name": "Easton", "locale": "en-US", "frames": 2}]
++    config = {"runtime": runtime, "generation": generation, "voices": voices}
++    if default_voice is not None:
++        config["default_voice"] = default_voice
++    config_path = root / "config.json"
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++
++    artifacts: list[InstalledArtifact] = []
++
++    def add_artifact(role: str, filename: str, path: Path, *, component: str | None = None) -> None:
++        path.parent.mkdir(parents=True, exist_ok=True)
++        if not path.exists():
++            path.write_bytes(b"fake")
++        artifacts.append(
++            InstalledArtifact(
++                role=role,
++                filename=filename,
++                path=path,
++                sha256="0" * 64,
++                size=path.stat().st_size,
++                component=component,
++            )
++        )
++
++    add_artifact("config", "config.json", config_path)
++    for component, filename in _GRAPH_FILES.items():
++        add_artifact("model", filename, root / filename, component=component)
++    prompt_path = root / "voices" / "easton.f32"
++    prompt = (
++        np.arange(8, dtype="<f4") if voice_data is None else np.asarray(voice_data, dtype="<f4")
++    )
++    prompt_path.parent.mkdir(parents=True, exist_ok=True)
++    prompt.tofile(prompt_path)
++    add_artifact("voice_prompt", "voices/easton.f32", prompt_path, component="easton")
++
++    metadata = {
++        "runtime": dict(_RUNTIME),
++        "generation": generation,
++        "voices": ["easton"],
++        "selected_quality": "fp32",
++    }
++    installation = Installation(
++        system="phonon",
++        id="phonon-31m-en",
++        kind="voice-model",
++        path=root,
++        artifacts=tuple(artifacts),
++        sample_rate=cast(int, runtime["sample_rate"]),
++        voices=("easton",),
++        default_voice=default_voice,
++        metadata=metadata,
++    )
++    fake_graphs = fake or _FakeGraphs()
++    monkeypatch.setattr("onnxvoice.systems.phonon.OnnxSession", fake_graphs.create)
++    adapter = PhononAdapter(
++        installation,
++        providers=("CPUExecutionProvider",),
++        provider_options=({"arena_extend_strategy": "kSameAsRequested"},),
++        session_options=object(),
++    )
++    return adapter, fake_graphs
++
++
++def test_stream_runs_prefix_cache_flow_mimi_and_eos_tail_in_order(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, fake = _make_adapter(tmp_path, monkeypatch)
++    voice = adapter.prepare_voice()
++    assert voice.name == "easton"
++    assert voice.embeddings.shape == (1, 2, 4)
++    assert voice.embeddings.dtype == np.float32
++    assert voice.embeddings.flags.c_contiguous and not voice.embeddings.flags.writeable
++    assert fake.sessions == {}
++
++    controls: dict[str, Any] = {
++        "duration_delta": 0.75,
++        "temperature": 0.4,
++        "seed": 42,
++        "eos_threshold": 1.0,
++        "frames_after_eos": 2,
++        "min_frames_before_eos": 1,
++        "max_frames": 5,
++    }
++    chunks = list(adapter.stream([11, 12], **controls))
++    assert [chunk.frame_index for chunk in chunks] == [0, 1, 2, 3]
++    assert [chunk.eos_detected for chunk in chunks] == [False, True, False, False]
++    assert all(chunk.sample_rate == 8 and chunk.audio.shape == (4,) for chunk in chunks)
++    assert [chunk.audio[0] for chunk in chunks] == [1.0, 2.0, 3.0, 4.0]
++    assert not chunks[0].audio.flags.writeable
++    assert list(fake.events[:4]) == [
++        ("flow_lm_main", "voice"),
++        ("text_conditioner", "text"),
++        ("flow_lm_main", "text"),
++        ("flow_lm_main", "generation"),
++    ]
++    assert fake.main_calls[0]["inputs_embeds"].shape == (1, 2, 4)
++    np.testing.assert_array_equal(fake.main_calls[0]["inputs_embeds"], voice.embeddings)
++    np.testing.assert_array_equal(fake.main_calls[2]["inputs_embeds"], np.full((1, 1, 4), 9.0))
++    assert fake.main_calls[0]["past_key_values.0.key"].shape[2] == 0
++    assert fake.main_calls[1]["past_key_values.0.key"].shape[2] == 2
++    np.testing.assert_array_equal(
++        fake.sessions["text_conditioner"].calls[0]["input_ids"], [[11, 12]]
++    )
++    np.testing.assert_array_equal(
++        fake.sessions["text_conditioner"].calls[0]["duration_delta"], [0.75]
++    )
++    assert all(call["duration_delta"].tolist() == [0.75] for call in fake.flow_calls)
++    assert [call["offset"].tolist() for call in fake.mimi_calls] == [[0], [1], [2], [3]]
++    assert [call["state.cache"][0, 0] for call in fake.mimi_calls] == [0.0, 1.0, 2.0, 3.0]
++    assert set(fake.sessions) == set(_GRAPH_FILES)
++    assert all(
++        session.kwargs["providers"] == ("CPUExecutionProvider",)
++        for session in fake.sessions.values()
++    )
++
++    second = list(adapter.stream([11, 12], **controls))
++    np.testing.assert_array_equal(
++        np.stack([call["noise"] for call in fake.flow_calls[:4]]),
++        np.stack([call["noise"] for call in fake.flow_calls[4:8]]),
++    )
++    voice_prefixes = [
++        call for call in fake.main_calls if np.array_equal(call["inputs_embeds"], voice.embeddings)
++    ]
++    assert len(voice_prefixes) == 2
++    assert all(call["past_key_values.0.key"].shape[2] == 0 for call in voice_prefixes)
++    assert fake.mimi_calls[4]["offset"].tolist() == [0]
++    assert fake.mimi_calls[4]["state.cache"].tolist() == [[0.0, 0.0]]
++    assert [chunk.frame_index for chunk in second] == [0, 1, 2, 3]
++
++    silent = list(
++        adapter.stream(
++            [11],
++            duration_delta=0.75,
++            temperature=0.0,
++            seed=42,
++            eos_threshold=100.0,
++            max_frames=1,
++        )
++    )
++    np.testing.assert_array_equal(
++        fake.flow_calls[-1]["noise"], np.zeros((1, 1, 3), dtype=np.float32)
++    )
++    assert len(silent) == 1
++
++
++def test_infer_collects_stream_audio_and_reports_frame_cap(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, _ = _make_adapter(tmp_path, monkeypatch, fake=_FakeGraphs(eos_values=(-3.0,) * 8))
++    result = adapter.infer(
++        [1, 2], duration_delta=0.25, temperature=0.0, eos_threshold=10.0, max_frames=2
++    )
++    assert result.audio.dtype == np.float32 and result.audio.shape == (8,)
++    np.testing.assert_array_equal(result.audio, np.concatenate((np.ones(4), np.full(4, 2))))
++    assert result.sample_rate == 8
++    assert result.metadata["frames"] == 2
++    assert result.metadata["terminated_by"] == "max_frames"
++    assert result.metadata["terminated_by_frame_cap"] is True
++    assert result.metadata["voice"] == "easton"
++    assert result.metadata["quality"] == "fp32"
++
++
++def test_infer_preserves_empty_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    adapter, _ = _make_adapter(tmp_path, monkeypatch)
++    adapter._load_contract()
++
++    def empty_stream(*args: Any, **kwargs: Any) -> Any:
++        assert args[0] == [1]
++        assert kwargs["duration_delta"] == 0.25
++        return iter(())
++
++    monkeypatch.setattr(adapter, "stream", empty_stream)
++    result = adapter.infer([1], duration_delta=0.25, max_frames=2)
++    assert result.audio.shape == (0,)
++    assert result.audio.dtype == np.float32
++    assert result.metadata["frames"] == 0
++    assert result.metadata["terminated_by"] == "max_frames"
++
++
++def test_voice_defaults_and_required_controls_are_metadata_driven(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, fake = _make_adapter(
++        tmp_path,
++        monkeypatch,
++        default_voice=None,
++        generation_overrides={"duration_delta_default": None},
++    )
++    with pytest.raises(RuntimeContractError, match="select a voice explicitly"):
++        adapter.prepare_voice()
++    voice = adapter.prepare_voice("easton")
++    assert voice.metadata["locale"] == "en-US"
++    with pytest.raises(RuntimeContractError, match="no bundle default"):
++        list(adapter.stream([1], voice=voice, max_frames=1))
++    assert fake.sessions == {}
++    assert adapter.prepare_voice("easton") is voice
++
++
++def test_voice_prompt_and_voice_state_are_validated(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    bad_size, _ = _make_adapter(
++        tmp_path / "bad-size", monkeypatch, voice_data=np.arange(5, dtype=np.float32)
++    )
++    with pytest.raises(RuntimeContractError, match="not divisible"):
++        bad_size.prepare_voice()
++
++    wrong_frames, _ = _make_adapter(
++        tmp_path / "wrong-frames", monkeypatch, voice_data=np.arange(12, dtype=np.float32)
++    )
++    with pytest.raises(RuntimeContractError, match="expected 2"):
++        wrong_frames.prepare_voice()
++
++    nonfinite, _ = _make_adapter(
++        tmp_path / "nonfinite", monkeypatch, voice_data=np.array([0, 1, 2, 3, 4, 5, np.nan, 7])
++    )
++    with pytest.raises(RuntimeContractError, match="NaN or infinity"):
++        nonfinite.prepare_voice()
++
++    with pytest.raises(RuntimeContractError, match="shape"):
++        PhononVoiceState("easton", np.zeros((2, 4), dtype=np.float32))
++    with pytest.raises(RuntimeContractError, match="finite"):
++        PhononVoiceState("easton", np.full((1, 2, 4), np.inf, dtype=np.float32))
++
++
++def test_missing_voice_default_unknown_voice_and_invalid_controls_fail_early(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, fake = _make_adapter(tmp_path, monkeypatch, default_voice=None)
++    with pytest.raises(RuntimeContractError, match="no default voice"):
++        list(adapter.stream([1], duration_delta=0.25, max_frames=1))
++    with pytest.raises(RuntimeContractError, match="Unknown Phonon voice"):
++        adapter.prepare_voice("missing")
++    with pytest.raises(RuntimeContractError, match="non-negative integer"):
++        list(adapter.stream([1], voice="easton", duration_delta=0.25, seed=-1))
++    with pytest.raises(RuntimeContractError, match="non-empty"):
++        list(adapter.stream([], voice="easton", duration_delta=0.25))
++    assert fake.sessions == {}
++
++
++def test_runtime_and_graph_signature_mismatches_are_rejected(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    mismatched, fake = _make_adapter(
++        tmp_path / "runtime", monkeypatch, runtime_overrides={"d_model": 8}
++    )
++    with pytest.raises(RuntimeContractError, match="catalog/config runtime mismatch"):
++        list(mismatched.stream([1], duration_delta=0.25))
++    assert fake.sessions == {}
++
++    bad_graph, invalid = _make_adapter(
++        tmp_path / "signature", monkeypatch, fake=_FakeGraphs(invalid_main_signature=True)
++    )
++    with pytest.raises(RuntimeContractError, match="signature mismatch"):
++        list(bad_graph.stream([1], duration_delta=0.25))
++    assert invalid.sessions["flow_lm_main"].closed
++
++
++def test_invalid_mimi_audio_and_chunk_values_are_rejected(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, _ = _make_adapter(tmp_path, monkeypatch, fake=_FakeGraphs(invalid_audio=True))
++    with pytest.raises(RuntimeContractError, match="NaN or infinity"):
++        list(adapter.stream([1], duration_delta=0.25, max_frames=1))
++
++    with pytest.raises(RuntimeContractError, match="finite mono float32"):
++        PhononStreamChunk(np.array([np.nan]), 8, 0, False)
++    with pytest.raises(RuntimeContractError, match="sample_rate"):
++        PhononStreamChunk(np.zeros(1), 0, 0, False)
++
++
++def test_adapter_close_is_idempotent_and_closes_all_lazy_sessions(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    adapter, fake = _make_adapter(tmp_path, monkeypatch)
++    list(adapter.stream([1], duration_delta=0.25, max_frames=1))
++    assert set(fake.sessions) == set(_GRAPH_FILES)
++    diagnostics = adapter.diagnostics()
++    assert diagnostics.layout == "phonon-four-graph-streaming-v1"
++    assert {session.component for session in diagnostics.sessions} == set(_GRAPH_FILES)
++    assert diagnostics.properties["created_graphs"] == sorted(_GRAPH_FILES)
++    adapter.close()
++    adapter.close()
++    assert all(session.closed for session in fake.sessions.values())
++    assert adapter.diagnostics().sessions == ()

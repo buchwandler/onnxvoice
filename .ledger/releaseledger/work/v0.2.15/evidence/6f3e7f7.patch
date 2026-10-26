@@ -1,0 +1,142 @@
+ docs/api/runtime.md        |  1 +
+ docs/systems/chatterbox.md |  2 ++
+ onnxvoice/runtime.py       |  8 +++++-
+ tests/test_runtime.py      | 67 ++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 77 insertions(+), 1 deletion(-)
+
+diff --git a/docs/api/runtime.md b/docs/api/runtime.md
+index a85fd6d..772cb0d 100644
+--- a/docs/api/runtime.md
++++ b/docs/api/runtime.md
+@@ -1,6 +1,7 @@
+ # Runtime
+
+ The runtime module separates provider-policy capture from resolution against providers reported by ONNX Runtime. Importing it does not import the optional `onnxruntime` dependency; status inspection catches absent or broken imports and returns structured diagnostics. `runtime_status()` is read-only and does not probe inference readiness.
++ONNX session-creation errors include the graph component when known, the resolved execution providers, and the model filename. The original ONNX Runtime exception remains available as the error's cause.
+
+ ```{automodule} onnxvoice.runtime
+ :members: OnnxSession, available_providers, normalize_provider_name, provider_preference, resolve_provider_preference, resolve_providers, runtime_distributions, runtime_status, get_default_providers, set_default_providers, clear_default_providers
+diff --git a/docs/systems/chatterbox.md b/docs/systems/chatterbox.md
+index 4901ddf..69c4d84 100644
+--- a/docs/systems/chatterbox.md
++++ b/docs/systems/chatterbox.md
+@@ -13,6 +13,8 @@ Use `onnxvoice engines options --engine chatterbox --target nano-v2` or `--targe
+
+ Both bundles generate audio at the native sample rate of 24 kHz. The profile selects the matching graph artifacts; install a compatible ONNX Runtime provider for the target device. For example, the Nano `cpu` profile uses CPU-oriented graph variants, while Turbo also offers the `q4f16` profile.
+
++A catalog profile identifies its graph artifacts; its availability does not guarantee that every execution provider supports those graphs. Compatibility depends on the selected artifacts and the installed ONNX Runtime build.
++
+ ## Ownership boundary
+
+ OnnxVoice owns the `chatterbox-onnx-bundles` catalog integration, revision-pinned artifact metadata, managed cache and installation, ONNX sessions, graph-contract validation, and generation. Its adapter runs four graph components:
+diff --git a/onnxvoice/runtime.py b/onnxvoice/runtime.py
+index 897b557..aad3247 100644
+--- a/onnxvoice/runtime.py
++++ b/onnxvoice/runtime.py
+@@ -519,7 +519,13 @@ class OnnxSession:
+         try:
+             session = ort.InferenceSession(str(self.model), **kwargs)
+         except Exception as exc:
+-            raise RuntimeContractError(f"Could not create ONNX Runtime session: {exc}") from exc
++            component = self.component or "<unspecified>"
++            raise RuntimeContractError(
++                "Could not create ONNX Runtime session "
++                f"for component {component!r} "
++                f"with providers {list(selected)!r} "
++                f"from {self.model.name!r}: {exc}"
++            ) from exc
+         if self.strict_providers:
+             disable_fallback = getattr(session, "disable_fallback", None)
+             if not callable(disable_fallback):
+diff --git a/tests/test_runtime.py b/tests/test_runtime.py
+index cf8ab3c..9a9e70f 100644
+--- a/tests/test_runtime.py
++++ b/tests/test_runtime.py
+@@ -21,6 +21,7 @@ class FakeOrt:
+     def __init__(self) -> None:
+         self.created: tuple[str, dict[str, Any]] | None = None
+         self.session_options: FakeSessionOptions | None = None
++        self.creation_error: Exception | None = None
+
+     def get_available_providers(self):
+         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+@@ -31,6 +32,8 @@ class FakeOrt:
+
+     def InferenceSession(self, model, **kwargs):
+         self.created = (model, kwargs)
++        if self.creation_error is not None:
++            raise self.creation_error
+         return SimpleNamespace(
+             get_inputs=lambda: [
+                 SimpleNamespace(name="tokens", type="tensor(int32)", shape=[1, "N"])
+@@ -86,6 +89,70 @@ def test_session_passes_options_and_exposes_tensor_specs(tmp_path, monkeypatch):
+     assert ort.created[1]["sess_options"] is session_options
+
+
++def test_session_creation_error_includes_component_and_resolved_providers(tmp_path, monkeypatch):
++    model = tmp_path / "speech_encoder_q4f16.onnx"
++    model.write_bytes(b"model")
++    ort = FakeOrt()
++    original = RuntimeError(
++        "[ONNXRuntimeError] : 9 : NOT_IMPLEMENTED : "
++        "Failed to find kernel for com.ms.internal.nhwc.AveragePool(19)"
++    )
++    ort.creation_error = original
++    monkeypatch.setattr(runtime, "_ort", lambda: ort)
++
++    session = runtime.OnnxSession(model, component="speech_encoder", providers="cpu")
++    assert ort.created is None
++
++    with pytest.raises(RuntimeContractError) as exc:
++        _ = session.session
++
++    message = str(exc.value)
++    assert "speech_encoder" in message
++    assert "['CPUExecutionProvider']" in message
++    assert model.name in message
++    assert "AveragePool(19)" in message
++    assert exc.value.__cause__ is original
++    assert ort.created is not None
++    assert ort.created[1]["providers"] == ["CPUExecutionProvider"]
++
++
++def test_session_creation_error_handles_missing_component(tmp_path, monkeypatch):
++    model = tmp_path / "model_without_component.onnx"
++    model.write_bytes(b"model")
++    ort = FakeOrt()
++    ort.creation_error = RuntimeError("simulated ORT failure")
++    monkeypatch.setattr(runtime, "_ort", lambda: ort)
++
++    session = runtime.OnnxSession(model, providers="cpu")
++    with pytest.raises(RuntimeContractError) as exc:
++        _ = session.session
++
++    message = str(exc.value)
++    assert "<unspecified>" in message
++    assert model.name in message
++    assert "['CPUExecutionProvider']" in message
++    assert "simulated ORT failure" in message
++
++
++def test_session_creation_error_reports_resolved_auto_provider(tmp_path, monkeypatch):
++    model = tmp_path / "auto_provider.onnx"
++    model.write_bytes(b"model")
++    ort = FakeOrt()
++    ort.creation_error = RuntimeError("simulated ORT failure")
++    monkeypatch.setattr(runtime, "_ort", lambda: ort)
++
++    session = runtime.OnnxSession(model, providers="auto")
++    with pytest.raises(RuntimeContractError) as exc:
++        _ = session.session
++
++    assert ort.created is not None
++    selected = ort.created[1]["providers"]
++    assert selected == ["CUDAExecutionProvider"]
++    assert repr(selected) in str(exc.value)
++    assert model.name in str(exc.value)
++    assert "simulated ORT failure" in str(exc.value)
++
++
+ def test_strict_provider_policy_disables_implicit_cpu_fallback(tmp_path, monkeypatch):
+     model = tmp_path / "model.onnx"
+     model.write_bytes(b"model")
