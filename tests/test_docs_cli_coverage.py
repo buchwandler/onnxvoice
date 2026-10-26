@@ -15,6 +15,7 @@ EXPECTED_DOCUMENTED_COMMANDS = {
     "path",
     "show",
     "remove",
+    "uninstall",
     "verify",
     "cache",
     "import",
@@ -26,6 +27,7 @@ EXPECTED_DOCUMENTED_COMMANDS = {
 def test_cli_commands_match_the_documentation_coverage_set():
     parser = build_parser()
     command_action = next(action for action in parser._actions if getattr(action, "choices", None))
+    assert command_action.choices is not None
     assert set(command_action.choices) == EXPECTED_DOCUMENTED_COMMANDS
 
     cli_docs = Path("docs/cli.md").read_text(encoding="utf-8")

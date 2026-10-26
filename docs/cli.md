@@ -18,6 +18,7 @@ The CLI is organized around catalog discovery, local inventory, installation lif
 | `onnxvoice path`      | Print an installation path                                            |
 | `onnxvoice show`      | Show an installed manifest                                            |
 | `onnxvoice remove`    | Remove installation variants                                          |
+| `onnxvoice uninstall` | Same-handler alias for remove                                         |
 | `onnxvoice verify`    | Verify installed files against checksums                              |
 | `onnxvoice cache`     | Report usage or garbage-collect unreachable cache data                |
 | `onnxvoice import`    | Import a model and optional config or voices file into the store      |
@@ -142,25 +143,50 @@ Update checks normally refresh catalog data. `--cached` checks against cached ca
 
 The comparison statuses are `current`, `update_available`, `unknown`, and `not_applicable`. `unknown` means there was not enough comparable artifact identity or digest information to determine whether the installation changed.
 
+## Find the largest installed assets
+
+Installed inventory can be sorted before either table or JSON rendering:
+
+```bash
+onnxvoice installed --sort size --desc
+onnxvoice installed --sort id
+onnxvoice installed --sort system
+```
+
+`--sort` accepts `size`, `id`, or `system`; `--desc` reverses the selected order. The `SIZE` column is logical installation size, not necessarily bytes that removal will free.
+
 ## Remove installations and reclaim storage
+
+`remove` and its same-handler `uninstall` alias remove managed installation views:
 
 ```bash
 onnxvoice remove piper:en_US-lessac-medium --dry-run
-onnxvoice remove piper:en_US-lessac-medium
-onnxvoice remove piper:en_US-lessac-medium --gc
-onnxvoice remove kokoro:v1.0 --all-variants --yes
+onnxvoice uninstall piper:en_US-lessac-medium --gc
+onnxvoice remove kokoro:v1.0 --all-variants --yes --gc
 ```
 
-Removing an installation does not necessarily delete its shared content blobs or Pocket voice-state records. Run garbage collection to reclaim unreachable cache data. Use `--dry-run` to inspect a removal or collection before applying it.
+Removing an installation does not necessarily delete its shared content blobs or Pocket voice-state records. Garbage collection removes shared objects only after no remaining installation references them. An installation's logical size is not necessarily the amount of disk space its removal will free.
+
+`remove REF --dry-run --gc` plans the complete removal before changing anything. It distinguishes logical size, immediately reclaimed unique installation bytes, blobs/states newly made unreachable, and total post-GC reclaimability. With multiple refs, ONNXVoice validates all selections and computes one plan before removing any installation, avoiding partial work caused by a later invalid or ambiguous ref.
+
+Actual `remove REF --gc` output reports installation logical size separately from immediate bytes reclaimed, GC bytes reclaimed, and their total. Use `--all-variants --yes` to confirm removing multiple selected variants.
+
+## Cache accounting and garbage collection
 
 ```bash
 onnxvoice cache info
+onnxvoice cache info --details
 onnxvoice cache info --format json
 onnxvoice cache gc --dry-run
 onnxvoice cache gc
+onnxvoice cache gc --include-legacy --dry-run
 ```
 
-Cache reports distinguish installation logical bytes, blob bytes, unique file bytes, orphan blobs, auxiliary bytes, Pocket state usage, and orphan auxiliary data. Pocket state is retained while an installed matching bundle variant still references it.
+The default cache report emphasizes filesystem free space, whole-cache allocated disk usage, and bytes currently reclaimable. Detailed output includes per-category and per-path data, apparent versus allocated size, installation hard-link/copy accounting, orphans, and legacy/unmanaged paths. JSON always contains full structured metrics and preserves the established flat keys; byte values remain integers.
+
+`blobs/sha256` is ONNXVoice's verified content-addressed artifact store. Installation directories normally hard-link to shared blobs, with a copy fallback where hard links are unavailable. Therefore blob size and installation logical size must not be added to estimate physical cache consumption. Do not manually delete `blobs/`: use ONNXVoice so reachability and locks protect objects still used by installations.
+
+Standard GC collects only unreachable blobs and Pocket voice-state records. The recognized retired `pocket-voice-prompts/` cache is report-only by default and can be explicitly previewed/removed with `--include-legacy`. Other unknown cache paths are reported but are never GC candidates. Cache accounting, installed listing, planning, and GC operate locally without catalog/network access.
 
 ## Catalog voices
 

@@ -11,6 +11,7 @@ except ImportError:  # source checkout before setuptools_scm has generated _vers
         __version__ = "0.0.0"
 
 
+from collections.abc import Sequence
 from typing import Any
 
 from .catalog import CatalogClient
@@ -50,12 +51,22 @@ from .systems import (
 from .types import (
     Artifact,
     AssetProgress,
+    CacheFilesystemUsage,
+    CacheFileUsage,
+    CachePathUsage,
+    CacheScan,
+    CacheUsage,
     CatalogItem,
+    GcCandidate,
+    GcPlan,
+    GcReport,
     InferenceResult,
     Installation,
+    InstallationStorageUsage,
     InstalledArtifact,
     OnnxRuntimeStatus,
     ProviderPreference,
+    RemovalPlan,
     RuntimeDiagnostic,
     RuntimeDistributionInfo,
     SequenceLengthContract,
@@ -125,6 +136,21 @@ def load_local(**kwargs: Any):
     return OnnxVoice.load_local(**kwargs)
 
 
+def cache_usage() -> CacheUsage:
+    """Return local-only cache accounting without loading catalog data."""
+    return _manager().cache_usage()
+
+
+def plan_cache_gc(*, include_legacy: bool = False) -> GcPlan:
+    """Return a non-mutating plan for safe cache garbage collection."""
+    return _manager().plan_cache_gc(include_legacy=include_legacy)
+
+
+def gc_cache(*, include_legacy: bool = False) -> GcReport:
+    """Collect unreachable cache files, optionally including known legacy data."""
+    return _manager().gc_cache(include_legacy=include_legacy)
+
+
 def installed(system: str | None = None) -> list[Installation]:
     """List locally installed assets, optionally restricted to one system."""
     return _manager().installed(system)
@@ -133,6 +159,11 @@ def installed(system: str | None = None) -> list[Installation]:
 def where(ref: str, **kwargs):
     """Return the path of a verified local installation."""
     return _manager().where(ref, **kwargs)
+
+
+def plan_remove(refs: Sequence[str], **kwargs: Any) -> RemovalPlan:
+    """Plan one or more local removals without changing installations or cache files."""
+    return _manager().plan_remove(refs, **kwargs)
 
 
 def remove(ref: str, **kwargs):
@@ -151,6 +182,16 @@ __all__ = [
     "AssetStore",
     "OnnxSession",
     "Artifact",
+    "CacheFilesystemUsage",
+    "CacheFileUsage",
+    "CachePathUsage",
+    "CacheScan",
+    "CacheUsage",
+    "InstallationStorageUsage",
+    "GcCandidate",
+    "GcPlan",
+    "GcReport",
+    "RemovalPlan",
     "AssetProgress",
     "InstalledArtifact",
     "NotInstalledError",
@@ -197,6 +238,10 @@ __all__ = [
     "load",
     "load_local",
     "installed",
+    "cache_usage",
+    "plan_cache_gc",
+    "gc_cache",
+    "plan_remove",
     "where",
     "remove",
 ]

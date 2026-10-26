@@ -12,6 +12,30 @@ voice = OnnxVoice()
 
 Pass `cache_dir` to select a cache root, `catalog_sources` to override catalog sources, or `offline=True` to disable network access.
 
+## Cache accounting and cleanup
+
+Cache administration is local-only and does not resolve catalogs or make network requests:
+
+```python
+from onnxvoice import OnnxVoice
+
+voice = OnnxVoice(offline=True)
+usage = voice.cache_usage()
+print(usage.filesystem_free_bytes, usage.cache_allocated_bytes)
+print(usage.reclaimable_now_bytes)
+
+gc_plan = voice.plan_cache_gc()
+print(gc_plan.apparent_bytes, gc_plan.allocated_bytes)
+# Execute only when the preview is acceptable:
+report = voice.gc_cache()
+
+removal = voice.plan_remove(["piper:en_US-lessac-medium"], gc=True)
+print(removal.logical_bytes, removal.immediate_reclaimable_bytes)
+print(removal.gc_reclaimable_bytes, removal.total_reclaimable_bytes)
+```
+
+`CacheUsage`, `GcPlan`, `GcCandidate`, `GcReport`, `InstallationStorageUsage`, and `RemovalPlan` are typed public dataclasses. `cache_usage()`, `plan_cache_gc()`, `gc_cache()`, and `plan_remove()` are also exported as package-level helpers using ONNXVoice's default manager. Pass `include_legacy=True` only when explicitly planning or running cleanup of the recognized retired legacy cache path; unknown files remain report-only.
+
 ## Discover catalog entries and voices
 
 ```python

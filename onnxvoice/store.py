@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import stat as stat_module
 import tempfile
 import threading
 import time
@@ -13,6 +14,7 @@ import uuid
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -33,11 +35,19 @@ from .types import (
     MANIFEST_SCHEMA_VERSION,
     Artifact,
     AssetProgress,
+    CacheFilesystemUsage,
+    CacheFileUsage,
+    CachePathUsage,
+    CacheScan,
     CacheUsage,
     CatalogItem,
+    GcCandidate,
+    GcPlan,
     GcReport,
     Installation,
+    InstallationStorageUsage,
     InstalledArtifact,
+    RemovalPlan,
     validate_relative_path,
     validate_safe_component,
 )
@@ -50,6 +60,14 @@ _ACTIVE_FILE_LOCKS: weakref.WeakSet[Any] = weakref.WeakSet()
 
 
 _INSTALL_MANIFEST_FILENAME = ".onnxvoice-install.json"
+
+
+def _allocated_bytes(stat_result: os.stat_result) -> int:
+    """Return allocated filesystem bytes, falling back to apparent size."""
+    blocks = getattr(stat_result, "st_blocks", None)
+    if isinstance(blocks, int) and blocks >= 0:
+        return blocks * 512
+    return stat_result.st_size
 
 
 def _local_lock_for(path: Path) -> threading.Lock:
@@ -395,13 +413,225 @@ class AssetStore:
         """Return the path recorded for one managed installation."""
         return self.get(system, item_id).path
 
-    def remove(self, system: str, item_id: str) -> None:
-        """Remove an installation without collecting shared unreferenced blobs."""
+    @staticmethod
+    def _is_within(path: Path, directory: Path) -> bool:
+        return path == directory or directory in path.parents
+
+    @staticmethod
+    def _installation_key(installation: Installation) -> tuple[str, str]:
+        return installation.system, installation.storage_id or installation.id
+
+    def _plan_gc_after_removal(
+        self,
+        selected: Sequence[Installation],
+        installations: Sequence[Installation],
+        scan: CacheScan,
+    ) -> GcPlan:
+        """Simulate safe GC after removing selected installation directories."""
+        selected_keys = {self._installation_key(installation) for installation in selected}
+        selected_roots = tuple(installation.path for installation in selected)
+
+        def inode_key(file: CacheFileUsage) -> tuple[Any, ...]:
+            if file.inode:
+                return ("inode", file.device, file.inode)
+            return ("path", os.fspath(file.path))
+
+        removed_link_counts: dict[tuple[Any, ...], int] = {}
+        for file in scan.files:
+            if any(self._is_within(file.path, root) for root in selected_roots):
+                key = inode_key(file)
+                removed_link_counts[key] = removed_link_counts.get(key, 0) + 1
+
+        remaining_files = []
+        for file in scan.files:
+            if any(self._is_within(file.path, root) for root in selected_roots):
+                continue
+            removed_links = removed_link_counts.get(inode_key(file), 0)
+            if removed_links:
+                file = dataclass_replace(file, link_count=max(1, file.link_count - removed_links))
+            remaining_files.append(file)
+        remaining_installations = [
+            installation
+            for installation in installations
+            if self._installation_key(installation) not in selected_keys
+        ]
+        simulated_scan = dataclass_replace(scan, files=tuple(remaining_files))
+        return self._build_gc_plan_unlocked(remaining_installations, simulated_scan)
+
+    def _calculate_removal_reclaimability(
+        self,
+        selected: Sequence[Installation],
+        installations: Sequence[Installation],
+        scan: CacheScan,
+        *,
+        gc: bool,
+    ) -> tuple[int, int, int, int]:
+        """Estimate bytes freed immediately and after safe GC for selected views."""
+        selected_roots = tuple(installation.path for installation in selected)
+
+        def inode_key(file: CacheFileUsage) -> tuple[Any, ...]:
+            if file.inode:
+                return ("inode", file.device, file.inode)
+            return ("path", os.fspath(file.path))
+
+        files_by_inode: dict[tuple[Any, ...], list[CacheFileUsage]] = {}
+        removed_by_inode: dict[tuple[Any, ...], list[CacheFileUsage]] = {}
+        for file in scan.files:
+            key = inode_key(file)
+            files_by_inode.setdefault(key, []).append(file)
+            if any(self._is_within(file.path, root) for root in selected_roots):
+                removed_by_inode.setdefault(key, []).append(file)
+
+        immediate_bytes = 0
+        immediate_allocated_bytes = 0
+        for key, removed_files in removed_by_inode.items():
+            link_count = max(file.link_count for file in removed_files)
+            if len(removed_files) == len(files_by_inode[key]) and link_count <= len(removed_files):
+                immediate_bytes += removed_files[0].apparent_bytes
+                immediate_allocated_bytes += removed_files[0].allocated_bytes
+
+        gc_bytes = 0
+        gc_allocated_bytes = 0
+        if gc:
+            gc_plan = self._plan_gc_after_removal(selected, installations, scan)
+            gc_bytes = gc_plan.apparent_bytes
+            gc_allocated_bytes = gc_plan.allocated_bytes
+        return immediate_bytes, immediate_allocated_bytes, gc_bytes, gc_allocated_bytes
+
+    def plan_remove(
+        self, installations: Sequence[Installation], *, gc: bool = False
+    ) -> RemovalPlan:
+        """Plan multi-installation removal without changing cache contents."""
+        if not installations:
+            raise ValueError("At least one installation must be selected for removal.")
+        with FileLock(self._gc_lock_path()):
+            current_installations = self.installed()
+            current_by_key = {
+                self._installation_key(installation): installation
+                for installation in current_installations
+            }
+            requested_keys = dict.fromkeys(
+                self._installation_key(installation) for installation in installations
+            )
+            missing = [key for key in requested_keys if key not in current_by_key]
+            if missing:
+                refs = ", ".join(f"{system}:{storage_id}" for system, storage_id in missing)
+                raise AssetNotFoundError(f"Not installed: {refs}")
+            selected = tuple(current_by_key[key] for key in requested_keys)
+            scan = self._scan_cache()
+            immediate, immediate_allocated, gc_bytes, gc_allocated = (
+                self._calculate_removal_reclaimability(selected, current_installations, scan, gc=gc)
+            )
+            newly_orphaned_blob_count = 0
+            newly_orphaned_blob_bytes = 0
+            newly_orphaned_auxiliary_count = 0
+            newly_orphaned_auxiliary_bytes = 0
+            if gc:
+                baseline_gc = self._build_gc_plan_unlocked(current_installations, scan)
+                post_removal_gc = self._plan_gc_after_removal(selected, current_installations, scan)
+                baseline_blobs = {
+                    candidate.path
+                    for candidate in baseline_gc.candidates
+                    if candidate.category == "orphan_blob"
+                }
+                new_blobs = [
+                    candidate
+                    for candidate in post_removal_gc.candidates
+                    if candidate.category == "orphan_blob" and candidate.path not in baseline_blobs
+                ]
+                newly_orphaned_blob_count = len(new_blobs)
+                newly_orphaned_blob_bytes = sum(candidate.apparent_bytes for candidate in new_blobs)
+                baseline_state_dirs = {
+                    candidate.path.parent
+                    for candidate in baseline_gc.candidates
+                    if candidate.category == "orphan_pocket_voice_state"
+                    and candidate.path.suffix == ".json"
+                }
+                post_state_dirs = {
+                    candidate.path.parent
+                    for candidate in post_removal_gc.candidates
+                    if candidate.category == "orphan_pocket_voice_state"
+                    and candidate.path.suffix == ".json"
+                }
+                new_state_dirs = post_state_dirs - baseline_state_dirs
+                newly_orphaned_auxiliary_count = len(new_state_dirs)
+                newly_orphaned_auxiliary_bytes = sum(
+                    candidate.apparent_bytes
+                    for candidate in post_removal_gc.candidates
+                    if candidate.category == "orphan_pocket_voice_state"
+                    and candidate.path.parent in new_state_dirs
+                )
+            installation_usage = []
+            for installation in selected:
+                one_immediate, one_allocated, one_gc, one_gc_allocated = (
+                    self._calculate_removal_reclaimability(
+                        (installation,), current_installations, scan, gc=gc
+                    )
+                )
+                installation_usage.append(
+                    InstallationStorageUsage(
+                        ref=installation.ref,
+                        storage_id=installation.storage_id or installation.id,
+                        logical_bytes=sum(artifact.size for artifact in installation.artifacts),
+                        immediate_reclaimable_bytes=one_immediate,
+                        gc_reclaimable_bytes=one_gc,
+                        immediate_reclaimable_allocated_bytes=one_allocated,
+                        gc_reclaimable_allocated_bytes=one_gc_allocated,
+                    )
+                )
+            logical_bytes = sum(
+                artifact.size for installation in selected for artifact in installation.artifacts
+            )
+            return RemovalPlan(
+                installations=tuple(installation_usage),
+                logical_bytes=logical_bytes,
+                immediate_reclaimable_bytes=immediate,
+                gc_reclaimable_bytes=gc_bytes,
+                total_reclaimable_bytes=immediate + gc_bytes,
+                immediate_reclaimable_allocated_bytes=immediate_allocated,
+                gc_reclaimable_allocated_bytes=gc_allocated,
+                total_reclaimable_allocated_bytes=immediate_allocated + gc_allocated,
+                newly_orphaned_blob_count=newly_orphaned_blob_count,
+                newly_orphaned_blob_bytes=newly_orphaned_blob_bytes,
+                newly_orphaned_auxiliary_count=newly_orphaned_auxiliary_count,
+                newly_orphaned_auxiliary_bytes=newly_orphaned_auxiliary_bytes,
+            )
+
+    def remove(self, system: str, item_id: str) -> InstallationStorageUsage:
+        """Remove one installation view and report bytes immediately reclaimed."""
         with FileLock(self._install_lock_path(system, item_id)), FileLock(self._gc_lock_path()):
             path = self.install_path(system, item_id)
             if not path.exists():
                 raise AssetNotFoundError(f"Not installed: {system}:{item_id}")
+            installations = self.installed()
+            installation = next(
+                (
+                    item
+                    for item in installations
+                    if self._installation_key(item) == (system, item_id)
+                ),
+                Installation(
+                    system=system,
+                    id=item_id,
+                    kind="unknown",
+                    path=path,
+                    artifacts=(),
+                    storage_id=item_id,
+                ),
+            )
+            scan = self._scan_cache()
+            immediate, immediate_allocated, _, _ = self._calculate_removal_reclaimability(
+                (installation,), installations, scan, gc=False
+            )
             shutil.rmtree(path)
+            return InstallationStorageUsage(
+                ref=installation.ref,
+                storage_id=installation.storage_id or installation.id,
+                logical_bytes=sum(artifact.size for artifact in installation.artifacts),
+                immediate_reclaimable_bytes=immediate,
+                gc_reclaimable_bytes=0,
+                immediate_reclaimable_allocated_bytes=immediate_allocated,
+            )
 
     def install(
         self,
@@ -805,34 +1035,220 @@ class AssetStore:
             for pinned_size, pinned_sha in matching_references
         )
 
-    def gc(self) -> GcReport:
-        """Collect unreferenced content blobs and Pocket voice-state records."""
-        from .types import GcReport
+    def plan_gc(self, *, include_legacy: bool = False) -> GcPlan:
+        """Build a conservative preview of data safe to collect."""
+        with FileLock(self._gc_lock_path()):
+            installations = self.installed()
+            return self._build_gc_plan_unlocked(
+                installations, self._scan_cache(), include_legacy=include_legacy
+            )
+
+    def _build_gc_plan_unlocked(
+        self,
+        installations: Sequence[Installation],
+        scan: CacheScan,
+        *,
+        include_legacy: bool = False,
+    ) -> GcPlan:
+        """Build GC candidates from one installation snapshot and cache scan."""
+        referenced_blobs = {
+            artifact.sha256
+            for installation in installations
+            for artifact in installation.artifacts
+            if artifact.sha256
+        }
+        file_by_path = {file.path: file for file in scan.files}
+        candidates: list[tuple[CacheFileUsage, str, str]] = []
+        for file in scan.files:
+            if file.category == "blob" and len(file.path.relative_to(self.blobs).parts) == 2:
+                if file.path.name not in referenced_blobs:
+                    candidates.append(
+                        (file, "orphan_blob", "No installed manifest references this blob.")
+                    )
+            elif include_legacy and file.category == "legacy":
+                candidates.append(
+                    (
+                        file,
+                        "legacy_cache",
+                        "Explicit cleanup of the recognized retired Pocket prompt cache.",
+                    )
+                )
+
+        state_root = self.root / "pocket-voice-states"
+        state_references = self._pocket_voice_state_references(installations)
+        for metadata_path in sorted(state_root.glob("*/*/*.json")):
+            metadata_file = file_by_path.get(metadata_path)
+            if metadata_file is None or metadata_file.category != "auxiliary":
+                continue
+            try:
+                record = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
+                continue
+            parsed_key = self._pocket_voice_state_key(record["key"])
+            if parsed_key is None or self._pocket_voice_state_is_referenced(
+                record, parsed_key, state_references
+            ):
+                continue
+            candidates.append(
+                (
+                    metadata_file,
+                    "orphan_pocket_voice_state",
+                    "No installed bundle references this Pocket voice-state record.",
+                )
+            )
+            state_file = file_by_path.get(metadata_path.with_suffix(".safetensors"))
+            if state_file is not None and state_file.category == "auxiliary":
+                candidates.append(
+                    (
+                        state_file,
+                        "orphan_pocket_voice_state",
+                        "State payload belongs to an unreferenced Pocket voice-state record.",
+                    )
+                )
+
+        def inode_key(file: CacheFileUsage) -> tuple[Any, ...]:
+            if file.inode:
+                return ("inode", file.device, file.inode)
+            return ("path", os.fspath(file.path))
+
+        all_link_counts: dict[tuple[Any, ...], int] = {}
+        for file in scan.files:
+            key = inode_key(file)
+            all_link_counts[key] = all_link_counts.get(key, 0) + 1
+        candidate_groups: dict[tuple[Any, ...], list[tuple[CacheFileUsage, str, str]]] = {}
+        for candidate in candidates:
+            candidate_groups.setdefault(inode_key(candidate[0]), []).append(candidate)
+
+        planned: list[GcCandidate] = []
+        accounted_inodes: set[tuple[Any, ...]] = set()
+        for file, category, reason in sorted(candidates, key=lambda item: os.fspath(item[0].path)):
+            key = inode_key(file)
+            group = candidate_groups[key]
+            group_paths = {entry[0].path for entry in group}
+            all_linked_paths = all(
+                inode_key(scanned_file) != key or scanned_file.path in group_paths
+                for scanned_file in scan.files
+            )
+            link_count = max(candidate_file.link_count for candidate_file, _, _ in group)
+            frees_inode = (
+                all_linked_paths
+                and len(group_paths) == all_link_counts.get(key, 0)
+                and link_count <= len(group_paths)
+            )
+            allocated = 0
+            if frees_inode and key not in accounted_inodes:
+                allocated = file.allocated_bytes
+                accounted_inodes.add(key)
+            planned.append(
+                GcCandidate(
+                    category=category,
+                    path=file.path,
+                    apparent_bytes=file.apparent_bytes,
+                    allocated_bytes=allocated,
+                    reason=reason,
+                )
+            )
+
+        return GcPlan(
+            candidates=tuple(planned),
+            apparent_bytes=sum(candidate.apparent_bytes for candidate in planned),
+            allocated_bytes=sum(candidate.allocated_bytes for candidate in planned),
+            include_legacy=include_legacy,
+        )
+
+    def gc(self, plan: GcPlan | None = None, *, include_legacy: bool = False) -> GcReport:
+        """Collect unreachable cache data, revalidating a fresh plan under lock.
+
+        A supplied plan is advisory only; candidate paths and reachability are
+        recomputed while holding the GC lock before any deletion is attempted.
+        """
+        if plan is not None:
+            include_legacy = plan.include_legacy
 
         with FileLock(self._gc_lock_path()):
             installations = self.installed()
+            scan = self._scan_cache()
+            current_plan = self._build_gc_plan_unlocked(
+                installations, scan, include_legacy=include_legacy
+            )
             referenced_blobs = {
                 artifact.sha256
                 for installation in installations
                 for artifact in installation.artifacts
+                if artifact.sha256
             }
+            candidates_by_path = {
+                candidate.path: candidate for candidate in current_plan.candidates
+            }
+            removed_paths: set[Path] = set()
+            removed_stats: dict[Path, os.stat_result] = {}
             removed_blobs = 0
             removed_blob_bytes = 0
-            for blob in self.blobs.glob("*/*"):
-                if blob.is_file() and blob.name not in referenced_blobs:
-                    removed_blob_bytes += blob.stat().st_size
-                    blob.unlink()
+            removed_auxiliary = 0
+            removed_auxiliary_bytes = 0
+            removed_legacy_count = 0
+            removed_legacy_bytes = 0
+            removed_apparent_bytes = 0
+
+            def unlink_regular(path: Path) -> os.stat_result | None:
+                try:
+                    current_stat = os.stat(path, follow_symlinks=False)
+                except OSError:
+                    return None
+                if not stat_module.S_ISREG(current_stat.st_mode):
+                    return None
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    return None
+                removed_paths.add(path)
+                removed_stats[path] = current_stat
+                return current_stat
+
+            for candidate in current_plan.candidates:
+                if candidate.category == "orphan_blob":
+                    if candidate.path.name in referenced_blobs:
+                        continue
+                    file_stat = unlink_regular(candidate.path)
+                    if file_stat is None:
+                        continue
                     removed_blobs += 1
+                    removed_blob_bytes += file_stat.st_size
+                    removed_apparent_bytes += file_stat.st_size
+                elif candidate.category == "legacy_cache":
+                    try:
+                        relative_parts = candidate.path.relative_to(self.root).parts
+                    except ValueError:
+                        continue
+                    if not relative_parts or relative_parts[0] != "pocket-voice-prompts":
+                        continue
+                    file_stat = unlink_regular(candidate.path)
+                    if file_stat is None:
+                        continue
+                    removed_legacy_count += 1
+                    removed_legacy_bytes += file_stat.st_size
+                    removed_apparent_bytes += file_stat.st_size
 
             state_root = self.root / "pocket-voice-states"
             state_references = self._pocket_voice_state_references(installations)
-            removed_auxiliary = 0
-            removed_auxiliary_bytes = 0
-            for metadata_path in sorted(state_root.glob("*/*/*.json")):
+            metadata_candidates = sorted(
+                candidate.path
+                for candidate in current_plan.candidates
+                if candidate.category == "orphan_pocket_voice_state"
+                and candidate.path.suffix == ".json"
+            )
+            for metadata_path in metadata_candidates:
                 cache_dir = metadata_path.parent
                 lock_path = state_root / "locks" / f"{cache_dir.name}.lock"
                 with FileLock(lock_path):
-                    if not metadata_path.is_file():
+                    metadata_stat = None
+                    try:
+                        metadata_stat = os.stat(metadata_path, follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if not stat_module.S_ISREG(metadata_stat.st_mode):
                         continue
                     try:
                         record = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -841,138 +1257,411 @@ class AssetStore:
                     if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
                         continue
                     parsed_key = self._pocket_voice_state_key(record["key"])
-                    if parsed_key is None:
+                    if parsed_key is None or self._pocket_voice_state_is_referenced(
+                        record, parsed_key, state_references
+                    ):
                         continue
-                    if self._pocket_voice_state_is_referenced(record, parsed_key, state_references):
-                        continue
+
                     state_path = metadata_path.with_suffix(".safetensors")
+                    removed_record = False
                     for cached_path in (state_path, metadata_path):
-                        if cached_path.is_file():
-                            removed_auxiliary_bytes += cached_path.stat().st_size
-                            cached_path.unlink()
-                    removed_auxiliary += 1
+                        if cached_path not in candidates_by_path:
+                            continue
+                        file_stat = unlink_regular(cached_path)
+                        if file_stat is None:
+                            continue
+                        removed_auxiliary_bytes += file_stat.st_size
+                        removed_apparent_bytes += file_stat.st_size
+                        if cached_path == metadata_path:
+                            removed_record = True
+                    if removed_record:
+                        removed_auxiliary += 1
                     with suppress(OSError):
                         cache_dir.rmdir()
                         cache_dir.parent.rmdir()
+
+            blob_paths = [
+                candidate.path
+                for candidate in current_plan.candidates
+                if candidate.category == "orphan_blob"
+            ]
+            state_paths = [
+                candidate.path
+                for candidate in current_plan.candidates
+                if candidate.category == "orphan_pocket_voice_state"
+            ]
+            legacy_paths = [
+                candidate.path
+                for candidate in current_plan.candidates
+                if candidate.category == "legacy_cache"
+            ]
+            self._prune_empty_dirs(blob_paths, self.blobs)
+            self._prune_empty_dirs(state_paths, state_root)
+            self._prune_empty_dirs(legacy_paths, self.root)
+
+            planned_by_inode: dict[tuple[Any, ...], list[GcCandidate]] = {}
+            for candidate in current_plan.candidates:
+                file = next((item for item in scan.files if item.path == candidate.path), None)
+                if file is None:
+                    continue
+                key = (
+                    ("inode", file.device, file.inode)
+                    if file.inode
+                    else ("path", os.fspath(file.path))
+                )
+                planned_by_inode.setdefault(key, []).append(candidate)
+            removed_allocated_bytes = sum(
+                sum(candidate.allocated_bytes for candidate in group)
+                for group in planned_by_inode.values()
+                if group and all(candidate.path in removed_paths for candidate in group)
+            )
 
             return GcReport(
                 removed_blobs=removed_blobs,
                 removed_bytes=removed_blob_bytes,
                 removed_auxiliary_count=removed_auxiliary,
                 removed_auxiliary_bytes=removed_auxiliary_bytes,
+                removed_candidates=len(removed_paths),
+                removed_apparent_bytes=removed_apparent_bytes,
+                removed_allocated_bytes=removed_allocated_bytes,
+                removed_legacy_count=removed_legacy_count,
+                removed_legacy_bytes=removed_legacy_bytes,
             )
 
-    def usage(self) -> CacheUsage:
-        """Compute logical, physical, orphan, and auxiliary cache usage."""
-        from .types import CacheUsage
+    @staticmethod
+    def _prune_empty_dirs(paths: Sequence[Path], boundary: Path) -> None:
+        """Remove only empty descendants of a known cache subtree."""
+        for path in sorted(set(paths), key=os.fspath, reverse=True):
+            directory = path.parent
+            while directory != boundary and boundary in directory.parents:
+                with suppress(OSError):
+                    directory.rmdir()
+                directory = directory.parent
 
-        installations = self.installed()
+    def _scan_cache(self) -> CacheScan:
+        """Scan every regular cache file once without following symlinks."""
+        root_categories = {
+            "blobs": "blobs",
+            "installs": "installations",
+            "catalogs": "catalogs",
+            "locks": "locks",
+            "pocket-voice-states": "auxiliary",
+            "pocket-voice-prompts": "legacy",
+        }
+        scan_errors: list[str] = []
+        root_names: set[str] = set()
+        try:
+            with os.scandir(self.root) as entries:
+                root_names.update(entry.name for entry in entries)
+        except OSError as exc:
+            scan_errors.append(f"{self.root}: {exc}")
 
-        # Install logical bytes
-        install_logical = sum(
-            artifact.size for inst in installations for artifact in inst.artifacts
+        files: list[CacheFileUsage] = []
+        top_level_totals: dict[str, list[int]] = {}
+        seen_inodes: set[tuple[Any, ...]] = set()
+        apparent_bytes = 0
+        unique_apparent_bytes = 0
+        allocated_bytes = 0
+
+        def on_walk_error(exc: OSError) -> None:
+            location = getattr(exc, "filename", None) or self.root
+            scan_errors.append(f"{location}: {exc}")
+
+        for current, directories, filenames in os.walk(
+            self.root, topdown=True, onerror=on_walk_error, followlinks=False
+        ):
+            current_path = Path(current)
+            directories[:] = [
+                name for name in sorted(directories) if not os.path.islink(current_path / name)
+            ]
+            for filename in sorted(filenames):
+                path = current_path / filename
+                try:
+                    file_stat = os.stat(path, follow_symlinks=False)
+                except OSError as exc:
+                    scan_errors.append(f"{path}: {exc}")
+                    continue
+                if not stat_module.S_ISREG(file_stat.st_mode):
+                    continue
+
+                try:
+                    relative_parts = path.relative_to(self.root).parts
+                except ValueError:
+                    continue
+                top_name = relative_parts[0] if relative_parts else path.name
+                if top_name == "blobs":
+                    category = "blob"
+                elif top_name == "installs":
+                    category = (
+                        "metadata"
+                        if filename in {_INSTALL_MANIFEST_FILENAME, "manifest.json"}
+                        else "install"
+                    )
+                elif top_name == "catalogs":
+                    category = "catalog"
+                elif top_name == "locks" or (
+                    top_name == "pocket-voice-states" and "locks" in relative_parts[1:]
+                ):
+                    category = "lock"
+                elif top_name == "pocket-voice-states":
+                    category = "auxiliary"
+                elif top_name == "pocket-voice-prompts":
+                    category = "legacy"
+                else:
+                    category = "other"
+
+                size = file_stat.st_size
+                allocated = _allocated_bytes(file_stat)
+                device = int(getattr(file_stat, "st_dev", 0))
+                inode = int(getattr(file_stat, "st_ino", 0))
+                link_count = int(getattr(file_stat, "st_nlink", 1))
+                files.append(
+                    CacheFileUsage(
+                        path=path,
+                        category=category,
+                        apparent_bytes=size,
+                        allocated_bytes=allocated,
+                        device=device,
+                        inode=inode,
+                        link_count=link_count,
+                    )
+                )
+                apparent_bytes += size
+                totals = top_level_totals.setdefault(top_name, [0, 0, 0, 0])
+                totals[0] += 1
+                totals[1] += size
+                inode_key: tuple[Any, ...] = (
+                    ("inode", device, inode) if inode else ("path", os.fspath(path))
+                )
+                if inode_key not in seen_inodes:
+                    seen_inodes.add(inode_key)
+                    unique_apparent_bytes += size
+                    allocated_bytes += allocated
+                    totals[2] += size
+                    totals[3] += allocated
+
+        known_roots = set(root_categories)
+        top_level_usage = tuple(
+            CachePathUsage(
+                path=self.root / name,
+                category=root_categories.get(name, "unmanaged"),
+                file_count=top_level_totals.get(name, [0, 0, 0, 0])[0],
+                apparent_bytes=top_level_totals.get(name, [0, 0, 0, 0])[1],
+                unique_apparent_bytes=top_level_totals.get(name, [0, 0, 0, 0])[2],
+                allocated_bytes=top_level_totals.get(name, [0, 0, 0, 0])[3],
+            )
+            for name in sorted(known_roots | root_names)
+        )
+        unmanaged_paths = tuple(self.root / name for name in sorted(root_names - known_roots))
+        legacy_paths = tuple(
+            self.root / name for name in sorted(root_names & {"pocket-voice-prompts"})
         )
 
-        # Catalog bytes
-        catalog_bytes = 0
-        if self.root.joinpath("catalogs").is_dir():
-            for f in self.root.joinpath("catalogs").iterdir():
-                if f.is_file():
-                    catalog_bytes += f.stat().st_size
+        try:
+            disk = shutil.disk_usage(self.root)
+            filesystem = CacheFilesystemUsage(
+                total_bytes=disk.total,
+                used_bytes=disk.used,
+                free_bytes=disk.free,
+            )
+        except OSError as exc:
+            scan_errors.append(f"filesystem capacity for {self.root}: {exc}")
+            filesystem = CacheFilesystemUsage(0, 0, 0)
 
-        # Unique file bytes (inode-based dedup)
-        seen_inodes: set[tuple[int, int]] = set()
-        unique_bytes = 0
+        return CacheScan(
+            root=self.root,
+            filesystem=filesystem,
+            files=tuple(files),
+            top_level_usage=top_level_usage,
+            apparent_bytes=apparent_bytes,
+            unique_apparent_bytes=unique_apparent_bytes,
+            allocated_bytes=allocated_bytes,
+            unmanaged_paths=unmanaged_paths,
+            legacy_paths=legacy_paths,
+            errors=tuple(scan_errors),
+        )
 
-        # Walk blob store
-        blob_apparent = 0
-        if self.blobs.is_dir():
-            for blob in self.blobs.glob("*/*"):
-                if blob.is_file():
-                    st = blob.stat()
-                    blob_apparent += st.st_size
-                    inode_key = (st.st_dev, st.st_ino)
-                    if inode_key not in seen_inodes:
-                        seen_inodes.add(inode_key)
-                        unique_bytes += st.st_size
+    def usage(self) -> CacheUsage:
+        """Compute logical, whole-root, orphan, and auxiliary cache usage."""
+        installations = self.installed()
+        scan = self._scan_cache()
+        file_by_path = {file.path: file for file in scan.files}
+        files_by_category: dict[str, list[CacheFileUsage]] = {}
+        for file in scan.files:
+            files_by_category.setdefault(file.category, []).append(file)
 
-        # Walk installs (skip manifest.json from unique count since it's not a blob)
-        for inst in installations:
-            for artifact in inst.artifacts:
-                path = artifact.path
-                if path.is_file():
-                    st = path.stat()
-                    inode_key = (st.st_dev, st.st_ino)
-                    if inode_key not in seen_inodes:
-                        seen_inodes.add(inode_key)
-                        unique_bytes += st.st_size
+        install_logical = sum(
+            artifact.size for installation in installations for artifact in installation.artifacts
+        )
+        referenced = {
+            artifact.sha256
+            for installation in installations
+            for artifact in installation.artifacts
+            if artifact.sha256
+        }
+        artifact_paths = {
+            artifact.path for installation in installations for artifact in installation.artifacts
+        }
 
-        state_root = self.root / "pocket-voice-states"
-        auxiliary_bytes = 0
+        def inode_key(file: CacheFileUsage) -> tuple[Any, ...]:
+            if file.inode:
+                return ("inode", file.device, file.inode)
+            return ("path", os.fspath(file.path))
+
+        # Preserve the historical narrower metric: blobs, manifest-listed install artifacts,
+        # and Pocket state files, deduplicated by inode (but not manifests/catalogs/locks).
+        legacy_counted_files = [
+            file
+            for file in scan.files
+            if file.category == "blob"
+            or file.category == "auxiliary"
+            or (file.category == "install" and file.path in artifact_paths)
+        ]
+        seen_legacy_inodes: set[tuple[Any, ...]] = set()
+        unique_file_bytes = 0
+        for file in legacy_counted_files:
+            key = inode_key(file)
+            if key not in seen_legacy_inodes:
+                seen_legacy_inodes.add(key)
+                unique_file_bytes += file.apparent_bytes
+
+        blob_files = [
+            file
+            for file in files_by_category.get("blob", ())
+            if len(file.path.relative_to(self.blobs).parts) == 2
+        ]
+        blob_apparent = sum(file.apparent_bytes for file in blob_files)
+        referenced_blob_files = [file for file in blob_files if file.path.name in referenced]
+        orphan_blob_files = [file for file in blob_files if file.path.name not in referenced]
+        referenced_blob_bytes = sum(file.apparent_bytes for file in referenced_blob_files)
+        orphan_blob_bytes = sum(file.apparent_bytes for file in orphan_blob_files)
+
+        def unique_allocated(files: Sequence[CacheFileUsage]) -> int:
+            seen: set[tuple[Any, ...]] = set()
+            allocated = 0
+            for file in files:
+                key = inode_key(file)
+                if key not in seen:
+                    seen.add(key)
+                    allocated += file.allocated_bytes
+            return allocated
+
+        referenced_blob_allocated = unique_allocated(referenced_blob_files)
+
+        hardlinked_count = 0
+        hardlinked_bytes = 0
+        copied_count = 0
+        copied_bytes = 0
+        missing_blob_count = 0
+        for installation in installations:
+            for artifact in installation.artifacts:
+                if not artifact.sha256:
+                    missing_blob_count += 1
+                    continue
+                blob_path = self.blobs / artifact.sha256[:2] / artifact.sha256
+                blob_file = file_by_path.get(blob_path)
+                if blob_file is None:
+                    missing_blob_count += 1
+                    continue
+                install_file = file_by_path.get(artifact.path)
+                if install_file is None:
+                    continue
+                if (
+                    blob_file.inode != 0
+                    and install_file.inode == blob_file.inode
+                    and install_file.device == blob_file.device
+                ):
+                    hardlinked_count += 1
+                    hardlinked_bytes += install_file.apparent_bytes
+                else:
+                    copied_count += 1
+                    copied_bytes += install_file.apparent_bytes
+
+        auxiliary_files = files_by_category.get("auxiliary", [])
+        auxiliary_bytes = sum(file.apparent_bytes for file in auxiliary_files)
         pocket_state_count = 0
         pocket_state_bytes = 0
         orphan_auxiliary_count = 0
         orphan_auxiliary_bytes = 0
+
         state_references = self._pocket_voice_state_references(installations)
-        if state_root.is_dir():
-            for cached_file in sorted(state_root.rglob("*")):
-                if (
-                    not cached_file.is_file()
-                    or "locks" in cached_file.relative_to(state_root).parts
-                ):
-                    continue
-                stat = cached_file.stat()
-                auxiliary_bytes += stat.st_size
-                inode_key = (stat.st_dev, stat.st_ino)
-                if inode_key not in seen_inodes:
-                    seen_inodes.add(inode_key)
-                    unique_bytes += stat.st_size
+        state_root = self.root / "pocket-voice-states"
+        for metadata_path in sorted(state_root.glob("*/*/*.json")):
+            metadata_file = file_by_path.get(metadata_path)
+            if metadata_file is None:
+                continue
+            try:
+                record = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
+                continue
+            parsed_key = self._pocket_voice_state_key(record["key"])
+            if parsed_key is None:
+                continue
 
-            for metadata_path in sorted(state_root.glob("*/*/*.json")):
-                try:
-                    record = json.loads(metadata_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    continue
-                if not isinstance(record, dict) or not isinstance(record.get("key"), dict):
-                    continue
-                parsed_key = self._pocket_voice_state_key(record["key"])
-                if parsed_key is None:
-                    continue
-                state_path = metadata_path.with_suffix(".safetensors")
-                state_size = 0
-                if state_path.is_file():
-                    pocket_state_count += 1
-                    state_size = state_path.stat().st_size
-                    pocket_state_bytes += state_size
-                record_size = state_size + metadata_path.stat().st_size
-                if not self._pocket_voice_state_is_referenced(record, parsed_key, state_references):
-                    orphan_auxiliary_count += 1
-                    orphan_auxiliary_bytes += record_size
+            state_file = file_by_path.get(metadata_path.with_suffix(".safetensors"))
+            if state_file is not None:
+                pocket_state_count += 1
+                pocket_state_bytes += state_file.apparent_bytes
+            record_files = [metadata_file]
+            if state_file is not None:
+                record_files.append(state_file)
+            record_size = sum(file.apparent_bytes for file in record_files)
+            if not self._pocket_voice_state_is_referenced(record, parsed_key, state_references):
+                orphan_auxiliary_count += 1
+                orphan_auxiliary_bytes += record_size
 
-        # Orphan blobs
-        referenced = {artifact.sha256 for inst in installations for artifact in inst.artifacts}
-        orphan_count = 0
-        orphan_bytes = 0
-        if self.blobs.is_dir():
-            for blob in self.blobs.glob("*/*"):
-                if blob.is_file() and blob.name not in referenced:
-                    orphan_count += 1
-                    orphan_bytes += blob.stat().st_size
-
+        category_bytes = {
+            category: sum(file.apparent_bytes for file in category_files)
+            for category, category_files in files_by_category.items()
+        }
+        gc_plan = self._build_gc_plan_unlocked(installations, scan)
+        orphan_blob_allocated = sum(
+            candidate.allocated_bytes
+            for candidate in gc_plan.candidates
+            if candidate.category == "orphan_blob"
+        )
         return CacheUsage(
             root=self.root,
             installation_count=len(installations),
             install_logical_bytes=install_logical,
             blob_apparent_bytes=blob_apparent,
-            catalog_bytes=catalog_bytes,
-            unique_file_bytes=unique_bytes,
-            orphan_blob_count=orphan_count,
-            orphan_blob_bytes=orphan_bytes,
+            catalog_bytes=category_bytes.get("catalog", 0),
+            unique_file_bytes=unique_file_bytes,
+            orphan_blob_count=len(orphan_blob_files),
+            orphan_blob_bytes=orphan_blob_bytes,
             auxiliary_bytes=auxiliary_bytes,
             pocket_voice_state_count=pocket_state_count,
             pocket_voice_state_bytes=pocket_state_bytes,
             orphan_auxiliary_count=orphan_auxiliary_count,
             orphan_auxiliary_bytes=orphan_auxiliary_bytes,
+            filesystem_total_bytes=scan.filesystem.total_bytes,
+            filesystem_used_bytes=scan.filesystem.used_bytes,
+            filesystem_free_bytes=scan.filesystem.free_bytes,
+            cache_apparent_bytes=scan.apparent_bytes,
+            cache_unique_apparent_bytes=scan.unique_apparent_bytes,
+            cache_allocated_bytes=scan.allocated_bytes,
+            install_apparent_bytes=category_bytes.get("install", 0),
+            metadata_bytes=category_bytes.get("metadata", 0),
+            lock_bytes=category_bytes.get("lock", 0),
+            other_cache_bytes=category_bytes.get("other", 0),
+            legacy_cache_bytes=category_bytes.get("legacy", 0),
+            hardlinked_install_artifact_count=hardlinked_count,
+            hardlinked_install_bytes=hardlinked_bytes,
+            copied_install_artifact_count=copied_count,
+            copied_install_bytes=copied_bytes,
+            missing_blob_artifact_count=missing_blob_count,
+            referenced_blob_count=len(referenced_blob_files),
+            referenced_blob_bytes=referenced_blob_bytes,
+            referenced_blob_allocated_bytes=referenced_blob_allocated,
+            orphan_blob_allocated_bytes=orphan_blob_allocated,
+            reclaimable_now_bytes=gc_plan.apparent_bytes,
+            reclaimable_now_allocated_bytes=gc_plan.allocated_bytes,
+            unmanaged_paths=scan.unmanaged_paths,
+            legacy_paths=scan.legacy_paths,
+            top_level_usage=scan.top_level_usage,
+            scan_errors=scan.errors,
         )
 
     def replace(

@@ -467,6 +467,109 @@ class InferenceResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CacheFilesystemUsage:
+    """Filesystem capacity for the cache's containing volume."""
+
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class CacheFileUsage:
+    """One regular file observed by a cache-root scan."""
+
+    path: Path
+    category: str
+    apparent_bytes: int
+    allocated_bytes: int
+    device: int
+    inode: int
+    link_count: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class CachePathUsage:
+    """Aggregated storage usage for one top-level cache path."""
+
+    path: Path
+    category: str
+    file_count: int
+    apparent_bytes: int
+    unique_apparent_bytes: int
+    allocated_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class CacheScan:
+    """Consistent, inode-aware inventory of regular files below the cache root."""
+
+    root: Path
+    filesystem: CacheFilesystemUsage
+    files: tuple[CacheFileUsage, ...]
+    top_level_usage: tuple[CachePathUsage, ...]
+    apparent_bytes: int
+    unique_apparent_bytes: int
+    allocated_bytes: int
+    unmanaged_paths: tuple[Path, ...] = ()
+    legacy_paths: tuple[Path, ...] = ()
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class InstallationStorageUsage:
+    """Logical and reclaimable storage attributed to one installation."""
+
+    ref: str
+    storage_id: str
+    logical_bytes: int
+    immediate_reclaimable_bytes: int
+    gc_reclaimable_bytes: int
+    immediate_reclaimable_allocated_bytes: int = 0
+    gc_reclaimable_allocated_bytes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class GcCandidate:
+    """One path eligible for a conservative, explicitly categorized GC plan."""
+
+    category: str
+    path: Path
+    apparent_bytes: int
+    allocated_bytes: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class GcPlan:
+    """Immutable preview of cache files eligible for garbage collection."""
+
+    candidates: tuple[GcCandidate, ...]
+    apparent_bytes: int
+    allocated_bytes: int
+
+    include_legacy: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RemovalPlan:
+    """Non-mutating estimate of logical and physical impact from removals."""
+
+    installations: tuple[InstallationStorageUsage, ...]
+    logical_bytes: int
+    immediate_reclaimable_bytes: int
+    gc_reclaimable_bytes: int
+    total_reclaimable_bytes: int
+    immediate_reclaimable_allocated_bytes: int = 0
+    gc_reclaimable_allocated_bytes: int = 0
+    total_reclaimable_allocated_bytes: int = 0
+    newly_orphaned_blob_count: int = 0
+    newly_orphaned_blob_bytes: int = 0
+    newly_orphaned_auxiliary_count: int = 0
+    newly_orphaned_auxiliary_bytes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class CacheUsage:
     """Logical, physical, and auxiliary byte/count totals for the cache."""
 
@@ -487,6 +590,33 @@ class CacheUsage:
     orphan_auxiliary_count: int = 0
     orphan_auxiliary_bytes: int = 0
 
+    filesystem_total_bytes: int = 0
+    filesystem_used_bytes: int = 0
+    filesystem_free_bytes: int = 0
+    cache_apparent_bytes: int = 0
+    cache_unique_apparent_bytes: int = 0
+    cache_allocated_bytes: int = 0
+    install_apparent_bytes: int = 0
+    metadata_bytes: int = 0
+    lock_bytes: int = 0
+    other_cache_bytes: int = 0
+    legacy_cache_bytes: int = 0
+    hardlinked_install_artifact_count: int = 0
+    hardlinked_install_bytes: int = 0
+    copied_install_artifact_count: int = 0
+    copied_install_bytes: int = 0
+    missing_blob_artifact_count: int = 0
+    referenced_blob_count: int = 0
+    referenced_blob_bytes: int = 0
+    referenced_blob_allocated_bytes: int = 0
+    orphan_blob_allocated_bytes: int = 0
+    reclaimable_now_bytes: int = 0
+    reclaimable_now_allocated_bytes: int = 0
+    unmanaged_paths: tuple[Path, ...] = ()
+    legacy_paths: tuple[Path, ...] = ()
+    top_level_usage: tuple[CachePathUsage, ...] = ()
+    scan_errors: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True, slots=True)
 class GcReport:
@@ -501,6 +631,11 @@ class GcReport:
     removed_bytes: int
     removed_auxiliary_count: int = 0
     removed_auxiliary_bytes: int = 0
+    removed_candidates: int = 0
+    removed_apparent_bytes: int = 0
+    removed_allocated_bytes: int = 0
+    removed_legacy_count: int = 0
+    removed_legacy_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)

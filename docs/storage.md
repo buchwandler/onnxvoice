@@ -17,47 +17,63 @@ A typical cache-root layout is:
 
 ## Content-addressed blobs and installations
 
-Verified artifact bytes are stored by digest and can be reused by multiple installations. Installations link to the blobs where supported. If the filesystem cannot hard-link, the store can copy the verified file into the installation, which can increase physical disk usage.
+`blobs/sha256` is ONNXVoice's verified content-addressed artifact store. The blob is the shared, checksum-verified copy of an artifact and can be reused by multiple installations. Installation views normally hard-link to blobs; when hard links are unavailable, ONNXVoice copies the verified file instead. Do not delete `blobs/` manually: it may contain objects still referenced by installed assets, and direct deletion bypasses reachability checks and locks.
 
 An installation manifest records the selected item, artifact metadata, and verification information. It is separate from the shared blob objects.
 
 ## Understand cache usage
 
+## Understand cache usage
+
 ```bash
 onnxvoice cache info
+onnxvoice cache info --details
 onnxvoice cache info --format json
 ```
 
-The report distinguishes:
+The default report highlights filesystem free space, whole-cache disk allocation, and bytes reclaimable by safe GC. The detailed report provides category and top-level path totals, installation hard-link/copy counts, referenced and orphan blob data, and scan diagnostics. JSON always contains the full structured report and preserves existing flat keys; byte values remain integer counts.
 
-- installation logical bytes, which count files as represented by installations;
-- blob apparent bytes, which count content-addressed objects;
-- unique file bytes, which account for files not shared by hard links;
-- orphan blob count and bytes;
-- catalog bytes;
-- auxiliary bytes, including Pocket voice-state data;
-- Pocket voice-state count and bytes;
-- orphan auxiliary count and bytes.
+Metrics have different meanings:
 
-These values answer different questions. Logical installation size is not necessarily the amount of physical disk consumed.
+- **Logical installation bytes** count the represented artifact payloads.
+- **Apparent bytes** sum file sizes; hard-linked names can appear more than once.
+- **Unique apparent bytes** count each file inode once.
+- **Allocated bytes** sum filesystem blocks once per inode where the platform reports them.
+- **Reclaimable now** includes only current safe GC candidates, not unknown or unmanaged files.
+
+Installation files are usually hard links to shared blobs. Copy-fallback installations consume additional space and may free those copied blocks immediately when removed. Consequently, adding blob bytes and installation logical size is not a valid estimate of disk usage or removal impact.
+
+The scan includes every regular file below the cache root, does not follow symlinks, and reports unknown/legacy paths. Unknown cache content is visible but is never considered a GC candidate. The filesystem capacity fields describe the volume containing the cache, which may also contain unrelated files.
 
 ## Remove and collect garbage
 
-Removing an installation deletes its managed installation representation, but shared blobs may still be reachable from other installations. Pocket voice states are tracked separately and remain cached while any installed matching bundle variant references them.
+Removing an installation deletes its managed installation view. Garbage collection removes shared content only after no remaining installation references it. Pocket voice-state records likewise remain while referenced by any installed matching bundle variant.
 
-Preview collection before deleting data:
+Preview safe GC or removal before deleting data:
 
 ```bash
 onnxvoice cache gc --dry-run
+onnxvoice remove REF --dry-run --gc
 ```
 
-Then collect unreachable blobs and auxiliary records:
+Removal preview distinguishes the logical installation size, immediate unique bytes, newly orphaned blobs/states, and total expected reclaimability after optional GC. For multiple refs, all selections are validated and planned before mutation. Actual `remove REF --gc` reports immediate reclaimed bytes and post-removal GC bytes separately from logical size.
+
+Run standard garbage collection with:
 
 ```bash
 onnxvoice cache gc
 ```
 
-Removal and collection are deliberately separate operations. `onnxvoice remove REF --gc` combines them for convenience. Pocket state reachability is based on installed bundle variants.
+GC uses reachability rather than file age and revalidates candidates under its lock before deletion. It removes only unreachable content-addressed blobs and recognized unreferenced Pocket state. A stale preview is never trusted for destructive execution.
+
+The retired `pocket-voice-prompts/` directory is reported as legacy cache data but is not removed by default. Preview or explicitly opt in to its cleanup with `--include-legacy`:
+
+```bash
+onnxvoice cache gc --include-legacy --dry-run
+onnxvoice cache gc --include-legacy
+```
+
+This opt-in is limited to the recognized retired path; arbitrary unknown directories remain report-only.
 
 ## Offline cache behavior
 

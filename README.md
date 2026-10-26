@@ -46,6 +46,18 @@ onnxvoice installed
 onnxvoice cache info
 ```
 
+### Reclaim cache space
+
+```bash
+onnxvoice cache info --details
+onnxvoice cache gc --dry-run
+onnxvoice installed --sort size --desc
+onnxvoice remove REF --dry-run --gc
+onnxvoice remove REF --gc
+```
+
+`blobs/sha256` is ONNXVoice's verified content-addressed artifact store. Installation views normally hard-link to shared blobs, with copies used when hard links are unavailable, so blob size and installation logical size must not be added to estimate disk usage. Use ONNXVoice's cache and removal commands rather than deleting `blobs/` manually; unknown cache paths are reported but are never garbage-collected. The retired `pocket-voice-prompts/` path can be previewed or removed only with `onnxvoice cache gc --include-legacy`.
+
 ONNXVoice provides the shared asset-management CLI for Qwen3-TTS and other supported systems:
 
 ```bash

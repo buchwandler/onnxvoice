@@ -22,7 +22,17 @@ from .inventory import (
 from .store import AssetStore, ProgressCallback
 from .systems import get_adapter
 from .systems.kitten2_contract import Kitten2Bundle, load_kitten2_bundle
-from .types import CatalogItem, Installation, InstalledArtifact, VoiceRecord
+from .types import (
+    CacheUsage,
+    CatalogItem,
+    GcPlan,
+    GcReport,
+    Installation,
+    InstallationStorageUsage,
+    InstalledArtifact,
+    RemovalPlan,
+    VoiceRecord,
+)
 from .voices import iter_catalog_voices, parse_voice_ref
 
 CatalogResults = list[CatalogItem] | list[Installation]
@@ -460,6 +470,18 @@ class OnnxVoice:
             )
         return installation
 
+    def cache_usage(self) -> CacheUsage:
+        """Return local-only accounting for the managed cache root."""
+        return self.store.usage()
+
+    def plan_cache_gc(self, *, include_legacy: bool = False) -> GcPlan:
+        """Plan safe local garbage collection without mutating the cache."""
+        return self.store.plan_gc(include_legacy=include_legacy)
+
+    def gc_cache(self, *, include_legacy: bool = False) -> GcReport:
+        """Collect currently unreachable cache data without catalog/network access."""
+        return self.store.gc(include_legacy=include_legacy)
+
     def installed(self, system: str | None = None) -> Installations:
         """List verified managed installations without catalog access."""
         return self.store.installed(system)
@@ -609,17 +631,71 @@ class OnnxVoice:
         """Return the installation path for a selected installation."""
         return self.resolve(ref, quality=quality, distribution=distribution).path
 
+    def plan_remove(
+        self,
+        refs: Sequence[str],
+        *,
+        quality: str | None = None,
+        distribution: str | None = None,
+        all_variants: bool = False,
+        gc: bool = False,
+    ) -> RemovalPlan:
+        """Resolve and estimate one or more local installation removals."""
+        if isinstance(refs, str):
+            refs = (refs,)
+        if not refs:
+            raise ValueError("At least one installation reference is required.")
+        if all_variants and (quality is not None or distribution is not None):
+            raise ValueError("--all-variants cannot be combined with --quality/--distribution.")
+
+        selected: dict[tuple[str, str], Installation] = {}
+        for ref in refs:
+            installations = self.find_installed(ref)
+            if not installations:
+                raise NotInstalledError(f"Not installed: {ref}")
+            if all_variants:
+                matches = installations
+            elif quality is not None or distribution is not None:
+                system, item_id = parse_ref(ref)
+                storage_id = self._selection_storage_id(
+                    item_id, quality=quality, distribution=distribution
+                )
+                matches = [
+                    installation
+                    for installation in installations
+                    if (installation.storage_id or installation.id) == storage_id
+                ]
+                if not matches:
+                    details = []
+                    if quality is not None:
+                        details.append(f"quality={quality!r}")
+                    if distribution is not None:
+                        details.append(f"distribution={distribution!r}")
+                    raise NotInstalledError(f"Not installed: {ref} with {', '.join(details)}")
+            elif len(installations) > 1:
+                raise ValueError(
+                    f"Multiple installations match {ref}; specify selectors or all_variants=True."
+                )
+            else:
+                matches = installations
+
+            for installation in matches:
+                key = self.store._installation_key(installation)
+                selected.setdefault(key, installation)
+
+        return self.store.plan_remove(tuple(selected.values()), gc=gc)
+
     def remove(
         self,
         ref: str,
         *,
         quality: str | None = None,
         distribution: str | None = None,
-    ) -> None:
-        """Remove a selected installation."""
+    ) -> InstallationStorageUsage:
+        """Remove a selected installation and report immediate storage reclamation."""
         system, item_id = parse_ref(ref)
         storage_id = self._selection_storage_id(item_id, quality=quality, distribution=distribution)
-        self.store.remove(system, storage_id)
+        return self.store.remove(system, storage_id)
 
     def verify(
         self,
