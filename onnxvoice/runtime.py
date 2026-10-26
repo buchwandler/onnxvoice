@@ -519,7 +519,13 @@ class OnnxSession:
         try:
             session = ort.InferenceSession(str(self.model), **kwargs)
         except Exception as exc:
-            raise RuntimeContractError(f"Could not create ONNX Runtime session: {exc}") from exc
+            component = self.component or "<unspecified>"
+            raise RuntimeContractError(
+                "Could not create ONNX Runtime session "
+                f"for component {component!r} "
+                f"with providers {list(selected)!r} "
+                f"from {self.model.name!r}: {exc}"
+            ) from exc
         if self.strict_providers:
             disable_fallback = getattr(session, "disable_fallback", None)
             if not callable(disable_fallback):

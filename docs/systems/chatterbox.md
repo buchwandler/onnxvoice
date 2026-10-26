@@ -13,6 +13,8 @@ Use `onnxvoice engines options --engine chatterbox --target nano-v2` or `--targe
 
 Both bundles generate audio at the native sample rate of 24 kHz. The profile selects the matching graph artifacts; install a compatible ONNX Runtime provider for the target device. For example, the Nano `cpu` profile uses CPU-oriented graph variants, while Turbo also offers the `q4f16` profile.
 
+A catalog profile identifies its graph artifacts; its availability does not guarantee that every execution provider supports those graphs. Compatibility depends on the selected artifacts and the installed ONNX Runtime build.
+
 ## Ownership boundary
 
 OnnxVoice owns the `chatterbox-onnx-bundles` catalog integration, revision-pinned artifact metadata, managed cache and installation, ONNX sessions, graph-contract validation, and generation. Its adapter runs four graph components:

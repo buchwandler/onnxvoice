@@ -21,6 +21,7 @@ class FakeOrt:
     def __init__(self) -> None:
         self.created: tuple[str, dict[str, Any]] | None = None
         self.session_options: FakeSessionOptions | None = None
+        self.creation_error: Exception | None = None
 
     def get_available_providers(self):
         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -31,6 +32,8 @@ class FakeOrt:
 
     def InferenceSession(self, model, **kwargs):
         self.created = (model, kwargs)
+        if self.creation_error is not None:
+            raise self.creation_error
         return SimpleNamespace(
             get_inputs=lambda: [
                 SimpleNamespace(name="tokens", type="tensor(int32)", shape=[1, "N"])
@@ -84,6 +87,70 @@ def test_session_passes_options_and_exposes_tensor_specs(tmp_path, monkeypatch):
     assert ort.created is not None
     assert ort.created[1]["provider_options"] == [{"device_id": "1"}]
     assert ort.created[1]["sess_options"] is session_options
+
+
+def test_session_creation_error_includes_component_and_resolved_providers(tmp_path, monkeypatch):
+    model = tmp_path / "speech_encoder_q4f16.onnx"
+    model.write_bytes(b"model")
+    ort = FakeOrt()
+    original = RuntimeError(
+        "[ONNXRuntimeError] : 9 : NOT_IMPLEMENTED : "
+        "Failed to find kernel for com.ms.internal.nhwc.AveragePool(19)"
+    )
+    ort.creation_error = original
+    monkeypatch.setattr(runtime, "_ort", lambda: ort)
+
+    session = runtime.OnnxSession(model, component="speech_encoder", providers="cpu")
+    assert ort.created is None
+
+    with pytest.raises(RuntimeContractError) as exc:
+        _ = session.session
+
+    message = str(exc.value)
+    assert "speech_encoder" in message
+    assert "['CPUExecutionProvider']" in message
+    assert model.name in message
+    assert "AveragePool(19)" in message
+    assert exc.value.__cause__ is original
+    assert ort.created is not None
+    assert ort.created[1]["providers"] == ["CPUExecutionProvider"]
+
+
+def test_session_creation_error_handles_missing_component(tmp_path, monkeypatch):
+    model = tmp_path / "model_without_component.onnx"
+    model.write_bytes(b"model")
+    ort = FakeOrt()
+    ort.creation_error = RuntimeError("simulated ORT failure")
+    monkeypatch.setattr(runtime, "_ort", lambda: ort)
+
+    session = runtime.OnnxSession(model, providers="cpu")
+    with pytest.raises(RuntimeContractError) as exc:
+        _ = session.session
+
+    message = str(exc.value)
+    assert "<unspecified>" in message
+    assert model.name in message
+    assert "['CPUExecutionProvider']" in message
+    assert "simulated ORT failure" in message
+
+
+def test_session_creation_error_reports_resolved_auto_provider(tmp_path, monkeypatch):
+    model = tmp_path / "auto_provider.onnx"
+    model.write_bytes(b"model")
+    ort = FakeOrt()
+    ort.creation_error = RuntimeError("simulated ORT failure")
+    monkeypatch.setattr(runtime, "_ort", lambda: ort)
+
+    session = runtime.OnnxSession(model, providers="auto")
+    with pytest.raises(RuntimeContractError) as exc:
+        _ = session.session
+
+    assert ort.created is not None
+    selected = ort.created[1]["providers"]
+    assert selected == ["CUDAExecutionProvider"]
+    assert repr(selected) in str(exc.value)
+    assert model.name in str(exc.value)
+    assert "simulated ORT failure" in str(exc.value)
 
 
 def test_strict_provider_policy_disables_implicit_cpu_fallback(tmp_path, monkeypatch):
