@@ -170,7 +170,7 @@ class PhononAdapter(SystemAdapter):
         self._generation: dict[str, Any] = {}
         self._voices: dict[str, dict[str, Any]] = {}
         self._default_voice: str | None = None
-        self._mimi_state_specs: tuple[tuple[str, tuple[int, ...], np.dtype[Any]], ...] = ()
+        self._mimi_state_specs: tuple[tuple[str, tuple[int, ...], np.dtype[Any] | None], ...] = ()
         self._mimi_bindings: tuple[_MimiStateBinding, ...] = ()
         self._offset_input_spec: TensorSpec | None = None
         self._offset_output_spec: TensorSpec | None = None
@@ -323,7 +323,9 @@ class PhononAdapter(SystemAdapter):
         return result
 
     @staticmethod
-    def _parse_mimi_state(raw: Any) -> tuple[tuple[str, tuple[int, ...], np.dtype[Any]], ...]:
+    def _parse_mimi_state(
+        raw: Any,
+    ) -> tuple[tuple[str, tuple[int, ...], np.dtype[Any] | None], ...]:
         if isinstance(raw, Mapping):
             if "name" in raw and "shape" in raw:
                 entries = [raw]
@@ -337,31 +339,46 @@ class PhononAdapter(SystemAdapter):
             entries = list(raw)
         else:
             raise RuntimeContractError("Phonon Mimi state must be a sequence or mapping")
-        result: list[tuple[str, tuple[int, ...], np.dtype[Any]]] = []
+
+        result: list[tuple[str, tuple[int, ...], np.dtype[Any] | None]] = []
         names: set[str] = set()
         for index, entry in enumerate(entries):
-            if not isinstance(entry, Mapping):
-                raise RuntimeContractError(f"Phonon Mimi state entry {index} must be an object")
-            name = entry.get("name") or entry.get("id")
+            dtype: np.dtype[Any] | None
+            if isinstance(entry, Mapping):
+                name = entry.get("name") or entry.get("id")
+                shape = entry.get("shape")
+                dtype_name = entry.get("dtype")
+                if not isinstance(dtype_name, str):
+                    raise RuntimeContractError(f"Phonon Mimi state {name!r} must declare a dtype")
+                dtype = _STATE_DTYPE_NAMES.get(dtype_name)
+                if dtype is None:
+                    raise RuntimeContractError(
+                        f"Phonon Mimi state {name!r} has unsupported dtype {dtype_name!r}"
+                    )
+            elif (
+                isinstance(entry, Sequence)
+                and not isinstance(entry, (str, bytes))
+                and len(entry) == 2
+            ):
+                name, shape = entry
+                dtype = None
+            else:
+                raise RuntimeContractError(
+                    f"Phonon Mimi state entry {index} must be an object "
+                    "or legacy [name, shape] pair"
+                )
+
             if not isinstance(name, str) or _STATE_NAME_RE.fullmatch(name) is None:
                 raise RuntimeContractError(f"Phonon Mimi state entry {index} has an invalid name")
             if name in names:
                 raise RuntimeContractError(f"Phonon Mimi state has duplicate name {name!r}")
-            shape = entry.get("shape")
             if not isinstance(shape, Sequence) or isinstance(shape, (str, bytes)):
                 raise RuntimeContractError(f"Phonon Mimi state {name!r} must declare a shape")
             if any(type(dimension) is not int or dimension < 0 for dimension in shape):
                 raise RuntimeContractError(f"Phonon Mimi state {name!r} has an invalid shape")
-            dtype_name = entry.get("dtype")
-            if not isinstance(dtype_name, str):
-                raise RuntimeContractError(f"Phonon Mimi state {name!r} must declare a dtype")
-            dtype = _STATE_DTYPE_NAMES.get(dtype_name)
-            if dtype is None:
-                raise RuntimeContractError(
-                    f"Phonon Mimi state {name!r} has unsupported dtype {dtype_name!r}"
-                )
             names.add(name)
             result.append((name, tuple(shape), dtype))
+
         if not result:
             raise RuntimeContractError("Phonon Mimi state inventory cannot be empty")
         return tuple(result)
@@ -778,11 +795,12 @@ class PhononAdapter(SystemAdapter):
                 input_spec = input_specs[input_name]
                 output_spec = output_specs[output_name]
                 input_dtype = self._dtype(input_spec, component)
-                if (
-                    input_dtype != configured_dtype
-                    or self._dtype(output_spec, component) != configured_dtype
-                ):
+                output_dtype = self._dtype(output_spec, component)
+                if input_dtype != output_dtype:
                     raise RuntimeContractError(f"Phonon Mimi state dtype mismatch for {name!r}")
+                if configured_dtype is not None and input_dtype != configured_dtype:
+                    raise RuntimeContractError(f"Phonon Mimi state dtype mismatch for {name!r}")
+                state_dtype = configured_dtype or input_dtype
                 if not self._compatible_static_shape(input_spec.shape, shape):
                     raise RuntimeContractError(f"Phonon Mimi state shape mismatch for {name!r}")
                 if not self._compatible_static_shape(output_spec.shape, shape):
@@ -795,7 +813,7 @@ class PhononAdapter(SystemAdapter):
                         input_name,
                         output_name,
                         shape,
-                        configured_dtype,
+                        state_dtype,
                         input_spec,
                         output_spec,
                     )

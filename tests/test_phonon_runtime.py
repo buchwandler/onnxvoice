@@ -94,10 +94,14 @@ class _FakeGraphs:
         eos_values: tuple[float, ...] = (-1.0, 5.0, 5.0, 5.0, 5.0),
         invalid_audio: bool = False,
         invalid_main_signature: bool = False,
+        mimi_input_ort_type: str = "tensor(float)",
+        mimi_output_ort_type: str | None = None,
     ) -> None:
         self.eos_values = eos_values
         self.invalid_audio = invalid_audio
         self.invalid_main_signature = invalid_main_signature
+        self.mimi_input_ort_type = mimi_input_ort_type
+        self.mimi_output_ort_type = mimi_output_ort_type
         self.sessions: dict[str, _FakeSession] = {}
         self.events: list[tuple[str, str]] = []
         self.main_stage = ""
@@ -208,12 +212,14 @@ class _FakeGraphs:
             inputs = (
                 _spec("latent", "tensor(float)", 1, 1, 3),
                 _spec("offset", "tensor(int64)", 1),
-                _spec("state.cache", "tensor(float)", 1, 2),
+                _spec("state.cache", self.mimi_input_ort_type, 1, 2),
             )
             outputs = (
                 _spec("audio", "tensor(float)", 1, 4),
                 _spec("next_offset", "tensor(int64)", 1),
-                _spec("next_state.cache", "tensor(float)", 1, 2),
+                _spec(
+                    "next_state.cache", self.mimi_output_ort_type or self.mimi_input_ort_type, 1, 2
+                ),
             )
 
             def run(feeds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -617,3 +623,70 @@ def test_runtime_fields_use_only_explicit_sections_and_known_aliases() -> None:
     }
 
     assert PhononAdapter._normalize_runtime(config) == _RUNTIME
+
+
+def test_legacy_mimi_state_pairs_infer_dtype_from_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_state = [["cache", [1, 2]]]
+    fake = _FakeGraphs(mimi_input_ort_type="tensor(float16)")
+    adapter, _ = _make_adapter(
+        tmp_path,
+        monkeypatch,
+        fake=fake,
+        runtime_overrides={"mimi_state": legacy_state},
+    )
+    adapter.installation.metadata["runtime"]["mimi_state"] = legacy_state
+
+    chunks = list(adapter.stream([1], duration_delta=0.25, max_frames=1))
+
+    assert len(chunks) == 1
+    assert fake.mimi_calls[0]["state.cache"].dtype == np.float16
+    assert fake.mimi_calls[0]["state.cache"].shape == (1, 2)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [["cache"]],
+        [["cache", [1, 2], "float32"]],
+        [[123, [1, 2]]],
+        [["cache", "1,2"]],
+        [["cache", [1, -1]]],
+    ],
+)
+def test_invalid_legacy_mimi_state_is_rejected(value: Any) -> None:
+    with pytest.raises(RuntimeContractError):
+        PhononAdapter._parse_mimi_state(value)
+
+
+def test_canonical_mimi_state_dtype_must_match_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured_state = [{"name": "cache", "shape": [1, 2], "dtype": "float64"}]
+    adapter, _ = _make_adapter(
+        tmp_path,
+        monkeypatch,
+        runtime_overrides={"mimi_state": configured_state},
+    )
+    adapter.installation.metadata["runtime"]["mimi_state"] = configured_state
+
+    with pytest.raises(RuntimeContractError, match="Mimi state dtype mismatch"):
+        list(adapter.stream([1], duration_delta=0.25, max_frames=1))
+
+
+def test_mimi_state_graph_input_and_output_dtypes_must_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_state = [["cache", [1, 2]]]
+    fake = _FakeGraphs(mimi_output_ort_type="tensor(float16)")
+    adapter, _ = _make_adapter(
+        tmp_path,
+        monkeypatch,
+        fake=fake,
+        runtime_overrides={"mimi_state": legacy_state},
+    )
+    adapter.installation.metadata["runtime"]["mimi_state"] = legacy_state
+
+    with pytest.raises(RuntimeContractError, match="Mimi state dtype mismatch"):
+        list(adapter.stream([1], duration_delta=0.25, max_frames=1))
