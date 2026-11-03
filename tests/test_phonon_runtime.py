@@ -96,12 +96,14 @@ class _FakeGraphs:
         invalid_main_signature: bool = False,
         mimi_input_ort_type: str = "tensor(float)",
         mimi_output_ort_type: str | None = None,
+        mimi_offset_scalar: bool = False,
     ) -> None:
         self.eos_values = eos_values
         self.invalid_audio = invalid_audio
         self.invalid_main_signature = invalid_main_signature
         self.mimi_input_ort_type = mimi_input_ort_type
         self.mimi_output_ort_type = mimi_output_ort_type
+        self.mimi_offset_scalar = mimi_offset_scalar
         self.sessions: dict[str, _FakeSession] = {}
         self.events: list[tuple[str, str]] = []
         self.main_stage = ""
@@ -209,14 +211,15 @@ class _FakeGraphs:
                 }
 
         elif component == "mimi_decoder":
+            offset_shape = () if self.mimi_offset_scalar else (1,)
             inputs = (
                 _spec("latent", "tensor(float)", 1, 1, 3),
-                _spec("offset", "tensor(int64)", 1),
+                _spec("offset", "tensor(int64)", *offset_shape),
                 _spec("state.cache", self.mimi_input_ort_type, 1, 2),
             )
             outputs = (
                 _spec("audio", "tensor(float)", 1, 4),
-                _spec("next_offset", "tensor(int64)", 1),
+                _spec("next_offset", "tensor(int64)", *offset_shape),
                 _spec(
                     "next_state.cache", self.mimi_output_ort_type or self.mimi_input_ort_type, 1, 2
                 ),
@@ -227,13 +230,17 @@ class _FakeGraphs:
                 self.mimi_calls.append(
                     {name: np.array(value, copy=True) for name, value in feeds.items()}
                 )
+                offset_value = np.asarray(feeds["offset"]).reshape(-1)[0]
                 if self.invalid_audio:
                     audio = np.full((1, 4), np.nan, dtype=np.float32)
                 else:
-                    audio = np.full((1, 4), float(feeds["offset"][0] + 1), dtype=np.float32)
+                    audio = np.full((1, 4), float(offset_value + 1), dtype=np.float32)
+                next_offset = feeds["offset"] + 1
+                if self.mimi_offset_scalar:
+                    next_offset = np.asarray([next_offset])
                 return {
                     "audio": audio,
-                    "next_offset": feeds["offset"] + 1,
+                    "next_offset": next_offset,
                     "next_state.cache": feeds["state.cache"] + 1,
                 }
 
@@ -323,6 +330,20 @@ def _make_adapter(
     )
     return adapter, fake_graphs
 
+
+
+def test_scalar_mimi_offset_accepts_singleton_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, fake = _make_adapter(
+        tmp_path, monkeypatch, fake=_FakeGraphs(mimi_offset_scalar=True)
+    )
+
+    chunks = list(adapter.stream([1], eos_threshold=10.0, max_frames=2))
+
+    assert len(chunks) == 2
+    assert [call["offset"].shape for call in fake.mimi_calls] == [(), ()]
+    assert [call["offset"].item() for call in fake.mimi_calls] == [0, 1]
 
 def test_stream_runs_prefix_cache_flow_mimi_and_eos_tail_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

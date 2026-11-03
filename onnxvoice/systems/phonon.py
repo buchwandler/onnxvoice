@@ -872,9 +872,12 @@ class PhononAdapter(SystemAdapter):
                 f"Phonon {component} could not cast feed {spec.name!r} to {dtype.name}"
             ) from exc
         if array.ndim != len(spec.shape):
-            raise RuntimeContractError(
-                f"Phonon {component} feed {spec.name!r} has rank {array.ndim}, expected {len(spec.shape)}"
-            )
+            if not spec.shape and array.size == 1:
+                array = array.reshape(())
+            else:
+                raise RuntimeContractError(
+                    f"Phonon {component} feed {spec.name!r} has rank {array.ndim}, expected {len(spec.shape)}"
+                )
         for axis, (actual, expected) in enumerate(zip(array.shape, spec.shape, strict=True)):
             if isinstance(expected, int) and expected != actual:
                 raise RuntimeContractError(
@@ -882,7 +885,7 @@ class PhononAdapter(SystemAdapter):
                 )
         if np.issubdtype(array.dtype, np.floating) and not np.isfinite(array).all():
             raise RuntimeContractError(f"Phonon {component} feed {spec.name!r} must be finite")
-        return np.ascontiguousarray(array)
+        return array if array.ndim == 0 else np.ascontiguousarray(array)
 
     @classmethod
     def _fit_feature(cls, value: Any, spec: TensorSpec, component: str) -> np.ndarray:
