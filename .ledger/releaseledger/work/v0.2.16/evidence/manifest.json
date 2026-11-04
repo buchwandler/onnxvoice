@@ -1,0 +1,33 @@
+{
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "additions": 113,
+      "deletions": 22,
+      "patch_file": "6d56511.patch",
+      "patch_sha256": "8403087ce26ce8219da7d73552a46aeec02052ea9c137e4229bd07a8ec84897e",
+      "paths": ["onnxvoice/systems/phonon.py", "tests/test_phonon_runtime.py"],
+      "sha": "6d5651117d75efbc90d3d675fc387a8e9ed849fa",
+      "short_sha": "6d56511",
+      "source_ref": "git:6d5651117d75efbc90d3d675fc387a8e9ed849fa"
+    },
+    {
+      "additions": 32,
+      "deletions": 8,
+      "patch_file": "6658962.patch",
+      "patch_sha256": "c572afe1afdd310626fcd51be7a7f667c0c6b40c79e072d7575bf654301edadc",
+      "paths": ["onnxvoice/systems/phonon.py", "tests/test_phonon_runtime.py"],
+      "sha": "6658962fb7f91edd9bc4db81abd38fd41eedc9ee",
+      "short_sha": "6658962",
+      "source_ref": "git:6658962fb7f91edd9bc4db81abd38fd41eedc9ee"
+    }
+  ],
+  "git_base_ref": "c69e978ffc9dbf753dec493e3eb252b8935287b3",
+  "git_base_sha": "c69e978ffc9dbf753dec493e3eb252b8935287b3",
+  "git_head_ref": "6658962fb7f91edd9bc4db81abd38fd41eedc9ee",
+  "git_head_sha": "6658962fb7f91edd9bc4db81abd38fd41eedc9ee",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.16",
+  "schema_version": 1
+}

@@ -115,7 +115,7 @@ def _catalog(*bundles: dict[str, Any]) -> dict[str, Any]:
     return {"schema_version": 2, "bundles": list(bundles)}
 
 
-def test_current_partial_catalog_lists_only_published_target_qualities():
+def test_catalog_lists_only_published_target_qualities():
     items = _parse_phonon(
         _catalog(_bundle("phonon-31m-en"), _bundle("phonon-40m-en", revision="c" * 40))
     )
@@ -127,6 +127,30 @@ def test_current_partial_catalog_lists_only_published_target_qualities():
     assert items[0].metadata["commercial_use"] is True
     assert items[1].metadata["commercial_use"] is False
     assert items[1].metadata["license"]["spdx"] == "CC-BY-NC-4.0"
+
+
+def test_explicit_null_generation_defaults_are_preserved() -> None:
+    bundle = _bundle()
+    bundle["generation"].update(
+        {
+            "temperature_default": None,
+            "frames_after_eos": None,
+            "min_frames_before_eos": None,
+            "max_frames": None,
+        }
+    )
+
+    (item,) = _parse_phonon(_catalog(bundle))
+    expected = {
+        "duration_delta_default": 0.0,
+        "temperature_default": None,
+        "eos_threshold_default": 4.0,
+        "frames_after_eos": None,
+        "min_frames_before_eos": None,
+        "max_frames": None,
+    }
+    assert item.metadata["generation"] == expected
+    assert item.metadata["profiles"]["fp32"]["generation"] == expected
 
 
 def test_new_precision_aggregates_on_existing_target_and_resolves_only_its_assets(tmp_path: Path):

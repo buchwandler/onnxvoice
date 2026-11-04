@@ -311,6 +311,23 @@ class TestVoiceMetadataExtraction:
 
 
 class TestVoiceLanguageCapabilities:
+    def test_phonon_target_language_overrides_descriptive_prompt_locale(self):
+        item = CatalogItem(
+            system="phonon",
+            id="phonon-40m-de",
+            kind="bundle",
+            artifacts=(),
+            voices=("voice-a",),
+            metadata={
+                "language_codes": ("de",),
+                "voice_details": {"voice-a": {"locale": "en-gb", "language": "en"}},
+            },
+        )
+
+        metadata = voice_metadata_from_catalog(item, "voice-a")
+        assert metadata.locale == "en-GB"
+        assert voice_language_codes_from_catalog(item, "voice-a") == ("de",)
+
     def test_child_language_metadata_precedes_bundle_capabilities(self):
         item = CatalogItem(
             system="generic",

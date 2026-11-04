@@ -67,8 +67,10 @@ class _Catalog:
     def __init__(self, items: Sequence[CatalogItem]) -> None:
         self.items = list(items)
 
-    def list(self, system: str, refresh: bool = False) -> Sequence[CatalogItem]:
-        del refresh
+    def list(
+        self, system: str, refresh: bool = False, progress: Any | None = None
+    ) -> Sequence[CatalogItem]:
+        del refresh, progress
         return [item for item in self.items if item.system == system]
 
     def resolve(
@@ -135,6 +137,62 @@ def _catalog_item() -> CatalogItem:
         default_voice="easton",
         metadata=metadata,
     )
+
+
+def _phonon_language_item(
+    target_id: str, languages: Sequence[str], voices: Sequence[tuple[str, str]]
+) -> CatalogItem:
+    base = _catalog_item()
+    voice_ids = tuple(voice_id for voice_id, _ in voices)
+    metadata = {
+        **base.metadata,
+        "languages": list(languages),
+        "language_codes": list(languages),
+        "voices": list(voice_ids),
+        "voice_details": [
+            {
+                "id": voice_id,
+                "locale": locale,
+                "language": locale.split("-", 1)[0],
+            }
+            for voice_id, locale in voices
+        ],
+    }
+    return replace(
+        base,
+        id=target_id,
+        voices=voice_ids,
+        default_voice=voice_ids[0],
+        metadata=metadata,
+    )
+
+
+def test_manager_filters_phonon_voices_by_target_languages(tmp_path: Path) -> None:
+    german = _phonon_language_item(
+        "phonon-40m-de",
+        ("de",),
+        (("easton", "en-us"), ("maeve", "en-gb")),
+    )
+    multilingual = _phonon_language_item(
+        "phonon-40m-multilingual",
+        ("de", "en", "es", "fr", "pt"),
+        (("maeve", "en-gb"),),
+    )
+    manager = OnnxVoice(cache_dir=tmp_path)
+    manager.catalog = _Catalog([german, multilingual])
+
+    german_records = manager.list_voices(system="phonon", asset_id="phonon-40m-de", language="de")
+    assert {record.voice_id for record in german_records} == {"easton", "maeve"}
+    assert {record.languages for record in german_records} == {("de",)}
+    assert {record.metadata.locale for record in german_records} == {"en-US", "en-GB"}
+    assert manager.list_voices(system="phonon", asset_id="phonon-40m-de", language="en") == []
+
+    multilingual_records = manager.list_voices(
+        system="phonon", asset_id="phonon-40m-multilingual", language="de"
+    )
+    assert len(multilingual_records) == 1
+    assert multilingual_records[0].languages == ("de", "en", "es", "fr", "pt")
+    assert multilingual_records[0].metadata.locale == "en-GB"
 
 
 def test_adapter_and_public_types_are_registered_and_exported() -> None:
@@ -241,19 +299,28 @@ def test_options_are_target_sensitive_and_preserve_capability_and_license_facts(
     assert limits["max_input_tokens"]["status"] == "not_declared"
 
     unavailable_default = _catalog_item()
-    updated_generation = {**_GENERATION, "duration_delta_default": None}
+    unavailable_generation = {
+        **_GENERATION,
+        "temperature_default": None,
+        "frames_after_eos": None,
+        "min_frames_before_eos": None,
+        "max_frames": None,
+    }
     unavailable_metadata = {
         **unavailable_default.metadata,
-        "generation": updated_generation,
-        "profiles": {"fp32": {"generation": updated_generation, "license": _APACHE}},
+        "generation": unavailable_generation,
+        "profiles": {"fp32": {"generation": unavailable_generation, "license": _APACHE}},
     }
     unavailable = replace(unavailable_default, metadata=unavailable_metadata)
-    required = resolve_engine_options(_Manager([unavailable]), "phonon", target="phonon-31m-en")
-    duration = next(
-        parameter for parameter in required["parameters"] if parameter["name"] == "duration_delta"
-    )
-    assert duration["required"] is True
-    assert duration["default_status"] == "unknown"
+    options = resolve_engine_options(_Manager([unavailable]), "phonon", target="phonon-31m-en")
+    parameters = {parameter["name"]: parameter for parameter in options["parameters"]}
+    for name in ("temperature", "frames_after_eos", "min_frames_before_eos", "max_frames"):
+        assert parameters[name]["required"] is True
+        assert parameters[name]["default_status"] == "unknown"
+    assert parameters["duration_delta"]["default"] == 0.0
+    assert parameters["duration_delta"]["required"] is False
+    assert parameters["eos_threshold"]["default"] == 4.0
+    assert parameters["eos_threshold"]["required"] is False
 
 
 def test_inventory_and_cli_discover_only_catalog_targets_and_show_license(
@@ -299,3 +366,36 @@ def test_inventory_and_cli_discover_only_catalog_targets_and_show_license(
     options = json.loads(capsys.readouterr().out)
     assert options["capabilities"]["voice_cloning"]["supported"] is False
     assert options["license"]["commercial_use"] is True
+
+
+def test_phonon_voice_cli_json_separates_synthesis_languages_and_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    item = _phonon_language_item("phonon-40m-de", ("de",), (("easton", "en-gb"),))
+    manager = OnnxVoice(cache_dir=tmp_path)
+    manager.catalog = _Catalog([item])
+    monkeypatch.setattr(cli, "_manager", lambda _args: manager)
+
+    result = cli.main(
+        [
+            "voices",
+            "list",
+            "--engine",
+            "phonon",
+            "--target",
+            "phonon-40m-de",
+            "--lang",
+            "de",
+            "--format",
+            "json",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)["items"]
+    assert len(payload) == 1
+    assert payload[0]["system"] == "phonon"
+    assert payload[0]["asset_id"] == "phonon-40m-de"
+    assert payload[0]["languages"] == ["de"]
+    assert payload[0]["language"] == "en"
+    assert payload[0]["locale"] == "en-GB"

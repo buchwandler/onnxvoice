@@ -2,6 +2,8 @@
 
 The public type module includes `RuntimeDistributionInfo`, `ProviderPreference`, and `OnnxRuntimeStatus` for structured runtime inspection. `SessionDiagnostic` distinguishes requested, resolved, and session-active providers and records the preference source.
 
+The Phonon runtime additionally exposes `PhononVoiceState` for bundled projected prompts and `PhononStreamChunk` for decoded streaming PCM frames. `PhononAdapter`, `PhononVoiceState`, and `PhononStreamChunk` are defined in `onnxvoice.systems.phonon` and re-exported at package level; see the [Phonon runtime API](runtime.md#phonon-runtime-api).
+
 Cache-administration models include `CacheUsage`, `CacheScan`, `CacheFilesystemUsage`, `CachePathUsage`, `CacheFileUsage`, `InstallationStorageUsage`, `GcCandidate`, `GcPlan`, `GcReport`, and `RemovalPlan`. They keep logical size, apparent size, allocated bytes, and reclaimable estimates distinct for both Python callers and CLI output.
 
 ```{automodule} onnxvoice.types

@@ -51,7 +51,7 @@ Pocket discovery is limited to voice IDs already present in normalized `CatalogI
 
 ## Phonon voices
 
-A published Phonon bundle contributes only the child voice IDs declared by its prompt inventory. A semantic reference has the form `phonon:<catalog-target>/<declared-voice-id>`; it does not identify a locally invented target or voice. The checked-in Phonon bundle catalog currently has no targets, so it exposes no Phonon voice references.
+A published Phonon bundle contributes only the child voice IDs declared by its prompt inventory. A semantic reference has the form `phonon:<catalog-target>/<declared-voice-id>`; it does not identify a locally invented target or voice. Targets, voices, synthesis languages, and license metadata are discovered dynamically from the configured bundle catalog. Phonon model target languages describe synthesis capability; each voice/prompt locale is descriptive provenance for the projected speaker prompt. `VoiceRecord.languages` and language filtering use the target capability, not the prompt's descriptive locale.
 
 ```python
 from onnxvoice import OnnxVoice

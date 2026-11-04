@@ -49,9 +49,21 @@ installation = manager.install(f"phonon:{target.id}", quality=quality)
 with manager.open(installation, providers="cpu") as runtime:
     # These are model-ready IDs supplied by the frontend, not text.
     token_ids = [1, 2, 3, 4]
-    for chunk in runtime.stream(token_ids, voice=installation.default_voice, seed=17):
+    for chunk in runtime.stream(
+        token_ids,
+        voice=installation.default_voice,
+        duration_delta=0.0,
+        temperature=0.3,
+        seed=17,
+        eos_threshold=4.0,
+        frames_after_eos=1,
+        min_frames_before_eos=6,
+        max_frames=200,
+    ):
         consume_pcm(chunk.audio, sample_rate=chunk.sample_rate)
 ```
+
+These values are example caller/application policy, not universal ONNXVoice defaults. Inspect the selected target and quality with `onnxvoice engines options --engine phonon --target <target-id> --quality <quality>`; callers must supply every control whose default is required or unknown. A frontend such as PhononSynth may apply its own fallback policy outside this low-level runtime.
 
 The example chooses from live catalog results. `onnxvoice install phonon:<target-id> --quality <published-quality>` uses the ordinary managed, per-file artifact installer with direct HTTPS URLs, declared byte sizes, and SHA-256 checksums; GitHub Release URLs do not require Hugging Face transport or ZIP extraction. Installed files are cached, and `open()` is local-only after installation. `--offline` prevents catalog or artifact network access; cached artifacts can still be reopened.
 
@@ -102,7 +114,7 @@ Install an ONNX Runtime distribution and provider supported by the selected plat
 
 ## Real-bundle acceptance
 
-The managed-install, CPU inference, and offline-reopen acceptance test is opt-in and uses only published `fp32` catalog entries. It is skipped by default, so ordinary tests do not download model artifacts. Run it when release assets and `onnxruntime` are available:
+The managed-install, CPU inference, and offline-reopen acceptance test is opt-in. Its required case uses the commercially permissive `phonon-31m-en/q4` bundle; a 40M `fp32` case remains optional. Ordinary tests do not download model artifacts. Run it when release assets and `onnxruntime` are available:
 
 ```bash
 ONNXVOICE_PHONON_ACCEPTANCE=1 \
@@ -110,4 +122,4 @@ ONNXVOICE_REQUIRE_PHONON_ACCEPTANCE=1 \
 pytest -q tests/test_phonon_real_bundle.py
 ```
 
-Set both acceptance flags as shown to make the required Apache-2.0 31M case fail rather than skip when that target, its assets, or the runtime is unavailable. The 40M case remains optional and is tested only when its `fp32` variant is published. A passing unit or fake-session test does not substitute for this real-bundle check.
+Set both acceptance flags as shown to make the required Apache-2.0 31M q4 case fail rather than skip when that target, its q4 assets, or the runtime is unavailable. The 40M fp32 case is tested only when its variant is published. A passing unit or fake-session test does not substitute for this real-bundle check.

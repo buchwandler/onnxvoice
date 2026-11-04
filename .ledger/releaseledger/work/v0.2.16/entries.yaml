@@ -1,0 +1,80 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: v0.2.16
+git_base_ref: c69e978ffc9dbf753dec493e3eb252b8935287b3
+git_base_sha: c69e978ffc9dbf753dec493e3eb252b8935287b3
+git_head_ref: 6658962fb7f91edd9bc4db81abd38fd41eedc9ee
+git_head_sha: 6658962fb7f91edd9bc4db81abd38fd41eedc9ee
+include_merges: nontrivial
+entries:
+  - kind: fixed
+    summary: "Fixed Phonon streaming to accept legacy Mimi state records by inferring dtype from ONNX tensor metadata"
+    status: accepted
+    source_refs:
+      - git:6d5651117d75efbc90d3d675fc387a8e9ed849fa
+    paths:
+      - onnxvoice/systems/phonon.py
+      - tests/test_phonon_runtime.py
+    sources:
+      - git:6d5651117d75efbc90d3d675fc387a8e9ed849fa
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: fixed
+    summary: "Fixed Phonon streaming to handle scalar decoder offsets and validate Mimi state tensor dtypes"
+    status: accepted
+    source_refs:
+      - git:6658962fb7f91edd9bc4db81abd38fd41eedc9ee
+    paths:
+      - onnxvoice/systems/phonon.py
+      - tests/test_phonon_runtime.py
+    sources:
+      - git:6658962fb7f91edd9bc4db81abd38fd41eedc9ee
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: fixed
+    summary: "Fixed Phonon voice filtering to use synthesis-language capability while retaining descriptive prompt locales"
+    status: accepted
+    source_refs:
+      - tl:task-0054
+    paths:
+      - onnxvoice/inventory.py
+      - tests/test_inventory.py
+      - tests/test_phonon_catalog.py
+    sources:
+      - tl:task-0054
+    prs: []
+    issues: []
+    contributors: []
+  - kind: docs
+    summary: "Documented dynamic catalog discovery and caller-owned Phonon generation controls"
+    status: accepted
+    source_refs: []
+    paths:
+      - README.md
+      - docs/cli.md
+      - docs/voices.md
+      - docs/systems/index.md
+      - docs/systems/phonon.md
+    sources:
+      - tl:task-0054
+    prs: []
+    issues: []
+    contributors: []
+  - kind: quality
+    summary: "Improved release confidence with opt-in q4 real-bundle and PhononSynth 0.1.0 candidate-wheel acceptance coverage"
+    status: accepted
+    source_refs: []
+    paths:
+      - tests/test_phonon_real_bundle.py
+      - tests/test_phononsynth_compat.py
+    sources:
+      - tl:task-0054
+    prs: []
+    issues: []
+    contributors: []

@@ -196,13 +196,19 @@ def _voice_details_for(metadata: Mapping[str, Any], voice_id: str) -> Mapping[st
 
 def voice_language_codes_from_catalog(item: CatalogItem, voice_id: str) -> tuple[str, ...]:
     """Return synthesis-language capabilities for one catalog voice."""
+    item_codes = language_codes_from_metadata(item.metadata)
+
+    # Phonon voice locales describe projected speaker prompts, not synthesis
+    # capability. Its target-level languages are the authoritative capability.
+    if item.system == "phonon" and item_codes:
+        return item_codes
+
     details = _voice_details_for(item.metadata, voice_id)
     if details is not None:
         detail_codes = _language_tags_from_metadata(details)
         if detail_codes:
             return detail_codes
 
-    item_codes = language_codes_from_metadata(item.metadata)
     if item_codes:
         return item_codes
 

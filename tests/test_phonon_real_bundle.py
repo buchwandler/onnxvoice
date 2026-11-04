@@ -25,16 +25,16 @@ def _unavailable(message: str, *, required: bool = False) -> NoReturn:
 
 
 @pytest.mark.parametrize(
-    ("model_key", "expected_license", "required"),
+    ("model_key", "quality", "expected_license", "required"),
     [
-        ("phonon-31m-en", "Apache-2.0", True),
-        ("phonon-40m-en", "CC-BY-NC-4.0", False),
+        ("phonon-31m-en", "q4", "Apache-2.0", True),
+        ("phonon-40m-en", "fp32", "CC-BY-NC-4.0", False),
     ],
 )
 def test_phonon_real_bundle_managed_install_inference_and_offline_reopen(
-    tmp_path: Path, model_key: str, expected_license: str, required: bool
+    tmp_path: Path, model_key: str, quality: str, expected_license: str, required: bool
 ) -> None:
-    """Exercise only published fp32 targets when explicitly opted in."""
+    """Exercise a published selected quality when explicitly opted in."""
     if not _RUN_ACCEPTANCE:
         pytest.skip("set ONNXVOICE_PHONON_ACCEPTANCE=1 to download and test real Phonon bundles")
     if importlib.util.find_spec("onnxruntime") is None:
@@ -63,10 +63,11 @@ def test_phonon_real_bundle_managed_install_inference_and_offline_reopen(
             f"{model_key} is not currently published in the Phonon catalog", required=required
         )
     quality_profiles = item.metadata.get("quality_profiles", ())
-    if "fp32" not in quality_profiles:
-        _unavailable(f"{model_key} has no published fp32 bundle", required=required)
+    if quality not in quality_profiles:
+        _unavailable(f"{model_key} has no published {quality} bundle", required=required)
 
-    installation = manager.install(f"phonon:{model_key}", quality="fp32")
+    installation = manager.install(f"phonon:{model_key}", quality=quality)
+    manager.verify(f"phonon:{model_key}", quality=quality)
     license_info = installation.metadata.get("license")
     assert isinstance(license_info, Mapping)
     assert license_info["spdx"] == expected_license
@@ -106,7 +107,7 @@ def test_phonon_real_bundle_managed_install_inference_and_offline_reopen(
         assert all(chunk.sample_rate == installation.sample_rate for chunk in chunks)
 
     offline_manager = OnnxVoice(cache_dir=cache_dir, offline=True)
-    with offline_manager.open(f"phonon:{model_key}", quality="fp32", providers="cpu") as runtime:
+    with offline_manager.open(f"phonon:{model_key}", quality=quality, providers="cpu") as runtime:
         result = runtime.infer(token_ids, **generation)
         assert result.sample_rate == installation.sample_rate
         assert result.audio.dtype == np.float32
@@ -114,4 +115,4 @@ def test_phonon_real_bundle_managed_install_inference_and_offline_reopen(
         assert np.isfinite(result.audio).all()
         frame_samples = installation.metadata["runtime"]["frame_samples"]
         assert result.audio.size <= frame_samples * generation["max_frames"]
-        assert result.metadata["quality"] == "fp32"
+        assert result.metadata["quality"] == quality

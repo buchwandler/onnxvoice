@@ -331,19 +331,17 @@ def _make_adapter(
     return adapter, fake_graphs
 
 
-
 def test_scalar_mimi_offset_accepts_singleton_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter, fake = _make_adapter(
-        tmp_path, monkeypatch, fake=_FakeGraphs(mimi_offset_scalar=True)
-    )
+    adapter, fake = _make_adapter(tmp_path, monkeypatch, fake=_FakeGraphs(mimi_offset_scalar=True))
 
     chunks = list(adapter.stream([1], eos_threshold=10.0, max_frames=2))
 
     assert len(chunks) == 2
     assert [call["offset"].shape for call in fake.mimi_calls] == [(), ()]
     assert [call["offset"].item() for call in fake.mimi_calls] == [0, 1]
+
 
 def test_stream_runs_prefix_cache_flow_mimi_and_eos_tail_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -478,6 +476,44 @@ def test_voice_defaults_and_required_controls_are_metadata_driven(
         list(adapter.stream([1], voice=voice, max_frames=1))
     assert fake.sessions == {}
     assert adapter.prepare_voice("easton") is voice
+
+
+@pytest.mark.parametrize(
+    ("missing_control", "provided"),
+    [
+        ("temperature", {"duration_delta": 0.25}),
+        ("frames_after_eos", {"temperature": 0.2}),
+        ("min_frames_before_eos", {"temperature": 0.2, "frames_after_eos": 1}),
+        (
+            "max_frames",
+            {"temperature": 0.2, "frames_after_eos": 1, "min_frames_before_eos": 1},
+        ),
+    ],
+)
+def test_null_generation_controls_are_required_without_hidden_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_control: str,
+    provided: dict[str, float | int],
+) -> None:
+    null_defaults = {
+        "temperature_default": None,
+        "frames_after_eos": None,
+        "min_frames_before_eos": None,
+        "max_frames": None,
+    }
+    adapter, fake = _make_adapter(
+        tmp_path / missing_control,
+        monkeypatch,
+        generation_overrides=null_defaults,
+    )
+    adapter.prepare_voice("easton")
+    error_field = "temperature_default" if missing_control == "temperature" else missing_control
+    assert all(adapter._generation[field] is None for field in null_defaults)
+
+    with pytest.raises(RuntimeContractError, match=f"Phonon {error_field} has no bundle default"):
+        list(adapter.stream([1], voice="easton", **provided))
+    assert fake.sessions == {}
 
 
 def test_voice_prompt_and_voice_state_are_validated(

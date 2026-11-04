@@ -1,0 +1,25 @@
+rows:
+  - sha: 6d5651117d75efbc90d3d675fc387a8e9ed849fa
+    inspected: true
+    inspected_paths:
+      - onnxvoice/systems/phonon.py
+      - tests/test_phonon_runtime.py
+    observed_behavior: "Legacy Mimi state pairs without a dtype are accepted; dtype is inferred from matching ONNX input/output tensors and used for state feeds."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
+  - sha: 6658962fb7f91edd9bc4db81abd38fd41eedc9ee
+    inspected: true
+    inspected_paths:
+      - onnxvoice/systems/phonon.py
+      - tests/test_phonon_runtime.py
+    observed_behavior: "Mimi state records and graph tensor dtypes are checked for consistency, and scalar decoder offsets can be fed without rank mismatch."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false
