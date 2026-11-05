@@ -83,6 +83,9 @@ DEFAULT_SOURCES = {
     "kitten2": "https://raw.githubusercontent.com/buchwandler/kitten2-onnx-bundles/main/catalog/bundles.json",
     "phonon": "https://raw.githubusercontent.com/buchwandler/phonon-onnx-bundles/main/catalog/bundles.json",
 }
+_KOKORO_LANGUAGE_ROUTER_LAYOUT = "language-router-onnx-v1"
+_KOKORO_LANGUAGE_ROUTER_MODELS = {"en": "model_en", "de": "model_de"}
+_KOKORO_LANGUAGE_ROUTER_COMPONENTS = frozenset(_KOKORO_LANGUAGE_ROUTER_MODELS.values())
 _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
     {
         "reference_wavlm",
@@ -480,6 +483,74 @@ _KOKORO_SPLIT_MODEL_COMPONENTS = frozenset({"prosody", "curves", "decoder"})
 _KOKORO_INNO_LAYOUTS = frozenset({"single", "single-onnx-v1", "split", "multi", "split-onnx-v1"})
 
 
+def _validate_kokoro_language_router(
+    entry: Mapping[str, Any], runtime: Mapping[str, Any], artifacts: Sequence[Artifact]
+) -> None:
+    if runtime.get("layout") != _KOKORO_LANGUAGE_ROUTER_LAYOUT:
+        return
+
+    language_models = runtime.get("language_models")
+    if not isinstance(language_models, Mapping):
+        raise CatalogError("Kokoro language-router requires runtime.language_models")
+    if dict(language_models) != _KOKORO_LANGUAGE_ROUTER_MODELS:
+        raise CatalogError(
+            "Kokoro language-router runtime.language_models must map en to model_en "
+            "and de to model_de"
+        )
+
+    language_codes = entry.get("language_codes")
+    if not isinstance(language_codes, (list, tuple)):
+        raise CatalogError("Kokoro language-router requires language_codes including en and de")
+    normalized_codes = {language_base(code) for code in language_codes}
+    if not set(_KOKORO_LANGUAGE_ROUTER_MODELS) <= normalized_codes:
+        raise CatalogError("Kokoro language-router language_codes must include en and de")
+
+    model_artifacts = [artifact for artifact in artifacts if artifact.role == "model"]
+    unexpected = {
+        artifact.component for artifact in model_artifacts
+    } - _KOKORO_LANGUAGE_ROUTER_COMPONENTS
+    if unexpected:
+        raise CatalogError(
+            "Kokoro language-router has unsupported model components: "
+            + ", ".join(sorted(str(component) for component in unexpected))
+        )
+
+    seen: set[tuple[str | None, str | None]] = set()
+    for artifact in model_artifacts:
+        identity = (artifact.component, artifact.quality)
+        if identity in seen:
+            raise CatalogError(
+                "Kokoro language-router has duplicate model component/quality "
+                f"combination {identity!r}"
+            )
+        seen.add(identity)
+
+    qualities = {artifact.quality for artifact in model_artifacts}
+    selected_qualities = {quality for quality in qualities if quality is not None} or {None}
+    for quality in selected_qualities:
+        selected = [
+            artifact
+            for artifact in model_artifacts
+            if artifact.quality is None or artifact.quality == quality
+        ]
+        counts = {
+            component: sum(artifact.component == component for artifact in selected)
+            for component in _KOKORO_LANGUAGE_ROUTER_COMPONENTS
+        }
+        missing = {component for component, count in counts.items() if count == 0}
+        if missing:
+            raise CatalogError(
+                f"Kokoro language-router quality {quality!r} is missing model components: "
+                + ", ".join(sorted(missing))
+            )
+        duplicates = {component for component, count in counts.items() if count > 1}
+        if duplicates:
+            raise CatalogError(
+                f"Kokoro language-router quality {quality!r} has duplicate model components: "
+                + ", ".join(sorted(duplicates))
+            )
+
+
 def _normalize_kokoro_voice_enrollers(
     runtime: Mapping[str, Any], artifacts: Sequence[Artifact]
 ) -> tuple[Mapping[str, Any], ...] | None:
@@ -648,6 +719,7 @@ def _parse_kokoro_entry(
             )
         )
     runtime, onnx_contract = _normalize_kokoro_runtime(entry)
+    _validate_kokoro_language_router(entry, runtime, artifacts)
     available_enrollers = _normalize_kokoro_voice_enrollers(runtime, artifacts)
     if available_enrollers is not None:
         runtime["voice_enrollers"] = list(available_enrollers)

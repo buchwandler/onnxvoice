@@ -491,6 +491,15 @@ ENGINE_CONTRACTS: Mapping[str, EngineContract] = MappingProxyType(
                 ),
                 _TOKEN_IDS,
                 _input(
+                    "language",
+                    "string",
+                    "Explicit target language required by language-router-onnx-v1.",
+                    required=False,
+                    group="capability_specific_inputs",
+                    availability="language-router-onnx-v1 layout only",
+                    status="conditional",
+                ),
+                _input(
                     "reference",
                     "KokoroReferenceState",
                     "Prepared reference voice state.",
@@ -569,6 +578,14 @@ ENGINE_CONTRACTS: Mapping[str, EngineContract] = MappingProxyType(
                 ),
             ),
             capabilities=(
+                _capability(
+                    "language_routing",
+                    None,
+                    "conditional",
+                    mode="explicit_language",
+                    requires=("language",),
+                    reason="Supported only when the selected target uses language-router-onnx-v1.",
+                ),
                 _capability(
                     "voice_cloning",
                     None,
@@ -1586,6 +1603,37 @@ def _apply_target_rules(
 
     if engine == "kokoro":
         cloning = layout == "cloning-onnx-v1"
+        language_router = layout == "language-router-onnx-v1"
+        _set_option(
+            result,
+            "language",
+            required=language_router,
+            status="required" if language_router else "not_supported" if layout else "conditional",
+            supported=language_router if layout else None,
+            availability="Required by language-router-onnx-v1; unavailable for other known layouts.",
+        )
+        if _capability_override(metadata, "language_routing") is None:
+            result["capabilities"]["language_routing"] = {
+                "name": "language_routing",
+                "supported": language_router if layout else None,
+                "status": "supported"
+                if language_router
+                else "not_supported"
+                if layout
+                else "unknown",
+                "mode": "explicit_language" if language_router else None,
+                "requires": ["language"] if language_router else [],
+                "requires_reference_transcript": None,
+                "reason": (
+                    "Selected distribution uses language-router-onnx-v1."
+                    if language_router
+                    else "Selected layout does not route by language."
+                    if layout
+                    else "Target runtime layout is unavailable."
+                ),
+                "constraints": [],
+                "source": _fact_source(metadata, "layout") if layout else "unknown",
+            }
         if _capability_override(metadata, "voice_cloning") is None:
             result["capabilities"]["voice_cloning"] = {
                 "name": "voice_cloning",

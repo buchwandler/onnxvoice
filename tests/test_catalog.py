@@ -561,3 +561,113 @@ def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path
     )
     with pytest.raises(CatalogError, match="missing model components: curves"):
         incomplete_client.resolve("kokoro:clone")
+
+
+def _kokoro_language_router_catalog():
+    artifacts = [
+        {
+            "id": component,
+            "role": "model",
+            "component": component,
+            "quality": "fp32",
+            "local_name": f"{component}.onnx",
+            "url": "https://example.invalid/model.onnx",
+            "sha256": "a" * 64,
+        }
+        for component in ("model_en", "model_de")
+    ]
+    return {
+        "models": {
+            "akinvox-multispeaker-v1": {
+                "language_codes": ["en", "de"],
+                "runtime": {
+                    "layout": "language-router-onnx-v1",
+                    "language_models": {"en": "model_en", "de": "model_de"},
+                },
+                "distributions": [{"id": "cpu", "artifacts": artifacts}],
+            }
+        }
+    }
+
+
+def _resolve_language_router_catalog(tmp_path, raw):
+    source = tmp_path / "kokoro-language-router.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    return CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}).resolve(
+        "kokoro:akinvox-multispeaker-v1"
+    )
+
+
+def test_kokoro_language_router_catalog_accepts_exact_two_graph_contract(tmp_path):
+    item = _resolve_language_router_catalog(tmp_path, _kokoro_language_router_catalog())
+
+    models = [artifact for artifact in item.artifacts if artifact.role == "model"]
+    assert {artifact.component for artifact in models} == {"model_en", "model_de"}
+    assert item.metadata["runtime"]["language_models"] == {
+        "en": "model_en",
+        "de": "model_de",
+    }
+
+
+@pytest.mark.parametrize("missing_component", ("model_en", "model_de"))
+def test_kokoro_language_router_rejects_missing_graph(tmp_path, missing_component):
+    raw = _kokoro_language_router_catalog()
+    raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"] = [
+        artifact
+        for artifact in raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"]
+        if artifact["component"] != missing_component
+    ]
+
+    with pytest.raises(CatalogError, match=f"missing model components: {missing_component}"):
+        _resolve_language_router_catalog(tmp_path, raw)
+
+
+@pytest.mark.parametrize(
+    "language_models",
+    (
+        {"en": "model_de", "de": "model_en"},
+        {"en": "model_en", "de": "model_de", "fr": "model_fr"},
+        {"en": "model_en", "fr": "model_fr"},
+    ),
+)
+def test_kokoro_language_router_rejects_incorrect_language_mapping(tmp_path, language_models):
+    raw = _kokoro_language_router_catalog()
+    raw["models"]["akinvox-multispeaker-v1"]["runtime"]["language_models"] = language_models
+
+    with pytest.raises(CatalogError, match="runtime.language_models"):
+        _resolve_language_router_catalog(tmp_path, raw)
+
+
+def test_kokoro_language_router_rejects_missing_target_language_code(tmp_path):
+    raw = _kokoro_language_router_catalog()
+    raw["models"]["akinvox-multispeaker-v1"]["language_codes"] = ["en"]
+
+    with pytest.raises(CatalogError, match="language_codes must include en and de"):
+        _resolve_language_router_catalog(tmp_path, raw)
+
+
+def test_kokoro_language_router_rejects_duplicate_component_quality(tmp_path):
+    raw = _kokoro_language_router_catalog()
+    artifacts = raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"]
+    artifacts.append(dict(artifacts[0]))
+
+    with pytest.raises(CatalogError, match="duplicate model component/quality"):
+        _resolve_language_router_catalog(tmp_path, raw)
+
+
+def test_kokoro_language_router_rejects_extra_model_component(tmp_path):
+    raw = _kokoro_language_router_catalog()
+    artifacts = raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"]
+    artifacts.append(
+        {
+            "id": "model_fr",
+            "role": "model",
+            "component": "model_fr",
+            "quality": "fp32",
+            "local_name": "model_fr.onnx",
+            "url": "https://example.invalid/model_fr.onnx",
+        }
+    )
+
+    with pytest.raises(CatalogError, match="unsupported model components: model_fr"):
+        _resolve_language_router_catalog(tmp_path, raw)

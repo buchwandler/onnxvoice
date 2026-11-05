@@ -186,11 +186,19 @@ def _voice_details_for(metadata: Mapping[str, Any], voice_id: str) -> Mapping[st
     details = metadata.get("voice_details")
     if isinstance(details, Mapping):
         value = details.get(voice_id)
-        return value if isinstance(value, Mapping) else None
-    if isinstance(details, (list, tuple)):
+        if isinstance(value, Mapping):
+            return value
+    elif isinstance(details, (list, tuple)):
         for value in details:
             if isinstance(value, Mapping) and value.get("id") == voice_id:
                 return value
+
+    runtime = metadata.get("runtime")
+    voice_metadata = runtime.get("voice_metadata") if isinstance(runtime, Mapping) else None
+    if isinstance(voice_metadata, Mapping):
+        value = voice_metadata.get(voice_id)
+        if isinstance(value, Mapping):
+            return value
     return None
 
 

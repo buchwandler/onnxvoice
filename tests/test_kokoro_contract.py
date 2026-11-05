@@ -56,7 +56,7 @@ def test_kokoro_accepts_explicit_style_and_named_timing_outputs(tmp_path):
     fake = ContractSession()
     adapter._session = fake  # type: ignore[assignment]
 
-    result = adapter.infer([5, 6], style=np.array([1, 2, 3]), speed=1.0)
+    result = adapter.infer([5, 6], style=np.array([1, 2, 3]), speed=1.0, language="en-US")
 
     np.testing.assert_array_equal(fake.seen["input_ids"], np.array([[0, 5, 6, 0]], dtype=np.int32))
     assert fake.seen["ref_s"].dtype == np.float16
@@ -98,3 +98,83 @@ def test_installation_timing_output_tolerates_missing_metadata(tmp_path):
     assert (
         _installation(tmp_path, metadata={"runtime": {"timings_output": 1}}).timing_output is None
     )
+
+
+def _language_router_installation(tmp_path, *, runtime=None):
+    artifacts = []
+    for component in ("model_en", "model_de"):
+        path = tmp_path / f"{component}.onnx"
+        path.write_bytes(component.encode())
+        artifacts.append(
+            InstalledArtifact(
+                "model",
+                path.name,
+                path,
+                "0" * 64,
+                path.stat().st_size,
+                component=component,
+            )
+        )
+    metadata = {
+        "runtime": {
+            "layout": "language-router-onnx-v1",
+            "language_models": {"en": "model_en", "de": "model_de"},
+            "language_codes": ["en", "de"],
+        }
+    }
+    if runtime is not None:
+        metadata["runtime"].update(runtime)
+    return Installation(
+        "kokoro",
+        "akinvox-multispeaker-v1",
+        "model",
+        tmp_path,
+        tuple(artifacts),
+        sample_rate=24000,
+        metadata=metadata,
+    )
+
+
+def test_language_router_adapter_dispatches_by_language_and_closes_sessions(tmp_path):
+    sessions = {}
+    calls = []
+
+    def factory(path, component):
+        calls.append((path, component))
+        sessions[component] = ContractSession()
+        return sessions[component]
+
+    adapter = KokoroAdapter(_language_router_installation(tmp_path), session_factory=factory)
+
+    adapter.infer([5, 6], style=np.array([1, 2, 3]), language="en-US")
+    adapter.infer([5, 6], style=np.array([1, 2, 3]), language="de-DE")
+
+    assert [component for _, component in calls] == ["en:model_en", "de:model_de"]
+    assert adapter.diagnostics().properties["language_models"] == {
+        "en": "model_en",
+        "de": "model_de",
+    }
+    with pytest.raises(CapabilityError, match="language-router"):
+        _ = adapter.session
+
+    adapter.close()
+    adapter.close()
+
+
+def test_language_router_adapter_requires_supported_language(tmp_path):
+    adapter = KokoroAdapter(_language_router_installation(tmp_path))
+
+    with pytest.raises(RuntimeContractError, match="language is required"):
+        adapter.infer([1], style=np.ones(3))
+    with pytest.raises(RuntimeContractError, match="Unsupported Kokoro language-router"):
+        adapter.infer([1], style=np.ones(3), language="fr")
+
+
+def test_existing_kokoro_layout_accepts_optional_language(tmp_path):
+    adapter = KokoroAdapter(_installation(tmp_path))
+    adapter._session = ContractSession()  # type: ignore[assignment]
+
+    adapter.infer([1], style=np.ones(3), language="en-US")
+
+    with pytest.raises(RuntimeContractError, match="language"):
+        adapter.infer([1], style=np.ones(3), language="")

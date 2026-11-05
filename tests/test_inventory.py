@@ -347,6 +347,27 @@ class TestVoiceLanguageCapabilities:
         assert voice_language_codes_from_catalog(item, "voice-a") == ("en",)
         assert voice_language_codes_from_catalog(item, "voice-b") == ("de",)
 
+    def test_kokoro_runtime_voice_metadata_overrides_target_capabilities(self):
+        item = CatalogItem(
+            system="kokoro",
+            id="akinvox-en-de",
+            kind="model",
+            artifacts=(),
+            voices=("AV_cori", "AV_julia"),
+            metadata={
+                "language_codes": ("en", "de"),
+                "runtime": {
+                    "voice_metadata": {
+                        "AV_cori": {"language": "en"},
+                        "AV_julia": {"language": "de"},
+                    }
+                },
+            },
+        )
+
+        assert voice_language_codes_from_catalog(item, "AV_cori") == ("en",)
+        assert voice_language_codes_from_catalog(item, "AV_julia") == ("de",)
+
     def test_bundle_capabilities_are_inherited_when_voice_metadata_is_absent(self):
         item = CatalogItem(
             system="generic",

@@ -43,3 +43,27 @@ def test_explicit_cache_root_overrides_environment_and_preserves_offline(tmp_pat
             target="model.bin",
             progress=None,
         )
+
+
+def test_local_kokoro_language_router_keeps_both_component_artifacts(tmp_path):
+    model_en = tmp_path / "model_en.onnx"
+    model_de = tmp_path / "model_de.onnx"
+    model_en.write_bytes(b"english")
+    model_de.write_bytes(b"german")
+
+    adapter = OnnxVoice.open_local(
+        system="kokoro",
+        artifacts={"model:model_en": model_en, "model:model_de": model_de},
+        metadata={
+            "runtime": {
+                "layout": "language-router-onnx-v1",
+                "language_models": {"en": "model_en", "de": "model_de"},
+                "language_codes": ["en", "de"],
+            }
+        },
+    )
+
+    model_artifacts = adapter.installation.artifacts_for("model")
+    assert {artifact.component for artifact in model_artifacts} == {"model_en", "model_de"}
+    assert {artifact.path for artifact in model_artifacts} == {model_en, model_de}
+    assert adapter._uses_language_router_runtime()

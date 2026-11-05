@@ -77,6 +77,7 @@ class FakeCatalog:
                 runtime["layout"] = {
                     "clone": "cloning-onnx-v1",
                     "split": "split-onnx-v1",
+                    "router": "language-router-onnx-v1",
                     "single": "single-onnx-v1",
                 }[distribution]
             metadata["runtime"] = runtime
@@ -104,7 +105,7 @@ def _fixture_manager() -> FakeManager:
                 "v1.0",
                 {
                     "distribution_id": "split",
-                    "distribution_choices": ["split", "clone"],
+                    "distribution_choices": ["split", "clone", "router"],
                     "runtime": {"layout": "split-onnx-v1", "max_tokens": 510},
                 },
                 aliases=("kokoro-latest",),
@@ -171,7 +172,7 @@ def test_kokoro_distribution_variants_keep_cloning_boundary_semantics() -> None:
     data = resolve_engine_options(manager, "kokoro", target="kokoro-latest")
     assert data["target"] == "v1.0"
     variants = {variant["distribution"]: variant for variant in data["variants"]}
-    assert set(variants) == {"clone", "split"}
+    assert set(variants) == {"clone", "router", "split"}
 
     cloning = variants["clone"]
     assert cloning["layout"] == "cloning-onnx-v1"
@@ -197,11 +198,19 @@ def test_kokoro_distribution_variants_keep_cloning_boundary_semantics() -> None:
         == "not_applicable"
     )
 
+    router = variants["router"]
+    router_inputs = {entry["name"]: entry for entry in router["inputs"]}
+    assert router["layout"] == "language-router-onnx-v1"
+    assert router_inputs["language"]["required"] is True
+    assert router_inputs["language"]["status"] == "required"
+    assert router["capabilities"]["language_routing"]["supported"] is True
+    assert router["capabilities"]["language_routing"]["requires"] == ["language"]
+
     rows = list_engine_targets(manager, engine="kokoro", capability="voice-cloning")["rows"]
     assert [(row["target"], row["distribution"]) for row in rows] == [("v1.0", "clone")]
     selected = resolve_engine_options(manager, "kokoro", target="v1.0", distribution="clone")
     assert selected["distribution"] == "clone"
-    with pytest.raises(EngineOptionsError, match="valid choices: clone, split"):
+    with pytest.raises(EngineOptionsError, match="valid choices: clone, router, split"):
         resolve_engine_options(manager, "kokoro", target="v1.0", distribution="invalid")
 
 
