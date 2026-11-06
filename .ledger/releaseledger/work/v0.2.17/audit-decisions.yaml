@@ -1,0 +1,24 @@
+rows:
+  - sha: 547aafa73268181e3e91db5226461c4f9b1282dd
+    inspected: true
+    inspected_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/inventory.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/systems/kokoro_language_router.py
+      - onnxvoice/systems/kokoro_static.py
+      - tests/test_catalog.py
+      - tests/test_engine_options.py
+      - tests/test_inventory.py
+      - tests/test_kokoro_contract.py
+      - tests/test_kokoro_language_router.py
+      - tests/test_manager_cache.py
+    observed_behavior: >-
+      Added Kokoro language-router support with explicit language selection, validated English and German model components, and shared static inference handling.
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: ""
+    stale: false

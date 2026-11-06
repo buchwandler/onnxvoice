@@ -1,0 +1,40 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: v0.2.17
+git_base_ref: v0.2.16
+git_base_sha: 7555d41435a2d1d6293e9303c7128cd6c86e0c62
+git_head_ref: HEAD
+git_head_sha: 547aafa73268181e3e91db5226461c4f9b1282dd
+git_range: 7555d41435a2d1d6293e9303c7128cd6c86e0c62..547aafa73268181e3e91db5226461c4f9b1282dd
+commit_count: 1
+rows:
+  - sha: 547aafa73268181e3e91db5226461c4f9b1282dd
+    source_ref: git:547aafa73268181e3e91db5226461c4f9b1282dd
+    short_sha: 547aafa
+    changed_paths:
+      - onnxvoice/catalog.py
+      - onnxvoice/engine_options.py
+      - onnxvoice/inventory.py
+      - onnxvoice/systems/kokoro.py
+      - onnxvoice/systems/kokoro_language_router.py
+      - onnxvoice/systems/kokoro_static.py
+      - tests/test_catalog.py
+      - tests/test_engine_options.py
+      - tests/test_inventory.py
+      - tests/test_kokoro_contract.py
+      - tests/test_kokoro_language_router.py
+      - tests/test_manager_cache.py
+    stats:
+      files_changed: 12
+      insertions: 962
+      deletions: 110
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add kokoro model"

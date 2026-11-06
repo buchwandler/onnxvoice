@@ -1,0 +1,36 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 962,
+      "deletions": 110,
+      "patch_file": "547aafa.patch",
+      "patch_sha256": "7d59cbc19f4898c414da54b7c76bb56bf2c5ca69aac4404bd76c39627ce0fdff",
+      "paths": [
+        "onnxvoice/catalog.py",
+        "onnxvoice/engine_options.py",
+        "onnxvoice/inventory.py",
+        "onnxvoice/systems/kokoro.py",
+        "onnxvoice/systems/kokoro_language_router.py",
+        "onnxvoice/systems/kokoro_static.py",
+        "tests/test_catalog.py",
+        "tests/test_engine_options.py",
+        "tests/test_inventory.py",
+        "tests/test_kokoro_contract.py",
+        "tests/test_kokoro_language_router.py",
+        "tests/test_manager_cache.py"
+      ],
+      "sha": "547aafa73268181e3e91db5226461c4f9b1282dd",
+      "short_sha": "547aafa",
+      "source_ref": "git:547aafa73268181e3e91db5226461c4f9b1282dd"
+    }
+  ],
+  "git_base_ref": "7555d41435a2d1d6293e9303c7128cd6c86e0c62",
+  "git_base_sha": "7555d41435a2d1d6293e9303c7128cd6c86e0c62",
+  "git_head_ref": "547aafa73268181e3e91db5226461c4f9b1282dd",
+  "git_head_sha": "547aafa73268181e3e91db5226461c4f9b1282dd",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "v0.2.17",
+  "schema_version": 1
+}

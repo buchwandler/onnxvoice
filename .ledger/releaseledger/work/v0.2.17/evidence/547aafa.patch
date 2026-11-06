@@ -1,0 +1,1338 @@
+ onnxvoice/catalog.py                        |  72 ++++++++
+ onnxvoice/engine_options.py                 |  48 ++++++
+ onnxvoice/inventory.py                      |  12 +-
+ onnxvoice/systems/kokoro.py                 | 156 ++++++------------
+ onnxvoice/systems/kokoro_language_router.py | 156 ++++++++++++++++++
+ onnxvoice/systems/kokoro_static.py          | 131 +++++++++++++++
+ tests/test_catalog.py                       | 110 +++++++++++++
+ tests/test_engine_options.py                |  15 +-
+ tests/test_inventory.py                     |  21 +++
+ tests/test_kokoro_contract.py               |  82 +++++++++-
+ tests/test_kokoro_language_router.py        | 245 ++++++++++++++++++++++++++++
+ tests/test_manager_cache.py                 |  24 +++
+ 12 files changed, 962 insertions(+), 110 deletions(-)
+
+diff --git a/onnxvoice/catalog.py b/onnxvoice/catalog.py
+index 5c5da56..c2e57bf 100644
+--- a/onnxvoice/catalog.py
++++ b/onnxvoice/catalog.py
+@@ -83,6 +83,9 @@ DEFAULT_SOURCES = {
+     "kitten2": "https://raw.githubusercontent.com/buchwandler/kitten2-onnx-bundles/main/catalog/bundles.json",
+     "phonon": "https://raw.githubusercontent.com/buchwandler/phonon-onnx-bundles/main/catalog/bundles.json",
+ }
++_KOKORO_LANGUAGE_ROUTER_LAYOUT = "language-router-onnx-v1"
++_KOKORO_LANGUAGE_ROUTER_MODELS = {"en": "model_en", "de": "model_de"}
++_KOKORO_LANGUAGE_ROUTER_COMPONENTS = frozenset(_KOKORO_LANGUAGE_ROUTER_MODELS.values())
+ _KOKORO_CLONING_MODEL_COMPONENTS = frozenset(
+     {
+         "reference_wavlm",
+@@ -480,6 +483,74 @@ _KOKORO_SPLIT_MODEL_COMPONENTS = frozenset({"prosody", "curves", "decoder"})
+ _KOKORO_INNO_LAYOUTS = frozenset({"single", "single-onnx-v1", "split", "multi", "split-onnx-v1"})
+
+
++def _validate_kokoro_language_router(
++    entry: Mapping[str, Any], runtime: Mapping[str, Any], artifacts: Sequence[Artifact]
++) -> None:
++    if runtime.get("layout") != _KOKORO_LANGUAGE_ROUTER_LAYOUT:
++        return
++
++    language_models = runtime.get("language_models")
++    if not isinstance(language_models, Mapping):
++        raise CatalogError("Kokoro language-router requires runtime.language_models")
++    if dict(language_models) != _KOKORO_LANGUAGE_ROUTER_MODELS:
++        raise CatalogError(
++            "Kokoro language-router runtime.language_models must map en to model_en "
++            "and de to model_de"
++        )
++
++    language_codes = entry.get("language_codes")
++    if not isinstance(language_codes, (list, tuple)):
++        raise CatalogError("Kokoro language-router requires language_codes including en and de")
++    normalized_codes = {language_base(code) for code in language_codes}
++    if not set(_KOKORO_LANGUAGE_ROUTER_MODELS) <= normalized_codes:
++        raise CatalogError("Kokoro language-router language_codes must include en and de")
++
++    model_artifacts = [artifact for artifact in artifacts if artifact.role == "model"]
++    unexpected = {
++        artifact.component for artifact in model_artifacts
++    } - _KOKORO_LANGUAGE_ROUTER_COMPONENTS
++    if unexpected:
++        raise CatalogError(
++            "Kokoro language-router has unsupported model components: "
++            + ", ".join(sorted(str(component) for component in unexpected))
++        )
++
++    seen: set[tuple[str | None, str | None]] = set()
++    for artifact in model_artifacts:
++        identity = (artifact.component, artifact.quality)
++        if identity in seen:
++            raise CatalogError(
++                "Kokoro language-router has duplicate model component/quality "
++                f"combination {identity!r}"
++            )
++        seen.add(identity)
++
++    qualities = {artifact.quality for artifact in model_artifacts}
++    selected_qualities = {quality for quality in qualities if quality is not None} or {None}
++    for quality in selected_qualities:
++        selected = [
++            artifact
++            for artifact in model_artifacts
++            if artifact.quality is None or artifact.quality == quality
++        ]
++        counts = {
++            component: sum(artifact.component == component for artifact in selected)
++            for component in _KOKORO_LANGUAGE_ROUTER_COMPONENTS
++        }
++        missing = {component for component, count in counts.items() if count == 0}
++        if missing:
++            raise CatalogError(
++                f"Kokoro language-router quality {quality!r} is missing model components: "
++                + ", ".join(sorted(missing))
++            )
++        duplicates = {component for component, count in counts.items() if count > 1}
++        if duplicates:
++            raise CatalogError(
++                f"Kokoro language-router quality {quality!r} has duplicate model components: "
++                + ", ".join(sorted(duplicates))
++            )
++
++
+ def _normalize_kokoro_voice_enrollers(
+     runtime: Mapping[str, Any], artifacts: Sequence[Artifact]
+ ) -> tuple[Mapping[str, Any], ...] | None:
+@@ -648,6 +719,7 @@ def _parse_kokoro_entry(
+             )
+         )
+     runtime, onnx_contract = _normalize_kokoro_runtime(entry)
++    _validate_kokoro_language_router(entry, runtime, artifacts)
+     available_enrollers = _normalize_kokoro_voice_enrollers(runtime, artifacts)
+     if available_enrollers is not None:
+         runtime["voice_enrollers"] = list(available_enrollers)
+diff --git a/onnxvoice/engine_options.py b/onnxvoice/engine_options.py
+index 486415f..c2db662 100644
+--- a/onnxvoice/engine_options.py
++++ b/onnxvoice/engine_options.py
+@@ -490,6 +490,15 @@ ENGINE_CONTRACTS: Mapping[str, EngineContract] = MappingProxyType(
+                     availability="ordinary single-model or split layout",
+                 ),
+                 _TOKEN_IDS,
++                _input(
++                    "language",
++                    "string",
++                    "Explicit target language required by language-router-onnx-v1.",
++                    required=False,
++                    group="capability_specific_inputs",
++                    availability="language-router-onnx-v1 layout only",
++                    status="conditional",
++                ),
+                 _input(
+                     "reference",
+                     "KokoroReferenceState",
+@@ -569,6 +578,14 @@ ENGINE_CONTRACTS: Mapping[str, EngineContract] = MappingProxyType(
+                 ),
+             ),
+             capabilities=(
++                _capability(
++                    "language_routing",
++                    None,
++                    "conditional",
++                    mode="explicit_language",
++                    requires=("language",),
++                    reason="Supported only when the selected target uses language-router-onnx-v1.",
++                ),
+                 _capability(
+                     "voice_cloning",
+                     None,
+@@ -1586,6 +1603,37 @@ def _apply_target_rules(
+
+     if engine == "kokoro":
+         cloning = layout == "cloning-onnx-v1"
++        language_router = layout == "language-router-onnx-v1"
++        _set_option(
++            result,
++            "language",
++            required=language_router,
++            status="required" if language_router else "not_supported" if layout else "conditional",
++            supported=language_router if layout else None,
++            availability="Required by language-router-onnx-v1; unavailable for other known layouts.",
++        )
++        if _capability_override(metadata, "language_routing") is None:
++            result["capabilities"]["language_routing"] = {
++                "name": "language_routing",
++                "supported": language_router if layout else None,
++                "status": "supported"
++                if language_router
++                else "not_supported"
++                if layout
++                else "unknown",
++                "mode": "explicit_language" if language_router else None,
++                "requires": ["language"] if language_router else [],
++                "requires_reference_transcript": None,
++                "reason": (
++                    "Selected distribution uses language-router-onnx-v1."
++                    if language_router
++                    else "Selected layout does not route by language."
++                    if layout
++                    else "Target runtime layout is unavailable."
++                ),
++                "constraints": [],
++                "source": _fact_source(metadata, "layout") if layout else "unknown",
++            }
+         if _capability_override(metadata, "voice_cloning") is None:
+             result["capabilities"]["voice_cloning"] = {
+                 "name": "voice_cloning",
+diff --git a/onnxvoice/inventory.py b/onnxvoice/inventory.py
+index 58fe01e..870d89e 100644
+--- a/onnxvoice/inventory.py
++++ b/onnxvoice/inventory.py
+@@ -186,11 +186,19 @@ def _voice_details_for(metadata: Mapping[str, Any], voice_id: str) -> Mapping[st
+     details = metadata.get("voice_details")
+     if isinstance(details, Mapping):
+         value = details.get(voice_id)
+-        return value if isinstance(value, Mapping) else None
+-    if isinstance(details, (list, tuple)):
++        if isinstance(value, Mapping):
++            return value
++    elif isinstance(details, (list, tuple)):
+         for value in details:
+             if isinstance(value, Mapping) and value.get("id") == voice_id:
+                 return value
++
++    runtime = metadata.get("runtime")
++    voice_metadata = runtime.get("voice_metadata") if isinstance(runtime, Mapping) else None
++    if isinstance(voice_metadata, Mapping):
++        value = voice_metadata.get(voice_id)
++        if isinstance(value, Mapping):
++            return value
+     return None
+
+
+diff --git a/onnxvoice/systems/kokoro.py b/onnxvoice/systems/kokoro.py
+index b3516e0..3c10cbf 100644
+--- a/onnxvoice/systems/kokoro.py
++++ b/onnxvoice/systems/kokoro.py
+@@ -6,8 +6,9 @@ from typing import Any
+ import numpy as np
+
+ from ..errors import CapabilityError, RuntimeContractError
++from ..inventory import normalize_language_tag
+ from ..runtime import OnnxSession
+-from ..types import InferenceResult, RuntimeDiagnostic, TensorSpec
++from ..types import InferenceResult, RuntimeDiagnostic
+ from .base import SystemAdapter
+ from .kokoro_cloning import CLONING_LAYOUT, KokoroCloningRuntime, KokoroReferenceState
+ from .kokoro_inno import (
+@@ -17,7 +18,9 @@ from .kokoro_inno import (
+     KokoroVoicePack,
+     validate_inno_installation,
+ )
++from .kokoro_language_router import LANGUAGE_ROUTER_LAYOUT, KokoroLanguageRouterRuntime
+ from .kokoro_split import SplitKokoroRuntime
++from .kokoro_static import infer_static_kokoro
+
+
+ class KokoroAdapter(SystemAdapter):
+@@ -27,6 +30,7 @@ class KokoroAdapter(SystemAdapter):
+         super().__init__(*args, **kwargs)
+         self._split_runtime: SplitKokoroRuntime | None = None
+         self._cloning_runtime: KokoroCloningRuntime | None = None
++        self._language_router_runtime: KokoroLanguageRouterRuntime | None = None
+         self._inno_runtime: InnoVoiceTuner | None = None
+         self._split_session_factory = session_factory
+         runtime = self.installation.metadata.get("runtime") or {}
+@@ -46,6 +50,10 @@ class KokoroAdapter(SystemAdapter):
+         runtime = self.installation.metadata.get("runtime") or {}
+         return runtime.get("layout") == CLONING_LAYOUT
+
++    def _uses_language_router_runtime(self) -> bool:
++        runtime = self.installation.metadata.get("runtime") or {}
++        return runtime.get("layout") == LANGUAGE_ROUTER_LAYOUT
++
+     def _split(self) -> SplitKokoroRuntime:
+         if self._split_runtime is None:
+             self._split_runtime = SplitKokoroRuntime(
+@@ -68,6 +76,17 @@ class KokoroAdapter(SystemAdapter):
+             )
+         return self._cloning_runtime
+
++    def _language_router(self) -> KokoroLanguageRouterRuntime:
++        if self._language_router_runtime is None:
++            self._language_router_runtime = KokoroLanguageRouterRuntime(
++                self.installation,
++                session_factory=self._split_session_factory,
++                providers=self.providers,
++                provider_options=self.provider_options,
++                session_options=self.session_options,
++            )
++        return self._language_router_runtime
++
+     def _inno(self) -> InnoVoiceTuner:
+         if self._inno_runtime is None:
+             self._inno_runtime = InnoVoiceTuner(
+@@ -129,9 +148,10 @@ class KokoroAdapter(SystemAdapter):
+                 "multi",
+                 "split-onnx-v1",
+                 CLONING_LAYOUT,
++                LANGUAGE_ROUTER_LAYOUT,
+             }:
+                 raise CapabilityError(
+-                    "Split, cloning, or multi-component Kokoro layouts do not expose a single session"
++                    "Split, cloning, language-router, or multi-component Kokoro layouts do not expose a single session"
+                 )
+             self._session = OnnxSession(
+                 models[0].path,
+@@ -147,10 +167,20 @@ class KokoroAdapter(SystemAdapter):
+         *,
+         style: np.ndarray | Sequence[float] | None = None,
+         reference: KokoroReferenceState | None = None,
++        language: str | None = None,
+         speed: float = 1.0,
+         seed: int = 1234,
+         **_: Any,
+     ) -> InferenceResult:
++        if language is not None:
++            if not isinstance(language, str):
++                raise RuntimeContractError("Kokoro language must be a non-empty language tag")
++            normalized_language = normalize_language_tag(language)
++            if not normalized_language or any(
++                not part or any(char.isspace() for char in part)
++                for part in normalized_language.split("-")
++            ):
++                raise RuntimeContractError("Kokoro language must be a non-empty language tag")
+         if self._uses_cloning_runtime():
+             if style is not None:
+                 raise CapabilityError(
+@@ -161,6 +191,15 @@ class KokoroAdapter(SystemAdapter):
+                     "A Kokoro reference state must be provided for cloning inference"
+                 )
+             return self._cloning().infer(token_ids, reference=reference, speed=speed, seed=seed)
++        if self._uses_language_router_runtime():
++            return self._language_router().infer(
++                token_ids,
++                style=style,
++                reference=reference,
++                language=language,
++                speed=speed,
++                seed=seed,
++            )
+         if reference is not None:
+             raise CapabilityError("Kokoro reference state requires the cloning-onnx-v1 layout")
+         if self._uses_split_runtime():
+@@ -169,57 +208,21 @@ class KokoroAdapter(SystemAdapter):
+             return self._split().infer(token_ids, style=style, speed=speed, seed=seed)
+         if style is None:
+             raise RuntimeContractError("A model-ready Kokoro style must be provided")
+-        token_values = list(token_ids)
+-        names = set(self.session.input_names)
+-        token_name = "input_ids" if "input_ids" in names else "tokens"
+-        style_name = "ref_s" if "ref_s" in names else "style"
+-        token_spec = self._input_spec(token_name)
+-        token_dtype = self._numpy_dtype(token_spec, default=np.int64)
+-        self._validate_token_limit(token_spec, len(token_values))
+-        padded = np.asarray([[0, *token_values, 0]], dtype=token_dtype)
+-
+-        style_spec = self._input_spec(style_name)
+-        style_dtype = self._numpy_dtype(style_spec, default=np.float32)
+-        style_value = np.asarray(style, dtype=style_dtype)
+-        if style_value.ndim == 1:
+-            style_value = style_value[None, :]
+-
+-        inputs: dict[str, np.ndarray] = {token_name: padded, style_name: style_value}
+-        if "speed" in names:
+-            inputs["speed"] = np.asarray(
+-                [speed], dtype=self._numpy_dtype(self._input_spec("speed"), default=np.float32)
+-            )
+-        missing = {token_name, style_name} - names
+-        if missing:
+-            raise RuntimeContractError(
+-                f"Kokoro model is missing expected inputs: {', '.join(sorted(missing))}"
+-            )
+-        outputs = self.session.run(inputs)
+-        output_names = tuple(getattr(self.session, "output_names", ()))
+-        if not outputs:
+-            raise RuntimeContractError("Kokoro model returned no outputs")
+-        if len(output_names) != len(outputs):
+-            output_names = tuple(f"output_{index}" for index in range(len(outputs)))
+-        named_outputs = {
+-            name: np.asarray(value) for name, value in zip(output_names, outputs, strict=True)
+-        }
+-        audio_name = output_names[0]
+-        audio = self._canonical_audio(named_outputs[audio_name])
+-        auxiliary = {name: value for name, value in named_outputs.items() if name != audio_name}
+-        timings = self._select_timings(auxiliary)
+-
+-        return InferenceResult(
+-            audio=audio,
+-            sample_rate=int(self.installation.sample_rate or 24000),
+-            timings=timings,
+-            outputs=auxiliary,
+-            metadata={"system": "kokoro", "speed": speed},
++        return infer_static_kokoro(
++            self.installation,
++            self.session,
++            token_ids,
++            style=style,
++            speed=speed,
+         )
+
+     def close(self) -> None:
+         if self._split_runtime is not None:
+             self._split_runtime.close()
+             self._split_runtime = None
++        if self._language_router_runtime is not None:
++            self._language_router_runtime.close()
++            self._language_router_runtime = None
+         if self._cloning_runtime is not None:
+             self._cloning_runtime.close()
+             self._cloning_runtime = None
+@@ -233,6 +236,8 @@ class KokoroAdapter(SystemAdapter):
+             base = self._split_runtime.diagnostics()
+         elif self._cloning_runtime is not None:
+             base = self._cloning_runtime.diagnostics()
++        elif self._uses_language_router_runtime():
++            base = self._language_router().diagnostics()
+         else:
+             base = super().diagnostics()
+         if self._inno_runtime is None:
+@@ -244,60 +249,3 @@ class KokoroAdapter(SystemAdapter):
+             layout=base.layout,
+             sessions=(*base.sessions, *inno.sessions),
+         )
+-
+-    def _input_spec(self, name: str) -> TensorSpec | None:
+-        for spec in getattr(self.session, "input_specs", ()):
+-            if spec.name == name:
+-                return spec
+-        return None
+-
+-    @staticmethod
+-    def _numpy_dtype(spec: TensorSpec | None, *, default: Any) -> np.dtype[Any]:
+-        if spec is None:
+-            return np.dtype(default)
+-        dtype_name = spec.ort_type.lower()
+-        for marker, dtype in (
+-            ("int64", np.int64),
+-            ("int32", np.int32),
+-            ("int16", np.int16),
+-            ("float16", np.float16),
+-            ("float", np.float32),
+-            ("double", np.float64),
+-        ):
+-            if marker in dtype_name:
+-                return np.dtype(dtype)
+-        raise RuntimeContractError(f"Unsupported Kokoro tensor type {spec.ort_type!r}")
+-
+-    @staticmethod
+-    def _validate_token_limit(spec: TensorSpec | None, token_count: int) -> None:
+-        if spec is None or not spec.shape:
+-            return
+-        maximum = spec.shape[-1]
+-        if isinstance(maximum, int) and maximum > 0 and token_count + 2 > maximum:
+-            raise RuntimeContractError(
+-                f"Kokoro token sequence has {token_count} tokens, maximum is {maximum - 2}"
+-            )
+-
+-    def _select_timings(self, auxiliary: dict[str, np.ndarray]) -> np.ndarray | None:
+-        declared = self.installation.timing_output
+-        if declared and declared in auxiliary:
+-            return auxiliary[declared]
+-        for name in ("pred_dur", "duration", "durations", "timing", "timestamp"):
+-            if name in auxiliary:
+-                return auxiliary[name]
+-        for prefix in ("duration", "timing", "timestamp"):
+-            for name in sorted(auxiliary):
+-                if name.lower().startswith(prefix):
+-                    return auxiliary[name]
+-        return None
+-
+-    @staticmethod
+-    def _canonical_audio(value: np.ndarray) -> np.ndarray:
+-        audio = np.asarray(value)
+-        audio = np.squeeze(audio)
+-        if audio.ndim != 1:
+-            if audio.ndim == 2 and 1 in audio.shape:
+-                audio = audio.reshape(-1)
+-            else:
+-                raise RuntimeContractError("Kokoro audio output must be one-dimensional")
+-        return audio.astype(np.float32, copy=False)
+diff --git a/onnxvoice/systems/kokoro_language_router.py b/onnxvoice/systems/kokoro_language_router.py
+new file mode 100644
+index 0000000..a5dafeb
+--- /dev/null
++++ b/onnxvoice/systems/kokoro_language_router.py
+@@ -0,0 +1,156 @@
++from __future__ import annotations
++
++from collections.abc import Callable, Mapping, Sequence
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from ..errors import CapabilityError, RuntimeContractError
++from ..inventory import language_base
++from ..runtime import OnnxSession
++from ..types import InferenceResult, Installation, RuntimeDiagnostic
++from .base import SystemAdapter
++from .kokoro_static import infer_static_kokoro
++
++LANGUAGE_ROUTER_LAYOUT = "language-router-onnx-v1"
++LANGUAGE_MODELS = {"en": "model_en", "de": "model_de"}
++
++
++class KokoroLanguageRouterRuntime(SystemAdapter):
++    """Static Kokoro inference routed to a graph by explicit language."""
++
++    system = "kokoro"
++
++    def __init__(
++        self,
++        installation: Installation,
++        *,
++        session_factory: Callable[[Path, str], Any] | None = None,
++        **kwargs: Any,
++    ) -> None:
++        super().__init__(installation, **kwargs)
++        self._session_factory = session_factory
++        self.language_models = self._parse_language_models()
++        self._sessions: dict[str, Any] = {}
++
++    def _parse_language_models(self) -> dict[str, str]:
++        runtime = self.installation.metadata.get("runtime")
++        if not isinstance(runtime, Mapping):
++            raise RuntimeContractError("Kokoro language-router runtime metadata must be an object")
++        configured = runtime.get("language_models")
++        if not isinstance(configured, Mapping):
++            raise RuntimeContractError("Kokoro language-router requires runtime.language_models")
++
++        models: dict[str, str] = {}
++        for raw_language, component in configured.items():
++            language = language_base(raw_language)
++            if not language or language in models:
++                raise RuntimeContractError(
++                    "Kokoro language_models has an invalid or duplicate language"
++                )
++            if not isinstance(component, str):
++                raise RuntimeContractError(
++                    f"Kokoro language_models entry for {language!r} must name a component"
++                )
++            models[language] = component
++        if models != LANGUAGE_MODELS:
++            raise RuntimeContractError(
++                "Kokoro language-router language_models must map en to model_en and de to model_de"
++            )
++
++        language_codes = runtime.get("language_codes")
++        if not isinstance(language_codes, (list, tuple)):
++            raise RuntimeContractError("Kokoro language-router requires runtime.language_codes")
++        normalized_codes = {language_base(code) for code in language_codes}
++        if not set(models) <= normalized_codes:
++            raise RuntimeContractError(
++                "Kokoro language-router language_codes must include en and de"
++            )
++        return models
++
++    def _component_path(self, language: str, component: str) -> Path:
++        candidates = self.installation.artifacts_for("model", component=component)
++        quality = self.installation.selected_quality
++        if quality is not None:
++            selected = tuple(artifact for artifact in candidates if artifact.quality == quality)
++            if selected:
++                candidates = selected
++            elif not (len(candidates) == 1 and candidates[0].quality is None):
++                candidates = ()
++        if len(candidates) != 1:
++            raise CapabilityError(
++                "Kokoro language-router requires exactly one model artifact for "
++                f"language={language!r}, component={component!r}, quality={quality!r}"
++            )
++        return candidates[0].path
++
++    def _session_for_language(self, language: str) -> Any:
++        if language not in self._sessions:
++            component = self.language_models[language]
++            path = self._component_path(language, component)
++            label = f"{language}:{component}"
++            if self._session_factory is None:
++                session = OnnxSession(
++                    path,
++                    component=label,
++                    providers=self.providers,
++                    provider_options=self.provider_options,
++                    session_options=self.session_options,
++                )
++            else:
++                session = self._session_factory(path, label)
++            self._sessions[language] = session
++        return self._sessions[language]
++
++    def infer(
++        self,
++        token_ids: Sequence[int],
++        *,
++        style: np.ndarray | Sequence[float] | None = None,
++        reference: Any | None = None,
++        language: str | None = None,
++        speed: float = 1.0,
++        seed: int = 1234,
++        **kwargs: Any,
++    ) -> InferenceResult:
++        del seed
++        if kwargs:
++            raise RuntimeContractError(
++                "Unsupported Kokoro language-router inference arguments: "
++                + ", ".join(sorted(kwargs))
++            )
++        if reference is not None:
++            raise RuntimeContractError(
++                "Reference conditioning is not supported by the Kokoro language-router layout"
++            )
++        if language is None or not isinstance(language, str) or not language.strip():
++            raise RuntimeContractError(
++                "A language is required for Kokoro language-router inference"
++            )
++        normalized_language = language_base(language)
++        if normalized_language not in self.language_models:
++            raise RuntimeContractError(
++                f"Unsupported Kokoro language-router language {language!r}; "
++                "supported languages are en and de"
++            )
++        if style is None:
++            raise RuntimeContractError("A model-ready Kokoro style must be provided")
++        session = self._session_for_language(normalized_language)
++        return infer_static_kokoro(
++            self.installation,
++            session,
++            token_ids,
++            style=style,
++            speed=speed,
++        )
++
++    def diagnostics(self) -> RuntimeDiagnostic:
++        base = super().diagnostics()
++        return RuntimeDiagnostic(
++            system=base.system,
++            ref=base.ref,
++            layout=base.layout,
++            sessions=base.sessions,
++            properties={"language_models": dict(self.language_models)},
++        )
+diff --git a/onnxvoice/systems/kokoro_static.py b/onnxvoice/systems/kokoro_static.py
+new file mode 100644
+index 0000000..86a3401
+--- /dev/null
++++ b/onnxvoice/systems/kokoro_static.py
+@@ -0,0 +1,131 @@
++from __future__ import annotations
++
++from collections.abc import Sequence
++from typing import Any
++
++import numpy as np
++
++from ..errors import RuntimeContractError
++from ..types import InferenceResult, Installation, TensorSpec
++
++
++def infer_static_kokoro(
++    installation: Installation,
++    session: Any,
++    token_ids: Sequence[int],
++    *,
++    style: np.ndarray | Sequence[float] | None,
++    speed: float,
++) -> InferenceResult:
++    """Run the shared static Kokoro tokens, style, and speed graph contract."""
++    if style is None:
++        raise RuntimeContractError("A model-ready Kokoro style must be provided")
++
++    token_values = list(token_ids)
++    names = set(session.input_names)
++    token_name = "input_ids" if "input_ids" in names else "tokens"
++    style_name = "ref_s" if "ref_s" in names else "style"
++    token_spec = _input_spec(session, token_name)
++    token_dtype = _numpy_dtype(token_spec, default=np.int64)
++    _validate_token_limit(token_spec, len(token_values))
++    padded = np.asarray([[0, *token_values, 0]], dtype=token_dtype)
++
++    style_spec = _input_spec(session, style_name)
++    style_dtype = _numpy_dtype(style_spec, default=np.float32)
++    style_value = np.asarray(style, dtype=style_dtype)
++    if style_value.ndim == 1:
++        style_value = style_value[None, :]
++
++    inputs: dict[str, np.ndarray] = {token_name: padded, style_name: style_value}
++    if "speed" in names:
++        inputs["speed"] = np.asarray(
++            [speed], dtype=_numpy_dtype(_input_spec(session, "speed"), default=np.float32)
++        )
++    missing = {token_name, style_name} - names
++    if missing:
++        raise RuntimeContractError(
++            f"Kokoro model is missing expected inputs: {', '.join(sorted(missing))}"
++        )
++
++    outputs = session.run(inputs)
++    output_names = tuple(getattr(session, "output_names", ()))
++    if not outputs:
++        raise RuntimeContractError("Kokoro model returned no outputs")
++    if len(output_names) != len(outputs):
++        output_names = tuple(f"output_{index}" for index in range(len(outputs)))
++    named_outputs = {
++        name: np.asarray(value) for name, value in zip(output_names, outputs, strict=True)
++    }
++    audio_name = output_names[0]
++    audio = _canonical_audio(named_outputs[audio_name])
++    auxiliary = {name: value for name, value in named_outputs.items() if name != audio_name}
++    timings = _select_timings(installation, auxiliary)
++
++    return InferenceResult(
++        audio=audio,
++        sample_rate=int(installation.sample_rate or 24000),
++        timings=timings,
++        outputs=auxiliary,
++        metadata={"system": "kokoro", "speed": speed},
++    )
++
++
++def _input_spec(session: Any, name: str) -> TensorSpec | None:
++    for spec in getattr(session, "input_specs", ()):
++        if spec.name == name:
++            return spec
++    return None
++
++
++def _numpy_dtype(spec: TensorSpec | None, *, default: Any) -> np.dtype[Any]:
++    if spec is None:
++        return np.dtype(default)
++    dtype_name = spec.ort_type.lower()
++    for marker, dtype in (
++        ("int64", np.int64),
++        ("int32", np.int32),
++        ("int16", np.int16),
++        ("float16", np.float16),
++        ("float", np.float32),
++        ("double", np.float64),
++    ):
++        if marker in dtype_name:
++            return np.dtype(dtype)
++    raise RuntimeContractError(f"Unsupported Kokoro tensor type {spec.ort_type!r}")
++
++
++def _validate_token_limit(spec: TensorSpec | None, token_count: int) -> None:
++    if spec is None or not spec.shape:
++        return
++    maximum = spec.shape[-1]
++    if isinstance(maximum, int) and maximum > 0 and token_count + 2 > maximum:
++        raise RuntimeContractError(
++            f"Kokoro token sequence has {token_count} tokens, maximum is {maximum - 2}"
++        )
++
++
++def _select_timings(
++    installation: Installation, auxiliary: dict[str, np.ndarray]
++) -> np.ndarray | None:
++    declared = installation.timing_output
++    if declared and declared in auxiliary:
++        return auxiliary[declared]
++    for name in ("pred_dur", "duration", "durations", "timing", "timestamp"):
++        if name in auxiliary:
++            return auxiliary[name]
++    for prefix in ("duration", "timing", "timestamp"):
++        for name in sorted(auxiliary):
++            if name.lower().startswith(prefix):
++                return auxiliary[name]
++    return None
++
++
++def _canonical_audio(value: np.ndarray) -> np.ndarray:
++    audio = np.asarray(value)
++    audio = np.squeeze(audio)
++    if audio.ndim != 1:
++        if audio.ndim == 2 and 1 in audio.shape:
++            audio = audio.reshape(-1)
++        else:
++            raise RuntimeContractError("Kokoro audio output must be one-dimensional")
++    return audio.astype(np.float32, copy=False)
+diff --git a/tests/test_catalog.py b/tests/test_catalog.py
+index a17f9b3..cc4ae04 100644
+--- a/tests/test_catalog.py
++++ b/tests/test_catalog.py
+@@ -561,3 +561,113 @@ def test_kokoro_reference_only_catalog_keeps_all_components_for_quality(tmp_path
+     )
+     with pytest.raises(CatalogError, match="missing model components: curves"):
+         incomplete_client.resolve("kokoro:clone")
++
++
++def _kokoro_language_router_catalog():
++    artifacts = [
++        {
++            "id": component,
++            "role": "model",
++            "component": component,
++            "quality": "fp32",
++            "local_name": f"{component}.onnx",
++            "url": "https://example.invalid/model.onnx",
++            "sha256": "a" * 64,
++        }
++        for component in ("model_en", "model_de")
++    ]
++    return {
++        "models": {
++            "akinvox-multispeaker-v1": {
++                "language_codes": ["en", "de"],
++                "runtime": {
++                    "layout": "language-router-onnx-v1",
++                    "language_models": {"en": "model_en", "de": "model_de"},
++                },
++                "distributions": [{"id": "cpu", "artifacts": artifacts}],
++            }
++        }
++    }
++
++
++def _resolve_language_router_catalog(tmp_path, raw):
++    source = tmp_path / "kokoro-language-router.json"
++    source.write_text(json.dumps(raw), encoding="utf-8")
++    return CatalogClient(cache_dir=tmp_path / "cache", sources={"kokoro": str(source)}).resolve(
++        "kokoro:akinvox-multispeaker-v1"
++    )
++
++
++def test_kokoro_language_router_catalog_accepts_exact_two_graph_contract(tmp_path):
++    item = _resolve_language_router_catalog(tmp_path, _kokoro_language_router_catalog())
++
++    models = [artifact for artifact in item.artifacts if artifact.role == "model"]
++    assert {artifact.component for artifact in models} == {"model_en", "model_de"}
++    assert item.metadata["runtime"]["language_models"] == {
++        "en": "model_en",
++        "de": "model_de",
++    }
++
++
++@pytest.mark.parametrize("missing_component", ("model_en", "model_de"))
++def test_kokoro_language_router_rejects_missing_graph(tmp_path, missing_component):
++    raw = _kokoro_language_router_catalog()
++    raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"] = [
++        artifact
++        for artifact in raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"]
++        if artifact["component"] != missing_component
++    ]
++
++    with pytest.raises(CatalogError, match=f"missing model components: {missing_component}"):
++        _resolve_language_router_catalog(tmp_path, raw)
++
++
++@pytest.mark.parametrize(
++    "language_models",
++    (
++        {"en": "model_de", "de": "model_en"},
++        {"en": "model_en", "de": "model_de", "fr": "model_fr"},
++        {"en": "model_en", "fr": "model_fr"},
++    ),
++)
++def test_kokoro_language_router_rejects_incorrect_language_mapping(tmp_path, language_models):
++    raw = _kokoro_language_router_catalog()
++    raw["models"]["akinvox-multispeaker-v1"]["runtime"]["language_models"] = language_models
++
++    with pytest.raises(CatalogError, match="runtime.language_models"):
++        _resolve_language_router_catalog(tmp_path, raw)
++
++
++def test_kokoro_language_router_rejects_missing_target_language_code(tmp_path):
++    raw = _kokoro_language_router_catalog()
++    raw["models"]["akinvox-multispeaker-v1"]["language_codes"] = ["en"]
++
++    with pytest.raises(CatalogError, match="language_codes must include en and de"):
++        _resolve_language_router_catalog(tmp_path, raw)
++
++
++def test_kokoro_language_router_rejects_duplicate_component_quality(tmp_path):
++    raw = _kokoro_language_router_catalog()
++    artifacts = raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"]
++    artifacts.append(dict(artifacts[0]))
++
++    with pytest.raises(CatalogError, match="duplicate model component/quality"):
++        _resolve_language_router_catalog(tmp_path, raw)
++
++
++def test_kokoro_language_router_rejects_extra_model_component(tmp_path):
++    raw = _kokoro_language_router_catalog()
++    artifacts = raw["models"]["akinvox-multispeaker-v1"]["distributions"][0]["artifacts"]
++    artifacts.append(
++        {
++            "id": "model_fr",
++            "role": "model",
++            "component": "model_fr",
++            "quality": "fp32",
++            "local_name": "model_fr.onnx",
++            "url": "https://example.invalid/model_fr.onnx",
++        }
++    )
++
++    with pytest.raises(CatalogError, match="unsupported model components: model_fr"):
++        _resolve_language_router_catalog(tmp_path, raw)
+diff --git a/tests/test_engine_options.py b/tests/test_engine_options.py
+index 389a57f..39aa469 100644
+--- a/tests/test_engine_options.py
++++ b/tests/test_engine_options.py
+@@ -77,6 +77,7 @@ class FakeCatalog:
+                 runtime["layout"] = {
+                     "clone": "cloning-onnx-v1",
+                     "split": "split-onnx-v1",
++                    "router": "language-router-onnx-v1",
+                     "single": "single-onnx-v1",
+                 }[distribution]
+             metadata["runtime"] = runtime
+@@ -104,7 +105,7 @@ def _fixture_manager() -> FakeManager:
+                 "v1.0",
+                 {
+                     "distribution_id": "split",
+-                    "distribution_choices": ["split", "clone"],
++                    "distribution_choices": ["split", "clone", "router"],
+                     "runtime": {"layout": "split-onnx-v1", "max_tokens": 510},
+                 },
+                 aliases=("kokoro-latest",),
+@@ -171,7 +172,7 @@ def test_kokoro_distribution_variants_keep_cloning_boundary_semantics() -> None:
+     data = resolve_engine_options(manager, "kokoro", target="kokoro-latest")
+     assert data["target"] == "v1.0"
+     variants = {variant["distribution"]: variant for variant in data["variants"]}
+-    assert set(variants) == {"clone", "split"}
++    assert set(variants) == {"clone", "router", "split"}
+
+     cloning = variants["clone"]
+     assert cloning["layout"] == "cloning-onnx-v1"
+@@ -197,11 +198,19 @@ def test_kokoro_distribution_variants_keep_cloning_boundary_semantics() -> None:
+         == "not_applicable"
+     )
+
++    router = variants["router"]
++    router_inputs = {entry["name"]: entry for entry in router["inputs"]}
++    assert router["layout"] == "language-router-onnx-v1"
++    assert router_inputs["language"]["required"] is True
++    assert router_inputs["language"]["status"] == "required"
++    assert router["capabilities"]["language_routing"]["supported"] is True
++    assert router["capabilities"]["language_routing"]["requires"] == ["language"]
++
+     rows = list_engine_targets(manager, engine="kokoro", capability="voice-cloning")["rows"]
+     assert [(row["target"], row["distribution"]) for row in rows] == [("v1.0", "clone")]
+     selected = resolve_engine_options(manager, "kokoro", target="v1.0", distribution="clone")
+     assert selected["distribution"] == "clone"
+-    with pytest.raises(EngineOptionsError, match="valid choices: clone, split"):
++    with pytest.raises(EngineOptionsError, match="valid choices: clone, router, split"):
+         resolve_engine_options(manager, "kokoro", target="v1.0", distribution="invalid")
+
+
+diff --git a/tests/test_inventory.py b/tests/test_inventory.py
+index 0a9fccd..0a3726a 100644
+--- a/tests/test_inventory.py
++++ b/tests/test_inventory.py
+@@ -347,6 +347,27 @@ class TestVoiceLanguageCapabilities:
+         assert voice_language_codes_from_catalog(item, "voice-a") == ("en",)
+         assert voice_language_codes_from_catalog(item, "voice-b") == ("de",)
+
++    def test_kokoro_runtime_voice_metadata_overrides_target_capabilities(self):
++        item = CatalogItem(
++            system="kokoro",
++            id="akinvox-en-de",
++            kind="model",
++            artifacts=(),
++            voices=("AV_cori", "AV_julia"),
++            metadata={
++                "language_codes": ("en", "de"),
++                "runtime": {
++                    "voice_metadata": {
++                        "AV_cori": {"language": "en"},
++                        "AV_julia": {"language": "de"},
++                    }
++                },
++            },
++        )
++
++        assert voice_language_codes_from_catalog(item, "AV_cori") == ("en",)
++        assert voice_language_codes_from_catalog(item, "AV_julia") == ("de",)
++
+     def test_bundle_capabilities_are_inherited_when_voice_metadata_is_absent(self):
+         item = CatalogItem(
+             system="generic",
+diff --git a/tests/test_kokoro_contract.py b/tests/test_kokoro_contract.py
+index ad8efe5..a6a643f 100644
+--- a/tests/test_kokoro_contract.py
++++ b/tests/test_kokoro_contract.py
+@@ -56,7 +56,7 @@ def test_kokoro_accepts_explicit_style_and_named_timing_outputs(tmp_path):
+     fake = ContractSession()
+     adapter._session = fake  # type: ignore[assignment]
+
+-    result = adapter.infer([5, 6], style=np.array([1, 2, 3]), speed=1.0)
++    result = adapter.infer([5, 6], style=np.array([1, 2, 3]), speed=1.0, language="en-US")
+
+     np.testing.assert_array_equal(fake.seen["input_ids"], np.array([[0, 5, 6, 0]], dtype=np.int32))
+     assert fake.seen["ref_s"].dtype == np.float16
+@@ -98,3 +98,83 @@ def test_installation_timing_output_tolerates_missing_metadata(tmp_path):
+     assert (
+         _installation(tmp_path, metadata={"runtime": {"timings_output": 1}}).timing_output is None
+     )
++
++
++def _language_router_installation(tmp_path, *, runtime=None):
++    artifacts = []
++    for component in ("model_en", "model_de"):
++        path = tmp_path / f"{component}.onnx"
++        path.write_bytes(component.encode())
++        artifacts.append(
++            InstalledArtifact(
++                "model",
++                path.name,
++                path,
++                "0" * 64,
++                path.stat().st_size,
++                component=component,
++            )
++        )
++    metadata = {
++        "runtime": {
++            "layout": "language-router-onnx-v1",
++            "language_models": {"en": "model_en", "de": "model_de"},
++            "language_codes": ["en", "de"],
++        }
++    }
++    if runtime is not None:
++        metadata["runtime"].update(runtime)
++    return Installation(
++        "kokoro",
++        "akinvox-multispeaker-v1",
++        "model",
++        tmp_path,
++        tuple(artifacts),
++        sample_rate=24000,
++        metadata=metadata,
++    )
++
++
++def test_language_router_adapter_dispatches_by_language_and_closes_sessions(tmp_path):
++    sessions = {}
++    calls = []
++
++    def factory(path, component):
++        calls.append((path, component))
++        sessions[component] = ContractSession()
++        return sessions[component]
++
++    adapter = KokoroAdapter(_language_router_installation(tmp_path), session_factory=factory)
++
++    adapter.infer([5, 6], style=np.array([1, 2, 3]), language="en-US")
++    adapter.infer([5, 6], style=np.array([1, 2, 3]), language="de-DE")
++
++    assert [component for _, component in calls] == ["en:model_en", "de:model_de"]
++    assert adapter.diagnostics().properties["language_models"] == {
++        "en": "model_en",
++        "de": "model_de",
++    }
++    with pytest.raises(CapabilityError, match="language-router"):
++        _ = adapter.session
++
++    adapter.close()
++    adapter.close()
++
++
++def test_language_router_adapter_requires_supported_language(tmp_path):
++    adapter = KokoroAdapter(_language_router_installation(tmp_path))
++
++    with pytest.raises(RuntimeContractError, match="language is required"):
++        adapter.infer([1], style=np.ones(3))
++    with pytest.raises(RuntimeContractError, match="Unsupported Kokoro language-router"):
++        adapter.infer([1], style=np.ones(3), language="fr")
++
++
++def test_existing_kokoro_layout_accepts_optional_language(tmp_path):
++    adapter = KokoroAdapter(_installation(tmp_path))
++    adapter._session = ContractSession()  # type: ignore[assignment]
++
++    adapter.infer([1], style=np.ones(3), language="en-US")
++
++    with pytest.raises(RuntimeContractError, match="language"):
++        adapter.infer([1], style=np.ones(3), language="")
+diff --git a/tests/test_kokoro_language_router.py b/tests/test_kokoro_language_router.py
+new file mode 100644
+index 0000000..04b3c91
+--- /dev/null
++++ b/tests/test_kokoro_language_router.py
+@@ -0,0 +1,245 @@
++from __future__ import annotations
++
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import pytest
++
++from onnxvoice.errors import CapabilityError, RuntimeContractError
++from onnxvoice.systems.kokoro_language_router import KokoroLanguageRouterRuntime
++from onnxvoice.types import Installation, InstalledArtifact, SessionDiagnostic, TensorSpec
++
++
++class FakeSession:
++    input_names = ("input_ids", "style", "speed")
++    output_names = ("audio", "pred_dur")
++
++    def __init__(self, component: str, *, token_limit: int = 8) -> None:
++        self.component = component
++        self.input_specs = (
++            TensorSpec("input_ids", "tensor(int32)", (1, token_limit)),
++            TensorSpec("style", "tensor(float16)", (1, 3)),
++            TensorSpec("speed", "tensor(float)", (1,)),
++        )
++        self.inputs: dict[str, np.ndarray] | None = None
++        self.close_count = 0
++
++    def run(self, inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
++        self.inputs = inputs
++        return [np.asarray([[0.1, 0.2]], dtype=np.float16), np.asarray([2, 3], dtype=np.int32)]
++
++    def diagnostics(self) -> SessionDiagnostic:
++        return SessionDiagnostic(
++            component=self.component,
++            model_path=Path(self.component),
++            providers_requested=("CPUExecutionProvider",),
++            providers_active=("CPUExecutionProvider",),
++            inputs=self.input_names,
++            outputs=self.output_names,
++        )
++
++    def close(self) -> None:
++        self.close_count += 1
++
++
++def _installation(
++    tmp_path: Path,
++    *,
++    runtime: dict[str, Any] | None = None,
++    qualities: dict[str, str | None] | None = None,
++    selected_quality: str | None = None,
++) -> Installation:
++    artifacts = []
++    for component in ("model_en", "model_de"):
++        for quality in (qualities or {}).get(component, "selected").split(","):
++            if quality == "selected":
++                quality = selected_quality
++            path = tmp_path / f"{component}-{quality or 'default'}.onnx"
++            path.write_bytes(component.encode())
++            artifacts.append(
++                InstalledArtifact(
++                    "model",
++                    path.name,
++                    path,
++                    "0" * 64,
++                    path.stat().st_size,
++                    quality=quality,
++                    component=component,
++                )
++            )
++    metadata: dict[str, Any] = {
++        "runtime": {
++            "layout": "language-router-onnx-v1",
++            "language_models": {"en": "model_en", "de": "model_de"},
++            "language_codes": ["en", "de"],
++        }
++    }
++    if runtime is not None:
++        metadata["runtime"].update(runtime)
++    if selected_quality is not None:
++        metadata["selected_quality"] = selected_quality
++    return Installation(
++        "kokoro",
++        "akinvox-multispeaker-v1",
++        "model",
++        tmp_path,
++        tuple(artifacts),
++        sample_rate=24000,
++        metadata=metadata,
++    )
++
++
++def _runtime(
++    tmp_path: Path,
++    *,
++    runtime: dict[str, Any] | None = None,
++    qualities: dict[str, str | None] | None = None,
++    selected_quality: str | None = None,
++) -> tuple[KokoroLanguageRouterRuntime, dict[str, FakeSession], list[tuple[Path, str]]]:
++    created: dict[str, FakeSession] = {}
++    calls: list[tuple[Path, str]] = []
++
++    def factory(path: Path, component: str) -> FakeSession:
++        calls.append((path, component))
++        limit = 4 if component == "en:model_en" else 8
++        created[component] = FakeSession(component, token_limit=limit)
++        return created[component]
++
++    runtime_instance = KokoroLanguageRouterRuntime(
++        _installation(
++            tmp_path,
++            runtime=runtime,
++            qualities=qualities,
++            selected_quality=selected_quality,
++        ),
++        session_factory=factory,
++    )
++    return runtime_instance, created, calls
++
++
++@pytest.mark.parametrize(
++    ("language", "component"),
++    (
++        ("en", "en:model_en"),
++        ("en-US", "en:model_en"),
++        ("de", "de:model_de"),
++        ("de-DE", "de:model_de"),
++    ),
++)
++def test_language_routes_only_to_matching_model(
++    tmp_path: Path, language: str, component: str
++) -> None:
++    runtime, sessions, calls = _runtime(tmp_path)
++
++    result = runtime.infer([5, 6], style=np.asarray([1, 2, 3]), language=language, speed=0.8)
++
++    assert [label for _, label in calls] == [component]
++    session = sessions[component]
++    assert session.inputs is not None
++    np.testing.assert_array_equal(session.inputs["input_ids"], [[0, 5, 6, 0]])
++    assert session.inputs["input_ids"].dtype == np.int32
++    assert session.inputs["style"].shape == (1, 3)
++    assert session.inputs["style"].dtype == np.float16
++    np.testing.assert_allclose(session.inputs["speed"], [0.8])
++    assert result.sample_rate == 24000
++    assert result.audio.dtype == np.float32
++    np.testing.assert_array_equal(result.timings, [2, 3])
++    assert set(result.outputs) == {"pred_dur"}
++
++
++@pytest.mark.parametrize("language", (None, "", "fr"))
++def test_language_is_required_and_must_be_supported(tmp_path: Path, language: str | None) -> None:
++    runtime, _, calls = _runtime(tmp_path)
++
++    with pytest.raises(RuntimeContractError, match="language"):
++        runtime.infer([1], style=np.ones(3), language=language)
++
++    assert calls == []
++
++
++def test_static_style_is_required_and_reference_is_rejected(tmp_path: Path) -> None:
++    runtime, _, calls = _runtime(tmp_path)
++
++    with pytest.raises(RuntimeContractError, match="style"):
++        runtime.infer([1], language="en")
++    with pytest.raises(RuntimeContractError, match="Reference conditioning"):
++        runtime.infer([1], style=np.ones(3), reference=object(), language="en")
++
++    assert calls == []
++
++
++def test_token_limit_comes_from_selected_language_graph(tmp_path: Path) -> None:
++    runtime, _, calls = _runtime(tmp_path)
++
++    with pytest.raises(RuntimeContractError, match="maximum is 2"):
++        runtime.infer([1, 2, 3], style=np.ones(3), language="en")
++
++    assert [label for _, label in calls] == ["en:model_en"]
++
++
++def test_quality_selects_component_artifact_and_sessions_are_lazy(tmp_path: Path) -> None:
++    runtime, sessions, calls = _runtime(
++        tmp_path,
++        qualities={"model_en": "q1,q2", "model_de": "q1,q2"},
++        selected_quality="q2",
++    )
++
++    runtime.infer([1], style=np.ones(3), language="en")
++
++    assert calls == [(tmp_path / "model_en-q2.onnx", "en:model_en")]
++    assert set(sessions) == {"en:model_en"}
++
++
++def test_diagnostics_label_language_and_component_and_close_all_sessions(tmp_path: Path) -> None:
++    runtime, sessions, _ = _runtime(tmp_path)
++    runtime.infer([1], style=np.ones(3), language="en")
++    runtime.infer([1], style=np.ones(3), language="de")
++
++    diagnostics = runtime.diagnostics()
++    assert diagnostics.properties["language_models"] == {"en": "model_en", "de": "model_de"}
++    assert {session.component for session in diagnostics.sessions} == {
++        "en:model_en",
++        "de:model_de",
++    }
++
++    runtime.close()
++
++    assert {session.close_count for session in sessions.values()} == {1}
++
++
++@pytest.mark.parametrize(
++    ("runtime", "message"),
++    (
++        ({"language_models": {"en": "model_de", "de": "model_en"}}, "language_models"),
++        ({"language_codes": ["en"]}, "language_codes"),
++    ),
++)
++def test_invalid_language_router_metadata_is_rejected(
++    tmp_path: Path, runtime: dict[str, Any], message: str
++) -> None:
++    with pytest.raises(RuntimeContractError, match=message):
++        _runtime(tmp_path, runtime=runtime)
++
++
++def test_missing_component_artifact_is_reported(tmp_path: Path) -> None:
++    runtime = KokoroLanguageRouterRuntime(
++        Installation(
++            "kokoro",
++            "akinvox-multispeaker-v1",
++            "model",
++            tmp_path,
++            (),
++            metadata={
++                "runtime": {
++                    "layout": "language-router-onnx-v1",
++                    "language_models": {"en": "model_en", "de": "model_de"},
++                    "language_codes": ["en", "de"],
++                }
++            },
++        ),
++        session_factory=lambda *_: FakeSession("unused"),
++    )
++
++    with pytest.raises(CapabilityError, match="model_en"):
++        runtime.infer([1], style=np.ones(3), language="en")
+diff --git a/tests/test_manager_cache.py b/tests/test_manager_cache.py
+index ce02a4d..aaed272 100644
+--- a/tests/test_manager_cache.py
++++ b/tests/test_manager_cache.py
+@@ -43,3 +43,27 @@ def test_explicit_cache_root_overrides_environment_and_preserves_offline(tmp_pat
+             target="model.bin",
+             progress=None,
+         )
++
++
++def test_local_kokoro_language_router_keeps_both_component_artifacts(tmp_path):
++    model_en = tmp_path / "model_en.onnx"
++    model_de = tmp_path / "model_de.onnx"
++    model_en.write_bytes(b"english")
++    model_de.write_bytes(b"german")
++
++    adapter = OnnxVoice.open_local(
++        system="kokoro",
++        artifacts={"model:model_en": model_en, "model:model_de": model_de},
++        metadata={
++            "runtime": {
++                "layout": "language-router-onnx-v1",
++                "language_models": {"en": "model_en", "de": "model_de"},
++                "language_codes": ["en", "de"],
++            }
++        },
++    )
++
++    model_artifacts = adapter.installation.artifacts_for("model")
++    assert {artifact.component for artifact in model_artifacts} == {"model_en", "model_de"}
++    assert {artifact.path for artifact in model_artifacts} == {model_en, model_de}
++    assert adapter._uses_language_router_runtime()
