@@ -526,7 +526,9 @@ def _validate_kokoro_language_router(
         seen.add(identity)
 
     qualities = {artifact.quality for artifact in model_artifacts}
-    selected_qualities = {quality for quality in qualities if quality is not None} or {None}
+    selected_qualities: set[str | None] = {
+        quality for quality in qualities if quality is not None
+    } or {None}
     for quality in selected_qualities:
         selected = [
             artifact
